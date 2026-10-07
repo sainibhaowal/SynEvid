@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Reporting
+    url: https://github.com/sainibhaowal/SynEvid/security/advisories/new
+    about: Please report security vulnerabilities or invariant bypasses privately through GitHub Advisories or rav.singh039@gmail.com.
