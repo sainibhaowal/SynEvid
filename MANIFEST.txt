@@ -79,6 +79,7 @@ docs/adr/0008-sarif-export.md
 docs/architecture/OVERVIEW.md
 docs/benchmark/PROTOCOL.md
 docs/evidence/01_phase0_phase1_implementation_and_verification.md
+docs/evidence/02_phase2_typescript_adapter_verification.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -90,6 +91,7 @@ scripts/verify-arch-boundaries.sh
 scripts/verify-determinism.sh
 tests/Cargo.toml
 tests/src/lib.rs
+tests/tests/e2e_adapter_typescript_conformance.rs
 tests/tests/e2e_config_validation.rs
 tests/tests/e2e_domain_canonical_invariants.rs
 tests/tests/e2e_repo_scan_and_ignores.rs

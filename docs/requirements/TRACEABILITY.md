@@ -15,8 +15,13 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-029** | Configuration Validation (autopsy.toml) | `autopsy-repo` | `test_autopsy_config_validation`, `test_e2e_valid_autopsy_toml_loading`, `test_e2e_invalid_config_semantics` | **VERIFIED** |
 | **FR-030** | Honest Semantic Coverage States | `autopsy-domain` | `test_coverage_state_serde_roundtrip`, `test_e2e_coverage_state_hard_boundary` | **VERIFIED** |
 | **NFR-001** | 100/100 Deterministic Repeatability | `autopsy-domain`, `autopsy-repo`, `tests` | `test_compute_snapshot_id_golden_100_runs`, `test_e2e_snapshot_id_100_runs_determinism`, `scripts/verify-determinism.sh` | **VERIFIED** |
-| **FR-003..005** | TS Adapter & Symbol Extraction | `autopsy-adapter-api`, `autopsy-adapter-typescript` | Phase 2 Target | Pending |
+| **FR-003** | Versioned Language Adapter Interface | `autopsy-adapter-api` | `test_adapter_capabilities_honesty`, `test_e2e_ts_adapter_conformance_and_capabilities` | **VERIFIED** |
+| **FR-004** | Syntax Parsing & Diagnostics Handling | `autopsy-adapter-typescript` | `test_syntax_error_diagnostics_without_crashing`, `test_discover_extensions` | **VERIFIED** |
+| **FR-005** | Stable Symbol IDs Resilient to Line Shifts | `autopsy-adapter-typescript` | `test_stable_symbol_id_resilience_to_line_shifts`, `test_e2e_ts_real_repo_parsing_and_symbol_extraction` | **VERIFIED** |
+| **FR-009** | Normalized Contract Extraction | `autopsy-adapter-typescript` | `test_extract_contracts`, `test_e2e_ts_real_repo_parsing_and_symbol_extraction` | **VERIFIED** |
+| **FR-030** | Honest Semantic Coverage Classification | `autopsy-adapter-api`, `autopsy-adapter-typescript` | `test_honest_coverage_dynamic_constructs`, `test_e2e_ts_honest_coverage_boundary` | **VERIFIED** |
 | **FR-006..007** | Typed Graph & Semantic Diff | `autopsy-graph`, `autopsy-diff` | Phase 3 Target | Pending |
-| **FR-008..014** | Impact, Contracts, Invariants, Evidence | `autopsy-impact`, `autopsy-contracts`, `autopsy-invariants`, `autopsy-evidence` | Phase 4 Target | Pending |
+| **FR-008..014** | Impact, Invariants, Evidence Engine | `autopsy-impact`, `autopsy-contracts`, `autopsy-invariants`, `autopsy-evidence` | Phase 4 Target | Pending |
 | **FR-015..024** | CLI, SQLite Storage, Reporting | `autopsy-cli`, `autopsy-storage`, `autopsy-report` | Phase 5 Target | Pending |
 | **FR-025** | Benchmark Harness & Baselines | `benchmarks/` | Phase 6 Target | Pending |
+

@@ -5,5 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-adapter-api = { path = "../autopsy-adapter-api" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+blake3 = { workspace = true }
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23.2"
+

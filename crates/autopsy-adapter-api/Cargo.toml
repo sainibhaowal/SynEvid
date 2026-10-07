@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+blake3 = { workspace = true }
+
