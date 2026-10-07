@@ -10,6 +10,9 @@ autopsy-domain = { path = "../crates/autopsy-domain" }
 autopsy-repo = { path = "../crates/autopsy-repo" }
 autopsy-adapter-api = { path = "../crates/autopsy-adapter-api" }
 autopsy-adapter-typescript = { path = "../crates/autopsy-adapter-typescript" }
+autopsy-graph = { path = "../crates/autopsy-graph" }
+autopsy-diff = { path = "../crates/autopsy-diff" }
+blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
