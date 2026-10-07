@@ -18,9 +18,11 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
    - 100 repeated runs on identical inputs must produce byte-identical BLAKE3 result digests.
    - Timestamps and non-semantic metadata must NEVER be included in `SnapshotId` or `result_digest`.
    - Never iterate over unordered collections (`std::collections::HashMap`, `HashSet`) in serialized or canonical outputs. Always use `BTreeMap` and `BTreeSet` or sorted vectors.
-5. **Coverage Honesty (FR-014, FR-030):**
-   - Unsupported language constructs (reflection, dynamic imports, generated code) must emit explicit `CoverageState::Unknown` or `CoverageState::Partial`.
-   - Never collapse `UNKNOWN` into `PASS`.
+5. **Coverage Honesty & Adapter Dynamic Construct Rules (FR-014, FR-030):**
+   - Unresolved dynamic constructs (`eval`, dynamic `import(...)`) MUST emit explicit `CoverageState::Unknown`.
+   - Metaprogramming constructs (`Reflect.*`, `Proxy`, generated files) MUST emit explicit `CoverageState::Partial`.
+   - Fully resolved AST declarations emit `CoverageState::Verified`.
+   - Never collapse `UNKNOWN` or `PARTIAL` into `PASS` or `VERIFIED`.
 6. **Ground Truth Integrity:**
    - Never modify benchmark ground truth datasets to inflate benchmark scores.
 7. **Clean Dependency Inversion:**
@@ -75,6 +77,7 @@ Every coding session or agent task must follow this exact loop:
 - **End-to-End Tests:** Place in [`tests/tests/`](file:///home/ravi/Projects/SynEvid/tests/tests/) using [`autopsy-tests::TestSandbox`](file:///home/ravi/Projects/SynEvid/tests/src/lib.rs).
 - **Test Categories Required:**
   - Real read/scan tests on realistic multi-file repository hierarchies.
+  - Language adapter conformance test suite (`autopsy_adapter_api::conformance::verify_adapter_conformance`).
   - Negative test cases: invalid syntax, illegal characters, out-of-range values, missing files.
   - 100-run golden determinism loop assertions.
   - Never use mock placeholders that bypass core verification logic.
@@ -122,8 +125,12 @@ Before any commit:
   - What was changed and why.
   - How the solution works technically.
   - Exact command execution output and test telemetry.
+  - Historical evidence records:
+    - [`01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md)
+    - [`02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
+- Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.
 
 ---
 

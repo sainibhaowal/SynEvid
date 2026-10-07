@@ -33,33 +33,61 @@ This skill encodes the mandatory standards, non-negotiable boundaries, and verif
 
 ---
 
-## 2. Mandatory Pre-Commit & Verification Loop
+## 2. Language Adapter Implementation & Conformance Standards (Phase 2)
 
-Before any commit or merge, execute the full verification chain:
+All language adapters (starting with TypeScript in `crates/autopsy-adapter-typescript`) must satisfy the following invariants:
+1. **Trait Conformance:** Must implement [`LanguageAdapter`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/lib.rs) and pass the reusable test suite [`verify_adapter_conformance`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/conformance.rs).
+2. **Grammar & Tree-Sitter Bootstrap:** Use tree-sitter 0.24+ with official language grammar parsers (e.g. `tree-sitter-typescript` for `.ts` and `.tsx`).
+3. **Resilient Symbol Identifiers (FR-005):** `SymbolId` must be derived from canonical namespace hierarchy, file path, and symbol kind—**never from transient line numbers**. Line shifts and comment additions must produce identical `SymbolId`s.
+4. **Canonical Path & Specifier Resolution:** Use [`TypeScriptCompilerBridge`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-typescript/src/lib.rs) for canonicalizing relative imports (`./foo`, `../bar`, `.ts`/`.tsx`/index resolution) and package specifiers.
+5. **Honest Semantic Coverage (FR-014, FR-030):**
+   - Unresolved dynamic constructs (`eval`, dynamic `import(...)`) MUST emit [`CoverageState::Unknown`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
+   - Metaprogramming constructs (`Reflect.*`, `Proxy`, generated files) MUST emit [`CoverageState::Partial`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
+   - Fully resolved AST entities emit [`CoverageState::Verified`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
+   - **Hard invariant:** Never convert `Unknown` or `Partial` into `Verified` or `Pass`.
+
+---
+
+## 3. Mandatory Pre-Commit & Verification Loop
+
+Before any commit or merge, execute the full verification chain (all 8 gates must pass):
 
 ```bash
 # 1. Format check
 cargo fmt --all -- --check
 
-# 2. Strict lints
+# 2. Strict lints (-D warnings)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. All workspace unit & integration tests
-cargo test --workspace
+# 3. All workspace unit & integration tests (29/29 passing)
+cargo test --workspace --all-targets -- --nocapture
 
-# 4. JSON Schema validation
-for s in schemas/*.json; do python3 -m json.tool "$s" >/dev/null; done
+# 4. Doc tests
+cargo test --workspace --doc
 
 # 5. Golden determinism assertion (100 runs)
 cargo test -p autopsy-repo -- test_compute_snapshot_id_golden_100_runs
+./scripts/verify-determinism.sh
+
+# 6. Architectural boundary gate (Zero LLM/MCP in core crates)
+./scripts/verify-arch-boundaries.sh
+
+# 7. JSON Schema validation
+for s in schemas/*.json; do python3 -m json.tool "$s" >/dev/null; done
+
+# 8. Pre-commit all-files check
+make check
 ```
 
 ---
 
-## 3. Architecture & Traceability Mapping
+## 4. Architecture, Traceability & Evidence Records
 
 When implementing features:
 1. Identify affected requirements in [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md).
 2. Follow established Architecture Decision Records in [`docs/adr/`](file:///home/ravi/Projects/SynEvid/docs/adr/).
-3. Add end-to-end integration tests in [`tests/`](file:///home/ravi/Projects/SynEvid/tests) or crate unit tests.
-4. Document all changes and verification evidence in [`docs/evidence/`](file:///home/ravi/Projects/SynEvid/docs/evidence/).
+3. Add end-to-end integration tests in [`tests/tests/`](file:///home/ravi/Projects/SynEvid/tests/tests/) using `autopsy-tests::TestSandbox`.
+4. Document all changes and verification evidence in [`docs/evidence/`]:
+   - [`01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md)
+   - [`02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
+5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).
