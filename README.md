@@ -25,7 +25,7 @@
   <a href="#deterministic-pipeline"><img src="https://img.shields.io/badge/Determinism-100%2F100%20BLAKE3-00f0ff?style=for-the-badge&logo=rust" alt="100/100 Determinism"></a>
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.85%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
-  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-29%2F29%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
+  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-52%2F52%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
 </p>
 
 ---
@@ -149,7 +149,7 @@ Architectural Boundary Gate (Zero LLM/MCP in Core Crates)...Passed
 ### GitHub Actions Pre-Merge Gate
 Every pull request and push to `main` executes a multi-job verification matrix ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 1. **`rust-quality`**: `cargo fmt` + `cargo clippy --workspace --all-targets -- -D warnings`
-2. **`rust-tests`**: 29 unit and integration tests across all crates (Phases 0, 1, 2)
+2. **`rust-tests`**: 52 unit and integration tests across all crates (Phases 0, 1, 2, 3)
 3. **`determinism-gate`**: 100 sequential runs asserting byte-identical snapshot digests
 4. **`arch-boundary-gate`**: Asserts core crates contain no LLM or presentation dependencies
 5. **`schemas-and-configs`**: Validates JSON Schemas and engine TOML/YAML files

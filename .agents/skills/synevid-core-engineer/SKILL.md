@@ -48,7 +48,21 @@ All language adapters (starting with TypeScript in `crates/autopsy-adapter-types
 
 ---
 
-## 3. Mandatory Pre-Commit & Verification Loop
+## 3. Dependency Graph & Semantic Diff Standards (Phase 3)
+
+All graph and diff operations must satisfy the following invariants:
+1. **Petgraph Directed Multigraph (FR-006):** In `crates/autopsy-graph`, use `petgraph::graph::DiGraph<Symbol, Edge>` with a secondary index `BTreeMap<SymbolId, NodeIndex>`. Multiple typed edges between identical node pairs must be supported.
+2. **Explicit Edge Provenance (FR-006):** Every edge must retain provenance metadata (`adapter`, `location`, `method`) linking it back to the AST extraction pass.
+3. **Deterministic SCC & Cycle Traversal:** Cycle detection and Strongly Connected Components condensation must use deterministic sorting over Tarjan's SCC results.
+4. **Incremental Subgraph Updates:** File updates in the graph (`update_file`) must only remove and replace symbols from the modified file in $O(|V_{file}| + |E_{file}|)$, avoiding an $O(V^2)$ full graph rebuild.
+5. **Ambiguous Rename Rule (FR-007):** In `crates/autopsy-diff`, file and symbol renames are only classified as `Renamed` if the candidate deleted and added pair is **unambiguous** (exactly 1:1 match). If multiple files share identical content hashes, or multiple symbols share a signature in the same scope, they **strictly remain Added + Deleted / Added + Removed**.
+6. **Breaking Contract Detection (FR-007, FR-009):** Contract modifications must explicitly flag `is_breaking: true` when public visibility is narrowed, input parameter types/counts change, or return types change.
+7. **Changed Frontier:** Diff outputs must calculate both the directly changed symbols (`direct_symbols`) and the 1-hop dependent boundary (`impacted_boundary`).
+8. **Golden Diff Fixture Gate:** Diff calculations on frozen fixture repositories must produce exact byte-for-byte JSON matches.
+
+---
+
+## 4. Mandatory Pre-Commit & Verification Loop
 
 Before any commit or merge, execute the full verification chain (all 8 gates must pass):
 
@@ -59,7 +73,7 @@ cargo fmt --all -- --check
 # 2. Strict lints (-D warnings)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. All workspace unit & integration tests (29/29 passing)
+# 3. All workspace unit & integration tests (52/52 passing)
 cargo test --workspace --all-targets -- --nocapture
 
 # 4. Doc tests
@@ -81,7 +95,7 @@ make check
 
 ---
 
-## 4. Architecture, Traceability & Evidence Records
+## 5. Architecture, Traceability & Evidence Records
 
 When implementing features:
 1. Identify affected requirements in [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md).
@@ -90,4 +104,5 @@ When implementing features:
 4. Document all changes and verification evidence in [`docs/evidence/`]:
    - [`01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md)
    - [`02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
+   - [`03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md)
 5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).

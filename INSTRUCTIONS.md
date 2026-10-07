@@ -8,13 +8,14 @@ Please refer to:
 - [`.agents/skills/synevid-core-engineer/SKILL.md`](file:///home/ravi/Projects/SynEvid/.agents/skills/synevid-core-engineer/SKILL.md) — Architecture invariants, determinism rules, language adapter standards, and verification checklist.
 - [`docs/evidence/01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md) — Phase 0 & Phase 1 verification telemetry.
 - [`docs/evidence/02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md) — Phase 2 TypeScript adapter and conformance verification telemetry.
+- [`docs/evidence/03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md) — Phase 3 petgraph multigraph and semantic diff verification telemetry.
 
 ## Quick Command Reference
 ```bash
 # Complete quality, boundary, and determinism check (all 8 gates):
 make check
 
-# Run all unit and end-to-end integration tests (29/29 passing):
+# Run all unit and end-to-end integration tests (52/52 passing):
 make test
 
 # Format code:

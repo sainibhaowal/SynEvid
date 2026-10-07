@@ -27,6 +27,8 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
    - Never modify benchmark ground truth datasets to inflate benchmark scores.
 7. **Clean Dependency Inversion:**
    - Presentation, GUI (`apps/web-inspector`), and MCP (`apps/mcp-server`) layers depend on core public interfaces, NEVER the reverse. Enforced by `ARCH_NO_CORE_TO_MCP`.
+8. **Ambiguous Rename Rule (FR-007):**
+   - If multiple files share identical content hashes or multiple symbols share a signature in the same scope, renames MUST stay `Added` + `Deleted` / `Added` + `Removed`. Never guess.
 
 ---
 
@@ -128,6 +130,7 @@ Before any commit:
   - Historical evidence records:
     - [`01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md)
     - [`02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
+    - [`03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md)
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.

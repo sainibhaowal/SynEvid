@@ -19,8 +19,8 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-004** | Syntax Parsing & Diagnostics Handling | `autopsy-adapter-typescript` | `test_syntax_error_diagnostics_without_crashing`, `test_discover_extensions` | **VERIFIED** |
 | **FR-005** | Stable Symbol IDs Resilient to Line Shifts | `autopsy-adapter-typescript` | `test_stable_symbol_id_resilience_to_line_shifts`, `test_e2e_ts_real_repo_parsing_and_symbol_extraction` | **VERIFIED** |
 | **FR-009** | Normalized Contract Extraction | `autopsy-adapter-typescript` | `test_extract_contracts`, `test_e2e_ts_real_repo_parsing_and_symbol_extraction` | **VERIFIED** |
-| **FR-030** | Honest Semantic Coverage Classification | `autopsy-adapter-api`, `autopsy-adapter-typescript` | `test_honest_coverage_dynamic_constructs`, `test_e2e_ts_honest_coverage_boundary` | **VERIFIED** |
-| **FR-006..007** | Typed Graph & Semantic Diff | `autopsy-graph`, `autopsy-diff` | Phase 3 Target | Pending |
+| **FR-006** | Typed Multigraph with Edge Provenance | `autopsy-graph` | `test_multigraph_support`, `test_bounded_reachability_forward_and_backward`, `test_cycle_detection_via_tarjan_scc`, `test_e2e_dependency_multigraph_cycles_and_reachability` | **VERIFIED** |
+| **FR-007** | Semantic Diff Engine & Ambiguous Rename Rule | `autopsy-diff` | `test_unambiguous_file_rename`, `test_ambiguous_file_rename_stays_add_and_delete`, `test_contract_breaking_change_detection`, `test_e2e_semantic_diff_unambiguous_and_ambiguous_renames`, `test_e2e_golden_diff_fixture_exact_json_match` | **VERIFIED** |
 | **FR-008..014** | Impact, Invariants, Evidence Engine | `autopsy-impact`, `autopsy-contracts`, `autopsy-invariants`, `autopsy-evidence` | Phase 4 Target | Pending |
 | **FR-015..024** | CLI, SQLite Storage, Reporting | `autopsy-cli`, `autopsy-storage`, `autopsy-report` | Phase 5 Target | Pending |
 | **FR-025** | Benchmark Harness & Baselines | `benchmarks/` | Phase 6 Target | Pending |
