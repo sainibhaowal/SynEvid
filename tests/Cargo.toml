@@ -8,7 +8,10 @@ publish = false
 [dependencies]
 autopsy-domain = { path = "../crates/autopsy-domain" }
 autopsy-repo = { path = "../crates/autopsy-repo" }
+autopsy-adapter-api = { path = "../crates/autopsy-adapter-api" }
+autopsy-adapter-typescript = { path = "../crates/autopsy-adapter-typescript" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 serde_yaml = { workspace = true }
+
