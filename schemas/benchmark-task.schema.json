@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Code Autopsy Benchmark Task",
+  "type": "object",
+  "required": [
+    "id",
+    "repository",
+    "base_ref",
+    "prompt",
+    "ground_truth"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "repository": {
+      "type": "string"
+    },
+    "base_ref": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "ground_truth": {
+      "type": "object"
+    }
+  }
+}

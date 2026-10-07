@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/autopsy-domain",
+    "crates/autopsy-repo",
+    "crates/autopsy-adapter-api",
+    "crates/autopsy-adapter-typescript",
+    "crates/autopsy-symbols",
+    "crates/autopsy-graph",
+    "crates/autopsy-diff",
+    "crates/autopsy-impact",
+    "crates/autopsy-contracts",
+    "crates/autopsy-invariants",
+    "crates/autopsy-evidence",
+    "crates/autopsy-storage",
+    "crates/autopsy-report",
+    "crates/autopsy-cli",
+    "tests"
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde_yaml = "0.9"
+ignore = "0.4"
+glob = "0.3"

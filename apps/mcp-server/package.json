@@ -1,0 +1,9 @@
+{
+  "name": "@code-autopsy/mcp-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {"typecheck": "tsc --noEmit", "test": "node --test"},
+  "dependencies": {"@modelcontextprotocol/server": "^2.0.0", "zod": "^4.0.0"},
+  "devDependencies": {"typescript": "^5.9.0"}
+}

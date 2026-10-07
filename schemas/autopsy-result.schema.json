@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-autopsy.dev/schema/autopsy-result-v0.0.1.json",
+  "title": "Code Autopsy Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run",
+    "snapshots",
+    "findings",
+    "coverage",
+    "result_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "0.0.1"
+    },
+    "run": {
+      "type": "object",
+      "required": ["run_id", "command", "analyzer_version", "result_digest"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "command": { "type": "string" },
+        "analyzer_version": { "type": "string" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "result_digest": { "type": "string" }
+      }
+    },
+    "snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["snapshot_id", "revision", "config_hash", "file_set_digest"],
+        "properties": {
+          "snapshot_id": { "type": "string" },
+          "revision": { "type": "string" },
+          "config_hash": { "type": "string" },
+          "file_set_digest": { "type": "string" }
+        }
+      }
+    },
+    "change_set": {
+      "type": ["object", "null"],
+      "properties": {
+        "before_snapshot_id": { "type": "string" },
+        "after_snapshot_id": { "type": "string" },
+        "file_deltas": { "type": "array" },
+        "symbol_deltas": { "type": "array" },
+        "contract_deltas": { "type": "array" },
+        "edge_deltas": { "type": "array" }
+      }
+    },
+    "impact": {
+      "type": ["object", "null"],
+      "properties": {
+        "query": { "type": "object" },
+        "impacted_entities": { "type": "array", "items": { "type": "string" } },
+        "paths": { "type": "array" },
+        "traversal_profile": { "type": "string" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule_id", "status", "severity", "message", "entities"],
+        "properties": {
+          "id": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "unknown"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warning", "error"]
+          },
+          "message": { "type": "string" },
+          "entities": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "coverage": { "type": "string" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "rule_id", "locations", "evidence_digest"],
+        "properties": {
+          "finding_id": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string" },
+                "start_line": { "type": "integer" },
+                "end_line": { "type": "integer" },
+                "symbol_id": { "type": "string" }
+              }
+            }
+          },
+          "paths": { "type": "array" },
+          "deltas": { "type": "array" },
+          "evidence_digest": { "type": "string" }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["state", "unsupported_constructs"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["verified", "partial", "unsupported", "unknown"]
+        },
+        "unsupported_constructs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "files_scanned": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result_digest": {
+      "type": "string"
+    }
+  }
+}

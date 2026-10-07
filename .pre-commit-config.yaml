@@ -1,0 +1,68 @@
+# Pre-commit configuration for Synevid deterministic verification
+default_stages: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Rust Format Check (rustfmt)
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-clippy
+        name: Rust Clippy Strict Lints (-D warnings)
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-test
+        name: Workspace Test Stack (Unit & Integration)
+        entry: cargo test --workspace --all-targets -- --nocapture
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-doc-test
+        name: Rust Documentation Tests
+        entry: cargo test --workspace --doc
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+      - id: golden-determinism
+        name: Golden 100-Run Determinism Invariant
+        entry: ./scripts/verify-determinism.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
+      - id: schema-validation
+        name: JSON Schema Syntactic Validation
+        entry: python3 -c 'import glob, json, sys; [json.load(open(f)) for f in glob.glob("schemas/*.json")]; print("All schemas valid.")'
+        language: system
+        files: ^schemas/.*\.json$
+        pass_filenames: false
+        always_run: true
+
+      - id: config-syntax-check
+        name: Engine Config & Invariant Syntax Validation
+        entry: python3 -c 'import tomllib, yaml, sys; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); print("Configs valid.")'
+        language: system
+        files: ^(autopsy\.toml|\.autopsy/invariants\.yml)$
+        pass_filenames: false
+        always_run: true
+
+      - id: arch-boundary-check
+        name: Architectural Boundary Gate (Zero LLM/MCP in Core Crates)
+        entry: ./scripts/verify-arch-boundaries.sh
+        language: system
+        pass_filenames: false
+        always_run: true
