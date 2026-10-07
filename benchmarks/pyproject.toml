@@ -1,0 +1,7 @@
+[project]
+name = "code-autopsy-benchmarks"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2", "pandas>=2", "pytest>=8"]
+[tool.ruff]
+line-length = 100

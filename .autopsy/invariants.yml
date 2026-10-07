@@ -1,0 +1,10 @@
+version: "0.0.1"
+invariants:
+  - id: ARCH_NO_CORE_TO_MCP
+    description: Rust core packages must not depend on presentation or MCP packages.
+    kind: forbidden_dependency
+    severity: error
+    scope:
+      source: "crates/**"
+      target: "apps/mcp-server/**"
+    rule: {}

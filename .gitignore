@@ -1,0 +1,50 @@
+# Rust Compiled Binary & Build Artifacts
+/target/
+Cargo.lock
+
+# Test Coverage & Profiling Artifacts
+coverage/
+*.lcov
+*.profraw
+*.profdata
+lcov.info
+
+# Dependencies & Virtual Environments
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Tooling, Linter & Test Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.eslintcache
+
+# Synevid / Code Autopsy Runtime & Local Storage Caches
+.autopsy/cache/
+.autopsy/results/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Temporary Test Sandboxes & Logs
+tmp/
+*.tmp
+*.log
+
+# Static Reference Source Archive (Preserved uncommitted specification pack)
+Resource/

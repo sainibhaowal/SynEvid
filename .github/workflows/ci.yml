@@ -1,0 +1,133 @@
+name: CI Quality & Verification Matrix
+
+on:
+  push:
+    branches: ["main", "master", "develop"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: ["main", "master", "develop"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-quality:
+    name: Rust Formatting & Clippy Linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust Code Formatting (rustfmt)
+        run: cargo fmt --all -- --check
+
+      - name: Strict Clippy Linter (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-tests:
+    name: Workspace Test Stack (Unit, Integration, Docs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run All Workspace Unit & Integration Tests
+        run: cargo test --workspace --all-targets -- --nocapture
+
+      - name: Run Documentation Tests
+        run: cargo test --workspace --doc
+
+  determinism-gate:
+    name: Golden 100-Run Determinism Assertion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Determinism Verification Script
+        run: ./scripts/verify-determinism.sh
+
+  arch-boundary-gate:
+    name: Architectural Boundary Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Verify Zero LLM/MCP in Core Crates
+        run: ./scripts/verify-arch-boundaries.sh
+
+  schemas-and-configs:
+    name: Schemas & Configs Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate All Public JSON Schemas
+        run: |
+          python3 -c '
+          import glob, json, sys
+          schemas = glob.glob("schemas/*.json")
+          if not schemas:
+              print("Error: No schemas found!")
+              sys.exit(1)
+          for s in schemas:
+              with open(s, "r") as f:
+                  data = json.load(f)
+                  print(f"Validated schema {s}: {data.get(\"title\", \"unnamed\")}")
+          '
+
+      - name: Validate autopsy.toml & invariants.yml Syntax
+        run: |
+          python3 -c '
+          import tomllib, yaml
+          with open("autopsy.toml", "rb") as f:
+              tomllib.load(f)
+          with open(".autopsy/invariants.yml", "r") as f:
+              yaml.safe_load(f)
+          print("All engine configuration files validated.")
+          '
+
+  pre-merge-verification-gate:
+    name: Pre-Merge Verification Gate
+    runs-on: ubuntu-latest
+    needs:
+      - rust-quality
+      - rust-tests
+      - determinism-gate
+      - arch-boundary-gate
+      - schemas-and-configs
+    if: always()
+    steps:
+      - name: Assess All Prerequisite Gates
+        run: |
+          if [ "${{ needs.rust-quality.result }}" != "success" ] || \
+             [ "${{ needs.rust-tests.result }}" != "success" ] || \
+             [ "${{ needs.determinism-gate.result }}" != "success" ] || \
+             [ "${{ needs.arch-boundary-gate.result }}" != "success" ] || \
+             [ "${{ needs.schemas-and-configs.result }}" != "success" ]; then
+            echo "ERROR: One or more pre-merge verification checks failed!"
+            exit 1
+          fi
+          echo "SUCCESS: All quality, test, schema, boundary, and determinism gates passed. Ready for merge."
