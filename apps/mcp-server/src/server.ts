@@ -117,18 +117,40 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Target repository root directory'),
+        base: z
+          .string()
+          .optional()
+          .describe('Base snapshot ID or git revision (defaults to latest baseline)'),
+        head: z
+          .string()
+          .optional()
+          .describe('Head snapshot ID or git revision to compare against (defaults to current worktree)'),
+        before: z
+          .string()
+          .optional()
+          .describe('Alias for base snapshot ID'),
+        after: z
+          .string()
+          .optional()
+          .describe('Alias for head snapshot ID'),
         base_snapshot: z
           .string()
           .optional()
-          .describe('Optional base snapshot ID to compare against (defaults to HEAD snapshot)'),
+          .describe('Legacy alias for base snapshot ID'),
       }),
     },
     async (args) => {
       const repoRoot = args.repo_root || '.';
       const cliArgs: string[] = [];
 
-      if (args.base_snapshot) {
-        cliArgs.push('--base', args.base_snapshot);
+      const base = args.base || args.before || args.base_snapshot;
+      const head = args.head || args.after;
+
+      if (base) {
+        cliArgs.push('--before', base);
+      }
+      if (head) {
+        cliArgs.push('--after', head);
       }
 
       const result = await runAutopsy('diff', cliArgs, { repoRoot });
@@ -158,16 +180,39 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Target repository root directory'),
+        base: z
+          .string()
+          .optional()
+          .describe('Optional baseline snapshot ID to verify diff against'),
+        baseline_id: z
+          .string()
+          .optional()
+          .describe('Alias for base snapshot ID'),
+        invariants_file: z
+          .string()
+          .optional()
+          .describe('Path to invariants YAML policy file (defaults to .autopsy/invariants.yml)'),
+        profile: z
+          .string()
+          .optional()
+          .describe('Policy profile name'),
         strict: z
           .boolean()
           .optional()
-          .describe('Strict mode: reject unknown constructs with non-zero status'),
+          .describe('Strict mode: reject unknown constructs with exit code 4'),
       }),
     },
     async (args) => {
       const repoRoot = args.repo_root || '.';
       const cliArgs: string[] = [];
 
+      const base = args.base || args.baseline_id;
+      if (base) {
+        cliArgs.push('--baseline-id', base);
+      }
+      if (args.invariants_file) {
+        cliArgs.push('--invariants-file', args.invariants_file);
+      }
       if (args.strict) {
         cliArgs.push('--strict');
       }
@@ -197,7 +242,12 @@ export function createAutopsyMcpServer(): McpServer {
       inputSchema: z.object({
         target: z
           .string()
+          .optional()
           .describe('Target finding ID or symbol ID to explain'),
+        finding_id: z
+          .string()
+          .optional()
+          .describe('Alias for finding ID target'),
         repo_root: z
           .string()
           .optional()
@@ -206,7 +256,18 @@ export function createAutopsyMcpServer(): McpServer {
     },
     async (args) => {
       const repoRoot = args.repo_root || '.';
-      const result = await runAutopsy('explain', [args.target], { repoRoot });
+      const targetId = args.target || args.finding_id;
+      if (!targetId) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ error: 'Missing target or finding_id argument' }),
+            },
+          ],
+        };
+      }
+      const result = await runAutopsy('explain', [targetId], { repoRoot });
 
       return {
         content: [
@@ -216,6 +277,37 @@ export function createAutopsyMcpServer(): McpServer {
               typeof result.data === 'string'
                 ? result.data
                 : JSON.stringify(result.data, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // Register paginated / on-demand multigraph resource (CA-TECH-001 Ch.4.1)
+  server.registerResource(
+    'autopsy_graph',
+    'autopsy://graph',
+    {
+      title: 'Symbol Dependency Multigraph',
+      description: 'On-demand dependency multigraph resource to avoid dumping full graph into agent context',
+      mimeType: 'application/json',
+    },
+    async (uri) => {
+      const result = await runAutopsy('baseline', [], { repoRoot: '.' });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: JSON.stringify(
+              {
+                resource: 'autopsy://graph',
+                status: 'available',
+                summary: result.data?.coverage || {},
+                snapshot_id: result.data?.snapshots?.[0]?.snapshot_id || 'unknown',
+              },
+              null,
+              2
+            ),
           },
         ],
       };
