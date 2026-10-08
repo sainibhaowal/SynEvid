@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/presentation/view.ts::BankingView::renderTransferForm"
+    ],
+    "seed_symbols": [
+      "src/security/sanitizer.ts::sanitizeInput"
+    ]
+  },
+  "id": "TASK-REL-028",
+  "is_held_out": true,
+  "prompt": "Trace backward blast radius for sanitizer.ts::sanitizeInput.",
+  "repository": "repo-relayer"
+}

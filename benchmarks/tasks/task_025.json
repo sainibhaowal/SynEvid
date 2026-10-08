@@ -1,0 +1,22 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_interface_required_prop"
+    ],
+    "expected_impacted_symbols": [
+      "src/domain/businessLogic.ts::BankingDomain::processTransfer",
+      "src/presentation/view.ts::BankingView::renderTransferForm"
+    ],
+    "seed_symbols": [
+      "src/core/contracts.ts::TransactionRequest"
+    ]
+  },
+  "id": "TASK-REL-025",
+  "is_held_out": false,
+  "prompt": "Add required property 'fee: number' to TransactionRequest interface.",
+  "repository": "repo-relayer"
+}

@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/obsolete/deprecatedHandler.ts::DeprecatedHandler::executeLegacy"
+    ]
+  },
+  "id": "TASK-DED-042",
+  "is_held_out": false,
+  "prompt": "Delete unreferenced dead method DeprecatedHandler.executeLegacy.",
+  "repository": "repo-dead-call"
+}

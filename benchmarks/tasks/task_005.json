@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_contract_return_type"
+    ],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/auth/authGuard.ts::authenticateUser"
+    ]
+  },
+  "id": "TASK-API-005",
+  "is_held_out": true,
+  "prompt": "Change return type of authenticateUser from string | null to boolean.",
+  "repository": "repo-api"
+}

@@ -1,0 +1,13 @@
+version: "0.0.1"
+invariants:
+  - id: "no-circular-deps"
+    description: "No circular dependencies permitted"
+    kind: "no_new_cycle"
+    severity: "error"
+  - id: "deprecated-storage-prohibition"
+    description: "Modern services must not import legacy storage modules"
+    kind: "forbidden_dependency"
+    severity: "error"
+    scope:
+      source: "src/modern/**"
+      target: "src/legacy/**"

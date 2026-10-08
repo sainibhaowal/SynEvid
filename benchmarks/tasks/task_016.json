@@ -1,0 +1,25 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_contract_type"
+    ],
+    "expected_impacted_symbols": [
+      "src/domain/entity.ts::createRecord",
+      "src/legacy/oldStorage.ts::OldStorage::saveOld",
+      "src/modern/newStorage.ts::NewStorage::insertRecord",
+      "src/adapters/sqlAdapter.ts::SqlAdapter::executeInsert",
+      "src/services/migrationRunner.ts::MigrationRunner::migrateAll"
+    ],
+    "seed_symbols": [
+      "src/domain/entity.ts::RecordEntity"
+    ]
+  },
+  "id": "TASK-MIG-016",
+  "is_held_out": false,
+  "prompt": "Modify RecordEntity payload from string to object type.",
+  "repository": "repo-migration"
+}

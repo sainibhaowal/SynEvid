@@ -31,6 +31,7 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-016** | Deterministic Exit Code Protocol (0, 2, 3, 4) | `autopsy-cli` | `test_cli_verify_policy_failure_exit_code`, `test_cli_verify_strict_mode_unsupported_exit_code`, `test_cli_analysis_error_on_invalid_input` | **VERIFIED** |
 | **FR-017** | Reporting Engine (Canonical JSON, Human Text, SARIF 2.1.0) | `autopsy-report` | `test_report_canonical_json_and_digest_determinism`, `test_report_human_text_and_sarif`, `test_offline_network_off_isolation` | **VERIFIED** |
 | **FR-024** | SQLite Storage with Versioned Migrations & Content-Addressed Cache | `autopsy-storage` | `test_storage_migrations_and_roundtrip`, `test_content_addressed_cache`, `test_cli_baseline_storage_and_cache_roundtrip` | **VERIFIED** |
-| **FR-028** | Canonical BLAKE3 Result Digesting & 100/100 Offline Determinism | `autopsy-report`, `autopsy-cli`, `tests` | `test_phase5_100_runs_determinism`, `scripts/verify-determinism.sh` | **VERIFIED** |
-| **FR-025** | Benchmark Harness & Baselines | `benchmarks/` | Phase 6 Target | Pending |
+| **FR-025** | Benchmark Harness & Comparative Baselines (A/B/C) | `benchmarks/`, `tests` | `test_benchmark_corpus_repositories_exist`, `test_benchmark_task_suite_conformance`, `test_benchmark_harness_execution_and_pre_registered_gate` | **VERIFIED** |
+| **UC-08** | Benchmarking & Accuracy Auditing | `benchmarks/` | `benchmarks/run_benchmarks.py`, `benchmarks/results/reproduction_report.json` | **VERIFIED** |
+| **RQ1-5** | Research Questions Empirical Evaluation | `benchmarks/engine/` | Gate evaluation (+31.73pp recall lift, 56.90% cost cut, 16 new failure classes) | **VERIFIED** |
 

@@ -1,0 +1,21 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "deprecated-storage-prohibition"
+    ],
+    "expected_impacted_symbols": [
+      "src/legacy/oldStorage.ts::OldStorage"
+    ],
+    "seed_symbols": [
+      "src/modern/newStorage.ts::NewStorage"
+    ]
+  },
+  "id": "TASK-MIG-011",
+  "is_held_out": false,
+  "prompt": "NewStorage in modern/ directly imports OldStorage from legacy/.",
+  "repository": "repo-migration"
+}

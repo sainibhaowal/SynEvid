@@ -1,0 +1,23 @@
+{
+  "base_ref": "HEAD",
+  "category": "cross_package",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_contract_required_param"
+    ],
+    "expected_impacted_symbols": [
+      "packages/server/src/server.ts::LoggingServerHandler::handle",
+      "packages/plugin/src/plugin.ts::CustomPluginHandler::handle",
+      "packages/core/src/index.ts::EventBus::publish"
+    ],
+    "seed_symbols": [
+      "packages/core/src/types.ts::EventHandler::handle"
+    ]
+  },
+  "id": "TASK-PKG-035",
+  "is_held_out": false,
+  "prompt": "Change EventHandler.handle signature to require extra parameter 'context: any'.",
+  "repository": "repo-cross-package"
+}

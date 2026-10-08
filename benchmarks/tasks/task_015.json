@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/services/migrationRunner.ts::MigrationRunner::migrateAll"
+    ]
+  },
+  "id": "TASK-MIG-015",
+  "is_held_out": false,
+  "prompt": "Change batch size in MigrationRunner.migrateAll.",
+  "repository": "repo-migration"
+}

@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup"
+    ],
+    "seed_symbols": [
+      "src/analytics/telemetry.ts::TelemetryCollector::trackEvent"
+    ]
+  },
+  "id": "TASK-DED-049",
+  "is_held_out": true,
+  "prompt": "Query backward blast radius for TelemetryCollector.trackEvent.",
+  "repository": "repo-dead-call"
+}

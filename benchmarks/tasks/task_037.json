@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "cross_package",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "packages/client/src/client.ts::AppClient::sendNotification"
+    ]
+  },
+  "id": "TASK-PKG-037",
+  "is_held_out": false,
+  "prompt": "Update AppClient.sendNotification implementation to validate topic format.",
+  "repository": "repo-cross-package"
+}

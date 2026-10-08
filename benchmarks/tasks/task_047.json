@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "unknown",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/dynamic/evalProxy.ts"
+    ]
+  },
+  "id": "TASK-DED-047",
+  "is_held_out": true,
+  "prompt": "Detect generated code marker in generated stub file.",
+  "repository": "repo-dead-call"
+}

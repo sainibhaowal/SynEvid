@@ -26,6 +26,10 @@ __pycache__/
 # Synevid / Code Autopsy Runtime & Local Storage Caches
 .autopsy/cache/
 .autopsy/results/
+.autopsy/*.db*
+*.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

@@ -1,0 +1,22 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "architecture-layers",
+      "no_new_cycle"
+    ],
+    "expected_impacted_symbols": [
+      "src/presentation/view.ts::BankingView"
+    ],
+    "seed_symbols": [
+      "src/infrastructure/database.ts::DatabaseDriver"
+    ]
+  },
+  "id": "TASK-REL-021",
+  "is_held_out": false,
+  "prompt": "DatabaseDriver in infrastructure/ imports BankingView from presentation/.",
+  "repository": "repo-relayer"
+}
