@@ -525,13 +525,15 @@ fn handle_impact(
         }
     }
 
+    let bounded_budget = budget.min(config.analysis.max_traversal_nodes as usize);
+
     let query = ImpactQuery {
         seed_symbols,
         direction: direction.into(),
         profile: ImpactProfile {
             name: "cli-impact".to_string(),
             max_depth,
-            budget,
+            budget: bounded_budget,
             ..Default::default()
         },
     };

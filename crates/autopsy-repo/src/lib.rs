@@ -27,6 +27,12 @@ pub enum RepoError {
     #[error("Invalid glob pattern '{pattern}' in config: {reason}")]
     InvalidGlobPattern { pattern: String, reason: String },
 
+    #[error("Path traversal attempt detected in {path}: {reason}")]
+    PathTraversal { path: PathBuf, reason: String },
+
+    #[error("Symlink escape attempt detected: {0}")]
+    SymlinkEscape(PathBuf),
+
     #[error("I/O error during repository scanning: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -147,6 +153,26 @@ impl AutopsyConfig {
             return Err(RepoError::InvalidConfig {
                 path: path.to_path_buf(),
                 reason: "'repository.roots' must contain at least one root directory".to_string(),
+            });
+        }
+        for root in &self.repository.roots {
+            if root != "." && !is_safe_relative_path(root) {
+                return Err(RepoError::PathTraversal {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "Repository root '{}' attempts path traversal ('..') or is an absolute path",
+                        root
+                    ),
+                });
+            }
+        }
+        if !is_safe_relative_path(&self.cache.directory) {
+            return Err(RepoError::PathTraversal {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "Cache directory '{}' attempts path traversal ('..') or is an absolute path",
+                    self.cache.directory
+                ),
             });
         }
         if self.analysis.max_traversal_nodes == 0 {
@@ -287,6 +313,45 @@ pub fn normalize_line_endings(bytes: &[u8]) -> Vec<u8> {
     normalized
 }
 
+/// Validates whether a relative path string is safe from path traversal (`..`) and is not absolute.
+pub fn is_safe_relative_path(path_str: &str) -> bool {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return false;
+    }
+    // Check for Windows drive prefix (e.g., C:)
+    if trimmed.len() >= 2 && trimmed.chars().nth(1) == Some(':') {
+        return false;
+    }
+    for segment in trimmed.split(['/', '\\']) {
+        if segment == ".." {
+            return false;
+        }
+    }
+    true
+}
+
+/// Sanitizes and normalizes a relative repository path, ensuring it contains no `..` traversal sequences,
+/// is not absolute, and normalizes all separators to POSIX `/`.
+pub fn sanitize_relative_path(path: &Path) -> Result<String, RepoError> {
+    let s = path.to_string_lossy().replace('\\', "/");
+    if s.starts_with('/') {
+        return Err(RepoError::PathTraversal {
+            path: path.to_path_buf(),
+            reason: "Path must be relative; cannot start with leading slash".to_string(),
+        });
+    }
+    for segment in s.split('/') {
+        if segment == ".." {
+            return Err(RepoError::PathTraversal {
+                path: path.to_path_buf(),
+                reason: "Path contains forbidden '..' traversal sequence".to_string(),
+            });
+        }
+    }
+    Ok(s)
+}
+
 /// Helper function to detect if content represents generated code.
 pub fn is_generated_code(content: &[u8]) -> bool {
     let prefix_len = content.len().min(4096);
@@ -381,6 +446,8 @@ pub fn scan_repository(
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
+            .follow_links(false) // Hard Invariant: Never follow symlinks outside or within workspace
+            .same_file_system(false)
             .build();
 
         for entry_res in walker {
@@ -389,14 +456,33 @@ pub fn scan_repository(
                 Err(_) => continue,
             };
 
+            // Hard Invariant: Reject symlink entries to prevent escaping workspace roots
+            if entry.path_is_symlink() || entry.file_type().is_some_and(|ft| ft.is_symlink()) {
+                continue;
+            }
+
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
 
-            let rel_path = match path.strip_prefix(repo_root) {
-                Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            // Verify canonical containment within repo_root
+            let is_contained = match (path.canonicalize(), repo_root.canonicalize()) {
+                (Ok(canon_path), Ok(canon_root)) => canon_path.starts_with(&canon_root),
+                _ => true,
+            };
+            if !is_contained {
+                continue; // Symlink or mount escape contained
+            }
+
+            let rel_path_raw = match path.strip_prefix(repo_root) {
+                Ok(p) => p,
                 Err(_) => continue,
+            };
+
+            let rel_path = match sanitize_relative_path(rel_path_raw) {
+                Ok(p) => p,
+                Err(_) => continue, // Discard any path failing traversal sanitization
             };
 
             // Check against exclude glob patterns
@@ -650,5 +736,49 @@ mod tests {
             blake3::hash(&norm_lf).to_hex(),
             blake3::hash(&norm_crlf).to_hex()
         );
+    }
+
+    #[test]
+    fn test_path_traversal_sanitization_unit() {
+        assert!(is_safe_relative_path("src/index.ts"));
+        assert!(is_safe_relative_path("packages/core/src/index.ts"));
+        assert!(!is_safe_relative_path("../secret.env"));
+        assert!(!is_safe_relative_path("src/../../outside.ts"));
+        assert!(!is_safe_relative_path("/etc/passwd"));
+        assert!(!is_safe_relative_path("C:\\Windows\\System32"));
+
+        assert!(sanitize_relative_path(Path::new("src/main.ts")).is_ok());
+        assert!(sanitize_relative_path(Path::new("src/../main.ts")).is_err());
+        assert!(sanitize_relative_path(Path::new("/root/main.ts")).is_err());
+    }
+
+    #[test]
+    fn test_config_path_traversal_rejection() {
+        let bad_config = AutopsyConfig {
+            config_version: "0.0.1".to_string(),
+            repository: RepositoryConfig {
+                roots: vec!["../../outside".to_string()],
+                exclude: vec![],
+            },
+            analysis: AnalysisConfig::default(),
+            cache: CacheConfig::default(),
+        };
+        assert!(matches!(
+            bad_config.validate(Path::new("autopsy.toml")),
+            Err(RepoError::PathTraversal { .. })
+        ));
+
+        let bad_cache = AutopsyConfig {
+            config_version: "0.0.1".to_string(),
+            repository: RepositoryConfig::default(),
+            analysis: AnalysisConfig::default(),
+            cache: CacheConfig {
+                directory: "/var/cache".to_string(),
+            },
+        };
+        assert!(matches!(
+            bad_cache.validate(Path::new("autopsy.toml")),
+            Err(RepoError::PathTraversal { .. })
+        ));
     }
 }

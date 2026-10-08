@@ -13,5 +13,6 @@ Please read and follow the mandatory engineering rules and protocols defined in:
 10. [`docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
 11. [`docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
 12. [`docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
+13. [`docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
 
 Always run `make check` or `pre-commit run --all-files` before finalizing changes.
