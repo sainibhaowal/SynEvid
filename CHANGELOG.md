@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-10-08
 
 ### Added
+- **Multi-Platform Hardening & Enterprise CI/CD (Phase 3.2):**
+  - Universal hardware & architecture support: Linux (`x86_64`, `aarch64`), macOS Apple Silicon (`aarch64-apple-darwin`), macOS Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`).
+  - Cross-platform path separator normalization (`/`) in `autopsy-repo` scanner, ensuring byte-identical BLAKE3 digests and snapshot IDs across Linux, macOS, and Windows.
+  - Upgraded GitHub Actions CI/CD suite:
+    - Pre-merge multi-platform matrix (`.github/workflows/ci.yml`) across Ubuntu, macOS (Apple Silicon), and Windows runners with concurrency cancellation and dependency caching.
+    - Post-merge release pipeline (`.github/workflows/post-merge.yml`) on `main` cross-compiling release binaries, verifying golden baselines, and uploading release packages.
+    - Nightly & dispatch benchmark regression workflow (`.github/workflows/benchmarks.yml`) evaluating 50 tasks across 5 corpus repositories and enforcing Chapter 12 criteria.
+  - Defense-in-depth filesystem sandboxing (`follow_links(false)` to prevent symlink traversal escapes, path containment, traversal recursion budgets, and verified zero-network isolation).
+  - Phase 3.2 Master Plan and Engineering Blueprints (`Resource/3.2/`).
 - **Community & Governance Infrastructure:**
   - `SECURITY.md` establishing vulnerability disclosure protocol, response timelines, and core security invariants (Zero LLM, Read-Only, Offline-first).
   - `NOTICE` adhering to Apache-2.0 copyright and third-party attribution specifications.

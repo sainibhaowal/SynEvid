@@ -1,4 +1,4 @@
-name: CI Quality & Verification Matrix
+name: CI Quality & Cross-Platform Matrix
 
 on:
   push:
@@ -11,18 +11,25 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  rust-quality:
-    name: Rust Formatting & Clippy Linter
+  rust-lint-and-format:
+    name: Lint & Format Check (Linux x86_64)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install Rust Toolchain
+      - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
 
       - name: Check Rust Code Formatting (rustfmt)
         run: cargo fmt --all -- --check
@@ -30,41 +37,62 @@ jobs:
       - name: Strict Clippy Linter (-D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  rust-tests:
-    name: Workspace Test Stack (Unit, Integration, Docs)
-    runs-on: ubuntu-latest
+  cross-platform-matrix:
+    name: Workspace Tests (${{ matrix.os.name }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - name: Linux
+            runner: ubuntu-latest
+          - name: macOS
+            runner: macos-latest
+          - name: Windows
+            runner: windows-latest
+        include:
+          - os:
+              name: Linux
+            arch: x86_64
+          - os:
+              name: macOS
+            arch: aarch64 (Apple Silicon)
+          - os:
+              name: Windows
+            arch: x86_64
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install Rust Toolchain
+      - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run All Workspace Unit & Integration Tests
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os.name }}-${{ matrix.arch }}
+
+      - name: Run Workspace Unit & Integration Tests
         run: cargo test --workspace --all-targets -- --nocapture
 
       - name: Run Documentation Tests
         run: cargo test --workspace --doc
 
-  determinism-gate:
-    name: Golden 100-Run Determinism Assertion
+  determinism-and-boundary-gate:
+    name: Determinism & Architecture Gate (Linux x86_64)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install Rust Toolchain
+      - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run Determinism Verification Script
-        run: ./scripts/verify-determinism.sh
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
 
-  arch-boundary-gate:
-    name: Architectural Boundary Verification
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - name: Run Determinism Verification Script (100 Runs)
+        run: ./scripts/verify-determinism.sh
 
       - name: Verify Zero LLM/MCP in Core Crates
         run: ./scripts/verify-arch-boundaries.sh
@@ -79,7 +107,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install PyYAML
         run: pip install pyyaml
@@ -113,21 +141,19 @@ jobs:
     name: Pre-Merge Verification Gate
     runs-on: ubuntu-latest
     needs:
-      - rust-quality
-      - rust-tests
-      - determinism-gate
-      - arch-boundary-gate
+      - rust-lint-and-format
+      - cross-platform-matrix
+      - determinism-and-boundary-gate
       - schemas-and-configs
     if: always()
     steps:
       - name: Assess All Prerequisite Gates
         run: |
-          if [ "${{ needs.rust-quality.result }}" != "success" ] || \
-             [ "${{ needs.rust-tests.result }}" != "success" ] || \
-             [ "${{ needs.determinism-gate.result }}" != "success" ] || \
-             [ "${{ needs.arch-boundary-gate.result }}" != "success" ] || \
+          if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
+             [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
+             [ "${{ needs.determinism-and-boundary-gate.result }}" != "success" ] || \
              [ "${{ needs.schemas-and-configs.result }}" != "success" ]; then
             echo "ERROR: One or more pre-merge verification checks failed!"
             exit 1
           fi
-          echo "SUCCESS: All quality, test, schema, boundary, and determinism gates passed. Ready for merge."
+          echo "SUCCESS: All multi-platform tests, lints, schemas, boundaries, and determinism gates passed. Ready for merge."

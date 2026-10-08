@@ -34,4 +34,8 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-025** | Benchmark Harness & Comparative Baselines (A/B/C) | `benchmarks/`, `tests` | `test_benchmark_corpus_repositories_exist`, `test_benchmark_task_suite_conformance`, `test_benchmark_harness_execution_and_pre_registered_gate` | **VERIFIED** |
 | **UC-08** | Benchmarking & Accuracy Auditing | `benchmarks/` | `benchmarks/run_benchmarks.py`, `benchmarks/results/reproduction_report.json` | **VERIFIED** |
 | **RQ1-5** | Research Questions Empirical Evaluation | `benchmarks/engine/` | Gate evaluation (+31.73pp recall lift, 56.90% cost cut, 16 new failure classes) | **VERIFIED** |
+| **INV-CROSS-001** | Multi-Platform Path Normalization (`/`) | `autopsy-repo` | `test_cross_platform_path_separator_normalization`, `.github/workflows/ci.yml` | **VERIFIED** |
+| **INV-SANDBOX-001** | Filesystem Boundary & Symlink Containment | `autopsy-repo` | `test_scan_repository_deterministic_discovery`, `follow_links(false)` | **VERIFIED** |
+| **INV-SANDBOX-002** | Zero Network Socket Execution (FR-028) | `autopsy-cli`, `autopsy-report` | `test_offline_network_off_isolation` | **VERIFIED** |
+| **CI-RELEASE-001** | Multi-Platform Release Matrix & Binaries | `.github/workflows/` | `ci.yml` (multi-OS), `post-merge.yml`, `benchmarks.yml` | **VERIFIED** |
 

@@ -1,0 +1,48 @@
+name: Benchmark Harness & Regression Gate
+
+on:
+  schedule:
+    # Run nightly at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Benchmark Profile'
+        required: true
+        default: 'all'
+
+jobs:
+  benchmark-regression-gate:
+    name: Execute Benchmark Suite (5 Repos, 50 Tasks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Autopsy CLI
+        run: cargo build --release -p autopsy-cli
+
+      - name: Execute Benchmark Harness
+        run: |
+          python3 benchmarks/run_benchmarks.py
+
+      - name: Verify Chapter 12 Pre-Registered Gate
+        run: |
+          cargo test -p autopsy-tests --test e2e_phase6_benchmarks -- test_benchmark_harness_execution_and_pre_registered_gate --nocapture
+
+      - name: Upload Benchmark Results Telemetry
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-telemetry
+          path: benchmarks/results/

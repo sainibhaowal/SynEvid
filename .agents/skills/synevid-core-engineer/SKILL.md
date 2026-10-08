@@ -73,7 +73,7 @@ cargo fmt --all -- --check
 # 2. Strict lints (-D warnings)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. All workspace unit & integration tests (87/87 passing)
+# 3. All workspace unit & integration tests (88/88 passing)
 cargo test --workspace --all-targets -- --nocapture
 
 # 4. Doc tests
@@ -108,4 +108,5 @@ When implementing features:
    - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
    - [`05_phase5_cli_storage_report_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05_phase5_cli_storage_report_verification.md)
    - [`06_phase6_benchmark_harness_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06_phase6_benchmark_harness_verification.md)
+   - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
 5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).

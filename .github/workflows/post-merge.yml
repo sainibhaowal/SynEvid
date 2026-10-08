@@ -1,0 +1,88 @@
+name: Post-Merge Verification & Multi-Platform Release
+
+on:
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: post-merge-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  post-merge-audit:
+    name: Post-Merge Golden Audit & Determinism
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Golden 100-Run Determinism Invariant
+        run: ./scripts/verify-determinism.sh
+
+      - name: Verify Architecture Boundaries
+        run: ./scripts/verify-arch-boundaries.sh
+
+  cross-platform-builds:
+    name: Build Release Binary (${{ matrix.target }})
+    needs: post-merge-audit
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: synevid
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: synevid
+          - os: macos-13
+            target: x86_64-apple-darwin
+            binary_name: synevid
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: synevid.exe
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain for Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build Optimized Release Binary
+        run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli
+
+      - name: Package Release Binary
+        shell: bash
+        run: |
+          mkdir -p release-pkg
+          if [ -f "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" release-pkg/
+          else
+            cp "target/release/${{ matrix.binary_name }}" release-pkg/
+          fi
+          echo "Binary built for ${{ matrix.target }}:"
+          ls -lh release-pkg/
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synevid-${{ matrix.target }}
+          path: release-pkg/
