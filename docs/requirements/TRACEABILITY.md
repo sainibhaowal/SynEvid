@@ -42,4 +42,7 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **INV-SANDBOX-003** | Path Traversal Sanitization (`..` Prevention) | `autopsy-repo` | `sanitize_relative_path`, `test_e2e_path_traversal_sanitization`, `EVID-PILLAR-C-001` | **VERIFIED** |
 | **INV-SANDBOX-004** | Zero Code Execution (FR-026, In-Memory AST) | `autopsy-adapter-typescript` | `test_e2e_zero_code_execution_in_memory_only`, `scripts/verify-arch-boundaries.sh` | **VERIFIED** |
 | **CI-RELEASE-001** | Multi-Platform Release Matrix & Binaries | `.github/workflows/` | `ci.yml` (multi-OS), `post-merge.yml`, `benchmarks.yml`, `EVID-PILLAR-B-001` | **VERIFIED** |
+| **MCP-SERVER-001** | TypeScript MCP Server SDK v2 (5 Read-Only Tools) | `apps/mcp-server` | `npm run typecheck`, `npm test`, `test_mcp_cli_protocol_conformance` | **VERIFIED** |
+| **WEB-INSPECTOR-001** | Visual Forensic Evidence Board & Blast Radius UI | `apps/web-inspector` | Standalone single-page app, `index.html`, JSON artifact loader | **VERIFIED** |
+| **AGENT-LIFECYCLE-001** | In-Session Agent Lifecycle Protocol Flow | `tests/tests/` | `test_in_session_agent_lifecycle_protocol_pass_flow`, `test_in_session_agent_lifecycle_fail_repair_reverify_flow` | **VERIFIED** |
 

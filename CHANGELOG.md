@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-10-08
 
 ### Added
+- **In-Session Agent Lifecycle, TypeScript MCP Server & Web Inspector (Phase 4.1):**
+  - **Model Context Protocol (MCP) Server (`apps/mcp-server`):**
+    - Out-of-process TypeScript server implementing official MCP SDK v2 (`@modelcontextprotocol/server` v2.3.1).
+    - 5 mandatory read-only tools: `autopsy_status`, `autopsy_impact`, `autopsy_diff`, `autopsy_verify`, and `autopsy_explain`.
+    - Automated Node.js integration tests asserting stdio CLI subprocess execution, tool registration, and typed parameter validation.
+    - Verified architectural inversion (`ARCH_NO_CORE_TO_MCP`): core Rust crates maintain 0 dependencies on MCP or web layers.
+  - **Web Inspector Evidence Board (`apps/web-inspector`):**
+    - Standalone, zero-backend, read-only single-page web app for interactive forensic inspection.
+    - Interactive Evidence Board visualizing hypotheses, supporting evidence cards with file/line provenance, and contradicting signal checks.
+    - Transitive Blast Radius and dependency multigraph explorer showing caller hierarchy and downstream API risk.
+    - Drag-and-drop local `autopsy.json` artifact loader for instant telemetry analysis.
+  - **In-Session Agent Lifecycle Protocol (`tests/tests/e2e_agent_lifecycle.rs`):**
+    - Integration test suite (3 tests) validating the closed-loop agent workflow: `Baseline A -> Impact Assessment -> Edit A to B -> Verify A vs B -> (On FAIL: Repair via Evidence -> Re-verify PASS)`.
+    - Detection of breaking contract parameter weakening and architectural boundary violations.
 - **Multi-Platform Hardening & Enterprise CI/CD (Phase 3.2):**
   - Universal hardware & architecture support: Linux (`x86_64`, `aarch64`), macOS Apple Silicon (`aarch64-apple-darwin`), macOS Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`).
   - Cross-platform path separator normalization (`/`) in `autopsy-repo` scanner, ensuring byte-identical BLAKE3 digests and snapshot IDs across Linux, macOS, and Windows.

@@ -1,6 +1,7 @@
 # Rust Compiled Binary & Build Artifacts
 /target/
 Cargo.lock
+dist/
 
 # Test Coverage & Profiling Artifacts
 coverage/

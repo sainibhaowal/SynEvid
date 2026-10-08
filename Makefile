@@ -23,7 +23,10 @@ boundaries:
 schemas:
 	python3 -c 'import glob, json; [json.load(open(f)) for f in glob.glob("schemas/*.json")]; print("All schemas valid.")'
 
-check: fmt boundaries schemas determinism cross-platform
+mcp-check:
+	cd apps/mcp-server && npm run typecheck && npm test
+
+check: fmt boundaries schemas determinism cross-platform mcp-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace --all-targets
 	cargo test --workspace --doc
