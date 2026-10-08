@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export TMPDIR="${TMPDIR:-/home/ravi/.cache/tmp}"
+mkdir -p "${TMPDIR}"
+
 echo "Executing 100-run snapshot determinism invariant verification..."
 cargo test -p autopsy-repo -- test_compute_snapshot_id_golden_100_runs -- --nocapture
 cargo test -p autopsy-tests -- test_e2e_snapshot_id_100_runs_determinism -- --nocapture

@@ -22,7 +22,7 @@ repos:
 
       - id: cargo-test
         name: Workspace Test Stack (Unit & Integration)
-        entry: cargo test --workspace --all-targets -- --nocapture
+        entry: bash -c 'export TMPDIR="${TMPDIR:-/home/ravi/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --all-targets -- --nocapture'
         language: system
         types: [rust]
         pass_filenames: false
@@ -30,7 +30,7 @@ repos:
 
       - id: cargo-doc-test
         name: Rust Documentation Tests
-        entry: cargo test --workspace --doc
+        entry: bash -c 'export TMPDIR="${TMPDIR:-/home/ravi/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --doc'
         language: system
         types: [rust]
         pass_filenames: false

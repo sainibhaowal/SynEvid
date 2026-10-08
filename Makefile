@@ -1,5 +1,7 @@
 .PHONY: all check test fmt determinism boundaries schemas pre-commit
 
+export TMPDIR ?= /home/ravi/.cache/tmp
+
 all: check
 
 fmt:
