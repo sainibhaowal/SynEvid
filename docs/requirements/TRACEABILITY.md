@@ -46,4 +46,6 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **WEB-INSPECTOR-001** | Visual Forensic Evidence Board & Blast Radius UI | `apps/web-inspector` | Standalone single-page app, `index.html`, JSON artifact loader | **VERIFIED** |
 | **AGENT-LIFECYCLE-001** | In-Session Agent Lifecycle Protocol Flow | `tests/tests/` | `test_in_session_agent_lifecycle_protocol_pass_flow`, `test_in_session_agent_lifecycle_fail_repair_reverify_flow` | **VERIFIED** |
 | **BASELINE-DEBT-001** | Accepted Pre-Existing Debt & Waivers (.autopsy/baseline.json) | `autopsy-cli`, `schemas/baseline.schema.json` | `test_cli_verify_baseline_accepted_debt_waiver`, `.autopsy/baseline.json` | **VERIFIED** |
+| **CARGO-DENY-001** | License, Advisory & Banned LLM Crate Policy | `deny.toml` | `cargo-deny` configuration, permitted OSS licenses, banned crates | **VERIFIED** |
+| **FUZZ-RESILIENCE-001** | Parser, Config & Cyclic Multigraph Fuzz Suite | `tests/tests/e2e_fuzz_parsers_and_schemas.rs` | Adversarial corpus, zero panics, Tarjan SCC cycle termination | **VERIFIED** |
 

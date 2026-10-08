@@ -181,6 +181,7 @@ crates/autopsy-storage/Cargo.toml
 crates/autopsy-storage/src/lib.rs
 crates/autopsy-symbols/Cargo.toml
 crates/autopsy-symbols/src/lib.rs
+deny.toml
 docs/3.1/04_FULL_COVERAGE_APPENDIX.md
 docs/START_HERE.md
 docs/adr/0001-rust-core.md
@@ -224,6 +225,7 @@ tests/tests/e2e_config_validation.rs
 tests/tests/e2e_cross_platform_and_multi_arch.rs
 tests/tests/e2e_domain_canonical_invariants.rs
 tests/tests/e2e_enterprise_sandboxing_and_defense.rs
+tests/tests/e2e_fuzz_parsers_and_schemas.rs
 tests/tests/e2e_graph_and_diff_conformance.rs
 tests/tests/e2e_phase4_impact_and_invariants.rs
 tests/tests/e2e_phase5_cli_and_storage.rs
