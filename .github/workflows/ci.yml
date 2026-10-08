@@ -72,7 +72,7 @@ jobs:
         with:
           key: ${{ matrix.os.name }}-${{ matrix.arch }}
 
-      - name: Run Workspace Unit & Integration Tests (93 Tests)
+      - name: Run Workspace Unit & Integration Tests (100 Tests)
         run: cargo test --workspace --all-targets -- --nocapture
 
       - name: Run Documentation Tests

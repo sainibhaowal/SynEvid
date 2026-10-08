@@ -193,6 +193,7 @@ docs/evidence/06_phase6_benchmark_harness_verification.md
 docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md
 docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md
 docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md
+docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -209,6 +210,7 @@ tests/tests/e2e_adapter_typescript_conformance.rs
 tests/tests/e2e_config_validation.rs
 tests/tests/e2e_cross_platform_and_multi_arch.rs
 tests/tests/e2e_domain_canonical_invariants.rs
+tests/tests/e2e_enterprise_sandboxing_and_defense.rs
 tests/tests/e2e_graph_and_diff_conformance.rs
 tests/tests/e2e_phase4_impact_and_invariants.rs
 tests/tests/e2e_phase5_cli_and_storage.rs

@@ -18,8 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Upgraded GitHub Actions CI/CD suite:
     - Pre-merge multi-platform matrix (`.github/workflows/ci.yml`) across Ubuntu, macOS (Apple Silicon), and Windows runners with concurrency cancellation (`cancel-in-progress: true`), 93 tests, and rich GITHUB_STEP_SUMMARY quality gate tables.
     - Post-merge release pipeline (`.github/workflows/post-merge.yml`) executing serially on `main` (`cancel-in-progress: false`), verifying golden baselines, compiling native release binaries across Linux (`x86_64`), macOS (`aarch64`, `x86_64`), and Windows (`x86_64`), packaging archives with licensing metadata, computing `SHA256SUMS.txt`, and uploading consolidated release bundles.
-    - Nightly & dispatch benchmark regression workflow (`.github/workflows/benchmarks.yml`) evaluating 50 tasks across 5 corpus repositories, asserting Chapter 12 criteria (≥10pp recall lift, ≥40% cost reduction), and generating telemetry markdown summaries.
-  - Defense-in-depth filesystem sandboxing (`follow_links(false)` to prevent symlink traversal escapes, path containment, traversal recursion budgets, and verified zero-network isolation).
+  - **Enterprise Sandboxing & Defense-in-Depth (Pillar C):**
+    - Zero Code Execution (FR-026): In-memory AST parsing only, zero sub-process execution (`std::process::Command` = 0, `fork`/`exec` = 0), verified via architecture boundary gate.
+    - Symlink Escape Containment (INV-SANDBOX-001): Explicit `follow_links(false)` on `WalkBuilder`, symlink entry filtering (`entry.path_is_symlink()`), and canonical root boundary checks.
+    - Path Traversal Sanitization (INV-SANDBOX-003): Function `sanitize_relative_path` and `is_safe_relative_path` rejecting `..` traversal sequences and absolute paths across file scanning, `roots`, and `cache.directory`.
+    - Resource Bounds & DOS Prevention (FR-008): Enforced `max_traversal_nodes` and impact budget ceilings guaranteeing linear termination on adversarial dense cyclic graphs.
+    - Zero-Network Isolation (FR-028, INV-SANDBOX-002): Verified 100% offline analysis with zero networking crates and zero socket calls.
+    - Integration test suite `tests/tests/e2e_enterprise_sandboxing_and_defense.rs` (5 tests) bringing total workspace test count to 100 tests.
   - Phase 3.2 Master Plan and Engineering Blueprints (`Resource/3.2/`).
 - **Community & Governance Infrastructure:**
   - `SECURITY.md` establishing vulnerability disclosure protocol, response timelines, and core security invariants (Zero LLM, Read-Only, Offline-first).

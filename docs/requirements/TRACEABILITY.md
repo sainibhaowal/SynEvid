@@ -37,7 +37,9 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **INV-CROSS-001** | Multi-Platform Path Normalization (`/`) | `autopsy-repo` | `test_cross_platform_path_separator_normalization`, `test_e2e_windows_path_separator_canonicalization` | **VERIFIED** |
 | **CRLF-LF-001** | Cross-Platform CRLF/LF Line-Ending Determinism | `autopsy-repo` | `test_cross_platform_crlf_lf_determinism`, `test_e2e_crlf_vs_lf_snapshot_identity_invariance` | **VERIFIED** |
 | **ATOMIC-CACHE-001** | Cross-Platform Concurrent Cache Write Resilience | `autopsy-storage` | `test_content_addressed_cache`, `test_e2e_storage_concurrent_atomic_write_resilience` | **VERIFIED** |
-| **INV-SANDBOX-001** | Filesystem Boundary & Symlink Containment | `autopsy-repo` | `test_scan_repository_deterministic_discovery`, `follow_links(false)` | **VERIFIED** |
-| **INV-SANDBOX-002** | Zero Network Socket Execution (FR-028) | `autopsy-cli`, `autopsy-report` | `test_offline_network_off_isolation` | **VERIFIED** |
+| **INV-SANDBOX-001** | Filesystem Boundary & Symlink Containment | `autopsy-repo` | `follow_links(false)`, `test_e2e_symlink_escape_containment`, `EVID-PILLAR-C-001` | **VERIFIED** |
+| **INV-SANDBOX-002** | Zero Network Socket Execution (FR-028) | `autopsy-cli`, `autopsy-report` | `test_offline_network_off_isolation`, `test_e2e_zero_network_socket_isolation`, `EVID-PILLAR-C-001` | **VERIFIED** |
+| **INV-SANDBOX-003** | Path Traversal Sanitization (`..` Prevention) | `autopsy-repo` | `sanitize_relative_path`, `test_e2e_path_traversal_sanitization`, `EVID-PILLAR-C-001` | **VERIFIED** |
+| **INV-SANDBOX-004** | Zero Code Execution (FR-026, In-Memory AST) | `autopsy-adapter-typescript` | `test_e2e_zero_code_execution_in_memory_only`, `scripts/verify-arch-boundaries.sh` | **VERIFIED** |
 | **CI-RELEASE-001** | Multi-Platform Release Matrix & Binaries | `.github/workflows/` | `ci.yml` (multi-OS), `post-merge.yml`, `benchmarks.yml`, `EVID-PILLAR-B-001` | **VERIFIED** |
 
