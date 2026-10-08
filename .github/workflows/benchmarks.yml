@@ -7,9 +7,17 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: 'Benchmark Profile'
+        description: 'Benchmark Profile (all, held-out, fast)'
         required: true
         default: 'all'
+
+concurrency:
+  group: benchmarks-regression
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   benchmark-regression-gate:
@@ -22,7 +30,7 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -30,10 +38,10 @@ jobs:
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Autopsy CLI
+      - name: Build Autopsy CLI Release Binary
         run: cargo build --release -p autopsy-cli
 
-      - name: Execute Benchmark Harness
+      - name: Execute Full Benchmark Harness (Baselines A, B, C)
         run: |
           python3 benchmarks/run_benchmarks.py
 
@@ -41,8 +49,19 @@ jobs:
         run: |
           cargo test -p autopsy-tests --test e2e_phase6_benchmarks -- test_benchmark_harness_execution_and_pre_registered_gate --nocapture
 
-      - name: Upload Benchmark Results Telemetry
+      - name: Generate Rich Benchmark Telemetry Summary
+        run: |
+          echo "## Synevid Benchmark Harness & Chapter 12 Gate Telemetry" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "benchmarks/results/reproduction_report.md" ]; then
+            cat benchmarks/results/reproduction_report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Telemetry report generated in benchmarks/results/." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Benchmark Results & Telemetry Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-telemetry
+          name: synevid-benchmark-results
           path: benchmarks/results/

@@ -39,5 +39,5 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **ATOMIC-CACHE-001** | Cross-Platform Concurrent Cache Write Resilience | `autopsy-storage` | `test_content_addressed_cache`, `test_e2e_storage_concurrent_atomic_write_resilience` | **VERIFIED** |
 | **INV-SANDBOX-001** | Filesystem Boundary & Symlink Containment | `autopsy-repo` | `test_scan_repository_deterministic_discovery`, `follow_links(false)` | **VERIFIED** |
 | **INV-SANDBOX-002** | Zero Network Socket Execution (FR-028) | `autopsy-cli`, `autopsy-report` | `test_offline_network_off_isolation` | **VERIFIED** |
-| **CI-RELEASE-001** | Multi-Platform Release Matrix & Binaries | `.github/workflows/` | `ci.yml` (multi-OS), `post-merge.yml`, `benchmarks.yml` | **VERIFIED** |
+| **CI-RELEASE-001** | Multi-Platform Release Matrix & Binaries | `.github/workflows/` | `ci.yml` (multi-OS), `post-merge.yml`, `benchmarks.yml`, `EVID-PILLAR-B-001` | **VERIFIED** |
 

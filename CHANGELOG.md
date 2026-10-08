@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integration test suite `e2e_cross_platform_and_multi_arch.rs` (4 tests) asserting CRLF/LF invariance, path normalization, concurrent cache writes, and BLAKE3 boundary vectors.
   - Dedicated verification script `scripts/verify-cross-platform.sh` integrated into `Makefile` and `pre-commit` hooks.
   - Upgraded GitHub Actions CI/CD suite:
-    - Pre-merge multi-platform matrix (`.github/workflows/ci.yml`) across Ubuntu, macOS (Apple Silicon), and Windows runners with concurrency cancellation and dependency caching.
-    - Post-merge release pipeline (`.github/workflows/post-merge.yml`) on `main` cross-compiling release binaries, verifying golden baselines, and uploading release packages.
-    - Nightly & dispatch benchmark regression workflow (`.github/workflows/benchmarks.yml`) evaluating 50 tasks across 5 corpus repositories and enforcing Chapter 12 criteria.
+    - Pre-merge multi-platform matrix (`.github/workflows/ci.yml`) across Ubuntu, macOS (Apple Silicon), and Windows runners with concurrency cancellation (`cancel-in-progress: true`), 93 tests, and rich GITHUB_STEP_SUMMARY quality gate tables.
+    - Post-merge release pipeline (`.github/workflows/post-merge.yml`) executing serially on `main` (`cancel-in-progress: false`), verifying golden baselines, compiling native release binaries across Linux (`x86_64`), macOS (`aarch64`, `x86_64`), and Windows (`x86_64`), packaging archives with licensing metadata, computing `SHA256SUMS.txt`, and uploading consolidated release bundles.
+    - Nightly & dispatch benchmark regression workflow (`.github/workflows/benchmarks.yml`) evaluating 50 tasks across 5 corpus repositories, asserting Chapter 12 criteria (≥10pp recall lift, ≥40% cost reduction), and generating telemetry markdown summaries.
   - Defense-in-depth filesystem sandboxing (`follow_links(false)` to prevent symlink traversal escapes, path containment, traversal recursion budgets, and verified zero-network isolation).
   - Phase 3.2 Master Plan and Engineering Blueprints (`Resource/3.2/`).
 - **Community & Governance Infrastructure:**

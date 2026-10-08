@@ -3,6 +3,7 @@ name: Post-Merge Verification & Multi-Platform Release
 on:
   push:
     branches: ["main"]
+  workflow_dispatch:
 
 concurrency:
   group: post-merge-${{ github.ref }}
@@ -29,6 +30,9 @@ jobs:
       - name: Run Golden 100-Run Determinism Invariant
         run: ./scripts/verify-determinism.sh
 
+      - name: Run Universal Hardware & Multi-Arch Verification (Pillar A)
+        run: ./scripts/verify-cross-platform.sh
+
       - name: Verify Architecture Boundaries
         run: ./scripts/verify-arch-boundaries.sh
 
@@ -43,15 +47,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_name: synevid
+            pkg_type: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: synevid
+            pkg_type: tar.gz
           - os: macos-13
             target: x86_64-apple-darwin
             binary_name: synevid
+            pkg_type: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: synevid.exe
+            pkg_type: zip
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -69,20 +77,65 @@ jobs:
       - name: Build Optimized Release Binary
         run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli
 
-      - name: Package Release Binary
+      - name: Package Release Archive (with License & Metadata)
         shell: bash
         run: |
-          mkdir -p release-pkg
+          DIST_DIR="synevid-${{ matrix.target }}"
+          mkdir -p "$DIST_DIR"
+          
           if [ -f "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" ]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" release-pkg/
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$DIST_DIR/"
           else
-            cp "target/release/${{ matrix.binary_name }}" release-pkg/
+            cp "target/release/${{ matrix.binary_name }}" "$DIST_DIR/"
           fi
-          echo "Binary built for ${{ matrix.target }}:"
-          ls -lh release-pkg/
+          
+          cp LICENSE NOTICE README.md "$DIST_DIR/"
+          
+          if [ "${{ matrix.pkg_type }}" == "zip" ]; then
+            7z a "synevid-${{ matrix.target }}.zip" "$DIST_DIR"
+            shasum -a 256 "synevid-${{ matrix.target }}.zip" > "synevid-${{ matrix.target }}.zip.sha256"
+          else
+            tar -czvf "synevid-${{ matrix.target }}.tar.gz" "$DIST_DIR"
+            shasum -a 256 "synevid-${{ matrix.target }}.tar.gz" > "synevid-${{ matrix.target }}.tar.gz.sha256"
+          fi
+          
+          mkdir -p artifacts
+          mv synevid-${{ matrix.target }}.* artifacts/
+          ls -lh artifacts/
 
-      - name: Upload Release Artifact
+      - name: Upload Platform Package Artifact
         uses: actions/upload-artifact@v4
         with:
           name: synevid-${{ matrix.target }}
-          path: release-pkg/
+          path: artifacts/
+
+  release-manifest:
+    name: Generate Aggregated Release Manifest & Checksums
+    needs: cross-platform-builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Platform Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Consolidate Release Bundle & Generate SHA256SUMS
+        run: |
+          mkdir -p release-bundle
+          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-bundle/ \;
+          cd release-bundle
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          
+          echo "## Synevid Multi-Platform Release Manifest" >> $GITHUB_STEP_SUMMARY
+          echo "| Filename | SHA256 Checksum |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          while read -r hash fname; do
+            echo "| \`$fname\` | \`$hash\` |" >> $GITHUB_STEP_SUMMARY
+          done < SHA256SUMS.txt
+
+      - name: Upload Final Release Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: synevid-release-bundle
+          path: release-bundle/
