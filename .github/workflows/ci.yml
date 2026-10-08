@@ -72,7 +72,7 @@ jobs:
         with:
           key: ${{ matrix.os.name }}-${{ matrix.arch }}
 
-      - name: Run Workspace Unit & Integration Tests
+      - name: Run Workspace Unit & Integration Tests (93 Tests)
         run: cargo test --workspace --all-targets -- --nocapture
 
       - name: Run Documentation Tests
@@ -91,10 +91,13 @@ jobs:
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Determinism Verification Script (100 Runs)
+      - name: Run Golden 100-Run Determinism Invariant
         run: ./scripts/verify-determinism.sh
 
-      - name: Verify Zero LLM/MCP in Core Crates
+      - name: Run Universal Hardware & Multi-Arch Determinism (Pillar A)
+        run: ./scripts/verify-cross-platform.sh
+
+      - name: Verify Architectural Boundaries (Zero LLM/MCP in Core)
         run: ./scripts/verify-arch-boundaries.sh
 
   schemas-and-configs:
@@ -147,13 +150,24 @@ jobs:
       - schemas-and-configs
     if: always()
     steps:
-      - name: Assess All Prerequisite Gates
+      - name: Assess All Prerequisite Gates & Generate Summary
         run: |
+          echo "## Synevid Pre-Merge Gate Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "| Check / Gate | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust Formatting & Strict Clippy | ${{ needs.rust-lint-and-format.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Multi-Platform Matrix (Linux, macOS, Windows) | ${{ needs.cross-platform-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Determinism (100-Run) & Boundary Gate | ${{ needs.determinism-and-boundary-gate.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
+
           if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
              [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
              [ "${{ needs.determinism-and-boundary-gate.result }}" != "success" ] || \
              [ "${{ needs.schemas-and-configs.result }}" != "success" ]; then
+            echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY
             echo "ERROR: One or more pre-merge verification checks failed!"
             exit 1
           fi
-          echo "SUCCESS: All multi-platform tests, lints, schemas, boundaries, and determinism gates passed. Ready for merge."
+
+          echo "✅ **SUCCESS: All multi-platform tests, lints, schemas, boundaries, and determinism gates passed. Ready for merge.**" >> $GITHUB_STEP_SUMMARY
+          echo "SUCCESS: All gates green."
