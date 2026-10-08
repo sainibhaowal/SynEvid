@@ -1,0 +1,50 @@
+# cargo-deny configuration for Synevid (Code Autopsy)
+# Rule: Core correctness has no LLM, no network, no source mutation (CA-TECH-001 Ch.1-3, ADR-001/002/003)
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+version = 2
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+ignore = []
+
+[licenses]
+version = 2
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+    # Strictly prohibited by CA-TECH-001 Chapter 1-3 & AGENTS.md
+    { name = "openai" },
+    { name = "async-openai" },
+    { name = "anthropic" },
+    { name = "langchain" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = []
