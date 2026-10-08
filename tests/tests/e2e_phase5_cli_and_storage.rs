@@ -354,3 +354,50 @@ fn test_phase5_100_runs_determinism() {
         }
     }
 }
+
+#[test]
+fn test_cli_verify_baseline_accepted_debt_waiver() {
+    let temp = TempTestDir::new("baseline_debt");
+    create_test_project(&temp.path);
+
+    // Introduce circular dependency: A -> B and B -> A
+    let a_file = temp.path.join("src").join("a.ts");
+    let b_file = temp.path.join("src").join("b.ts");
+    fs::write(&a_file, "import './b';\nexport const a = 1;\n").unwrap();
+    fs::write(&b_file, "import './a';\nexport const b = 2;\n").unwrap();
+
+    // Verify without baseline waiver -> fails with EXIT_POLICY_FAIL (2)
+    let args = vec![
+        "autopsy".to_string(),
+        "--repo-root".to_string(),
+        temp.path.display().to_string(),
+        "verify".to_string(),
+    ];
+    assert_eq!(run_cli(&args), EXIT_POLICY_FAIL);
+
+    // Write .autopsy/baseline.json waiving the no-circular-deps debt
+    let dot_autopsy = temp.path.join(".autopsy");
+    fs::create_dir_all(&dot_autopsy).unwrap();
+    let baseline_json = r#"{
+  "version": "0.0.1",
+  "created_at_snapshot": "test_baseline_snap",
+  "accepted_debt": [
+    {
+      "fingerprint": "*",
+      "rule_id": "no-circular-deps",
+      "description": "Legacy circular dependency between a and b",
+      "waived_reason": "Pre-existing architectural debt scheduled for Q4 refactor"
+    }
+  ]
+}"#;
+    fs::write(dot_autopsy.join("baseline.json"), baseline_json).unwrap();
+
+    // Re-verify with baseline.json in place -> passes with EXIT_PASS (0) as accepted debt
+    let args = vec![
+        "autopsy".to_string(),
+        "--repo-root".to_string(),
+        temp.path.display().to_string(),
+        "verify".to_string(),
+    ];
+    assert_eq!(run_cli(&args), EXIT_PASS);
+}

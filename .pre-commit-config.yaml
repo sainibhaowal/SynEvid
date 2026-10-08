@@ -54,9 +54,16 @@ repos:
 
       - id: config-syntax-check
         name: Engine Config & Invariant Syntax Validation
-        entry: python3 -c 'import tomllib, yaml, sys; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); print("Configs valid.")'
+        entry: python3 -c 'import tomllib, yaml, json, sys; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); json.load(open(".autopsy/baseline.json")); print("Configs valid.")'
         language: system
-        files: ^(autopsy\.toml|\.autopsy/invariants\.yml)$
+        files: ^(autopsy\.toml|\.autopsy/invariants\.yml|\.autopsy/baseline\.json)$
+        pass_filenames: false
+        always_run: true
+
+      - id: mcp-check
+        name: TypeScript MCP Server TypeCheck & Tests
+        entry: bash -c 'cd apps/mcp-server && npm run typecheck && npm test'
+        language: system
         pass_filenames: false
         always_run: true
 

@@ -1,5 +1,6 @@
 .agents/rules/agent-engineering-rules.md
 .agents/skills/synevid-core-engineer/SKILL.md
+.autopsy/baseline.json
 .autopsy/invariants.yml
 .github/ISSUE_TEMPLATE/bug_report.md
 .github/ISSUE_TEMPLATE/config.yml
@@ -203,10 +204,12 @@ docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md
 docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md
 docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md
 docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md
+docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
 schemas/autopsy-result.schema.json
+schemas/baseline.schema.json
 schemas/benchmark-task.schema.json
 schemas/invariant.schema.json
 scripts/patch_banner.py

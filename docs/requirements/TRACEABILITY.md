@@ -45,4 +45,5 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **MCP-SERVER-001** | TypeScript MCP Server SDK v2 (5 Read-Only Tools) | `apps/mcp-server` | `npm run typecheck`, `npm test`, `test_mcp_cli_protocol_conformance` | **VERIFIED** |
 | **WEB-INSPECTOR-001** | Visual Forensic Evidence Board & Blast Radius UI | `apps/web-inspector` | Standalone single-page app, `index.html`, JSON artifact loader | **VERIFIED** |
 | **AGENT-LIFECYCLE-001** | In-Session Agent Lifecycle Protocol Flow | `tests/tests/` | `test_in_session_agent_lifecycle_protocol_pass_flow`, `test_in_session_agent_lifecycle_fail_repair_reverify_flow` | **VERIFIED** |
+| **BASELINE-DEBT-001** | Accepted Pre-Existing Debt & Waivers (.autopsy/baseline.json) | `autopsy-cli`, `schemas/baseline.schema.json` | `test_cli_verify_baseline_accepted_debt_waiver`, `.autopsy/baseline.json` | **VERIFIED** |
 
