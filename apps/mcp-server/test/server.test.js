@@ -43,7 +43,18 @@ test('runAutopsy executes verify command on repo-api', async () => {
   assert.equal(result.data.coverage.state, 'verified');
 });
 
-test('createAutopsyMcpServer registers all 5 mandatory read-only tools', () => {
+test('createAutopsyMcpServer registers all 5 mandatory read-only tools and resources', () => {
   const server = createAutopsyMcpServer();
   assert.ok(server, 'McpServer instance must be created');
+
+  const tools = Object.keys(server._registeredTools);
+  assert.ok(tools.includes('autopsy_status'), 'Must register autopsy_status');
+  assert.ok(tools.includes('autopsy_impact'), 'Must register autopsy_impact');
+  assert.ok(tools.includes('autopsy_diff'), 'Must register autopsy_diff');
+  assert.ok(tools.includes('autopsy_verify'), 'Must register autopsy_verify');
+  assert.ok(tools.includes('autopsy_explain'), 'Must register autopsy_explain');
+  assert.equal(tools.length, 5, 'Must register exactly 5 mandatory tools');
+
+  const resources = Object.keys(server._registeredResources);
+  assert.ok(resources.includes('autopsy://graph'), 'Must register autopsy://graph resource');
 });
