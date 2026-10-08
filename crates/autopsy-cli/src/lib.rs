@@ -57,6 +57,27 @@ pub enum CliError {
     Invariant(String),
 }
 
+/// Baseline debt configuration (.autopsy/baseline.json).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BaselineConfig {
+    pub version: String,
+    #[serde(default)]
+    pub created_at_snapshot: Option<String>,
+    #[serde(default)]
+    pub accepted_debt: Vec<AcceptedDebtEntry>,
+}
+
+/// Accepted pre-existing violation entry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AcceptedDebtEntry {
+    pub fingerprint: String,
+    pub rule_id: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub waived_reason: Option<String>,
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "autopsy",
@@ -582,7 +603,7 @@ fn handle_verify(
     cli: &Cli,
     strict: bool,
     invariants_file_opt: Option<&Path>,
-    _baseline_id_opt: Option<&str>,
+    baseline_id_opt: Option<&str>,
 ) -> Result<i32, CliError> {
     let config = load_or_default_config(&cli.repo_root);
     let artifacts = build_snapshot_and_graph(&cli.repo_root, &config, None)?;
@@ -644,11 +665,44 @@ fn handle_verify(
     }
     let contracts_before = BTreeMap::new();
 
+    // Load accepted baseline debt if available (.autopsy/baseline.json)
+    let baseline_debt_path = cli.repo_root.join(".autopsy").join("baseline.json");
+    let accepted_debt_entries: Vec<AcceptedDebtEntry> = if baseline_debt_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&baseline_debt_path) {
+            if let Ok(base_cfg) = serde_json::from_str::<BaselineConfig>(&content) {
+                base_cfg.accepted_debt
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Load baseline snapshot and graph if baseline_id is specified
+    let baseline_graph = if let Some(base_id) = baseline_id_opt {
+        if let Ok(Some(_)) = storage.get_snapshot(&SnapshotId::new(base_id)) {
+            if let Ok(base_artifacts) =
+                build_snapshot_and_graph(&cli.repo_root, &config, Some(base_id))
+            {
+                Some(base_artifacts.graph)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let eval_ctx = EvaluationContext {
         snapshot_id: artifacts.snapshot.snapshot_id.clone(),
         analyzer_version: ANALYZER_VERSION,
         graph: &artifacts.graph,
-        baseline_graph: None,
+        baseline_graph: baseline_graph.as_ref(),
         diff: None,
         contracts_before: &contracts_before,
         contracts_after: &contracts_after,
@@ -664,7 +718,22 @@ fn handle_verify(
     let mut evidence_receipts: Vec<EvidenceReceipt> = Vec::new();
     let mut has_failure = false;
 
-    for (finding, evidence) in evaluation_pairs {
+    for (mut finding, evidence) in evaluation_pairs {
+        let is_accepted_debt = accepted_debt_entries.iter().any(|entry| {
+            entry.rule_id == finding.rule_id
+                && (entry.fingerprint == finding.id
+                    || entry.fingerprint == "*"
+                    || finding
+                        .entities
+                        .iter()
+                        .any(|e| e.contains(&entry.fingerprint)))
+        });
+
+        if is_accepted_debt && finding.status == FindingStatus::Fail {
+            finding.status = FindingStatus::Pass;
+            finding.message = format!("[ACCEPTED BASELINE DEBT] {}", finding.message);
+        }
+
         if finding.status == FindingStatus::Fail {
             has_failure = true;
         }

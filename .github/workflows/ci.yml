@@ -129,16 +129,36 @@ jobs:
                   print(f"Validated schema {s}: {data.get(\"title\", \"unnamed\")}")
           '
 
-      - name: Validate autopsy.toml & invariants.yml Syntax
+      - name: Validate autopsy.toml, invariants.yml & baseline.json Syntax
         run: |
           python3 -c '
-          import tomllib, yaml
+          import tomllib, yaml, json
           with open("autopsy.toml", "rb") as f:
               tomllib.load(f)
           with open(".autopsy/invariants.yml", "r") as f:
               yaml.safe_load(f)
+          with open(".autopsy/baseline.json", "r") as f:
+              json.load(f)
           print("All engine configuration files validated.")
           '
+
+  mcp-server-check:
+    name: TypeScript MCP Server TypeCheck & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install MCP Server Dependencies
+        run: cd apps/mcp-server && npm ci || npm install
+
+      - name: Build and Test MCP Server
+        run: cd apps/mcp-server && npm run typecheck && npm test
 
   pre-merge-verification-gate:
     name: Pre-Merge Verification Gate
@@ -148,6 +168,7 @@ jobs:
       - cross-platform-matrix
       - determinism-and-boundary-gate
       - schemas-and-configs
+      - mcp-server-check
     if: always()
     steps:
       - name: Assess All Prerequisite Gates & Generate Summary
@@ -159,11 +180,13 @@ jobs:
           echo "| Multi-Platform Matrix (Linux, macOS, Windows) | ${{ needs.cross-platform-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Determinism (100-Run) & Boundary Gate | ${{ needs.determinism-and-boundary-gate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| TypeScript MCP Server & Conformance | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
              [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
              [ "${{ needs.determinism-and-boundary-gate.result }}" != "success" ] || \
-             [ "${{ needs.schemas-and-configs.result }}" != "success" ]; then
+             [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
+             [ "${{ needs.mcp-server-check.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY
             echo "ERROR: One or more pre-merge verification checks failed!"
             exit 1

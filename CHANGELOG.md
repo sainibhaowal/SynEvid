@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **In-Session Agent Lifecycle Protocol (`tests/tests/e2e_agent_lifecycle.rs`):**
     - Integration test suite (3 tests) validating the closed-loop agent workflow: `Baseline A -> Impact Assessment -> Edit A to B -> Verify A vs B -> (On FAIL: Repair via Evidence -> Re-verify PASS)`.
     - Detection of breaking contract parameter weakening and architectural boundary violations.
+  - **Baseline Debt Management & Waivers (`.autopsy/baseline.json`, CA-TECH-001 Ch.8):**
+    - Schema validation via committed `schemas/baseline.schema.json` and `.autopsy/baseline.json`.
+    - Verification engine support for `--baseline-id` and accepted debt fingerprints, distinguishing pre-existing legacy violations from new PR regressions.
+    - Integration test `test_cli_verify_baseline_accepted_debt_waiver` verifying waiver handling and exit code conversion.
+    - Added TypeScript MCP server typechecking and unit test execution into `.pre-commit-config.yaml` and `.github/workflows/ci.yml`.
 - **Multi-Platform Hardening & Enterprise CI/CD (Phase 3.2):**
   - Universal hardware & architecture support: Linux (`x86_64`, `aarch64`), macOS Apple Silicon (`aarch64-apple-darwin`), macOS Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`).
   - Cross-platform path separator normalization (`/`) in `autopsy-repo` scanner, ensuring byte-identical BLAKE3 digests and snapshot IDs across Linux, macOS, and Windows.

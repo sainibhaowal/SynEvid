@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Code Autopsy Baseline",
+  "description": "Schema for .autopsy/baseline.json containing accepted pre-existing debt waivers by fingerprint (CA-TECH-001 Ch.8)",
+  "type": "object",
+  "required": ["version", "accepted_debt"],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "created_at_snapshot": {
+      "type": "string"
+    },
+    "accepted_debt": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fingerprint", "rule_id"],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "description": "Cryptographic or qualified fingerprint of accepted finding"
+          },
+          "rule_id": {
+            "type": "string",
+            "description": "Identifier of the invariant rule waived"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable context of the debt"
+          },
+          "waived_reason": {
+            "type": "string",
+            "description": "Explicit rationale for the waiver"
+          }
+        }
+      }
+    }
+  }
+}
