@@ -9,13 +9,14 @@ Please refer to:
 - [`docs/evidence/01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md) — Phase 0 & Phase 1 verification telemetry.
 - [`docs/evidence/02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md) — Phase 2 TypeScript adapter and conformance verification telemetry.
 - [`docs/evidence/03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md) — Phase 3 petgraph multigraph and semantic diff verification telemetry.
+- [`docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md) — Phase 4 impact, contracts, invariants, and evidence verification telemetry.
 
 ## Quick Command Reference
 ```bash
 # Complete quality, boundary, and determinism check (all 8 gates):
 make check
 
-# Run all unit and end-to-end integration tests (52/52 passing):
+# Run all unit and end-to-end integration tests (72/72 passing):
 make test
 
 # Format code:

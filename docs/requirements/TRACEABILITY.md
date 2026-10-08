@@ -21,7 +21,12 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-009** | Normalized Contract Extraction | `autopsy-adapter-typescript` | `test_extract_contracts`, `test_e2e_ts_real_repo_parsing_and_symbol_extraction` | **VERIFIED** |
 | **FR-006** | Typed Multigraph with Edge Provenance | `autopsy-graph` | `test_multigraph_support`, `test_bounded_reachability_forward_and_backward`, `test_cycle_detection_via_tarjan_scc`, `test_e2e_dependency_multigraph_cycles_and_reachability` | **VERIFIED** |
 | **FR-007** | Semantic Diff Engine & Ambiguous Rename Rule | `autopsy-diff` | `test_unambiguous_file_rename`, `test_ambiguous_file_rename_stays_add_and_delete`, `test_contract_breaking_change_detection`, `test_e2e_semantic_diff_unambiguous_and_ambiguous_renames`, `test_e2e_golden_diff_fixture_exact_json_match` | **VERIFIED** |
-| **FR-008..014** | Impact, Invariants, Evidence Engine | `autopsy-impact`, `autopsy-contracts`, `autopsy-invariants`, `autopsy-evidence` | Phase 4 Target | Pending |
+| **FR-008** | Bounded Transitive Impact Query | `autopsy-impact` | `test_forward_and_backward_impact`, `test_budget_truncation`, `test_path_ranking_deterministic`, `test_e2e_bounded_impact_bfs_fwd_bwd_and_truncation` | **VERIFIED** |
+| **FR-010** | Contract Delta & Consumer Compatibility | `autopsy-contracts` | `test_callable_breaking_required_param`, `test_interface_breaking_removed_property`, `test_e2e_contracts_compatibility_and_breaking_rules` | **VERIFIED** |
+| **FR-011** | Invariant Policy Configuration Loader | `autopsy-invariants` | `test_yaml_config_loader`, `test_e2e_invariants_evaluation_all_rules_and_receipts` | **VERIFIED** |
+| **FR-012** | Deterministic Invariant Evaluators | `autopsy-invariants` | `test_forbidden_dep_evaluator_pass_and_fail`, `test_layers_evaluator_pass_and_fail`, `test_no_new_cycles_evaluator`, `test_api_compatibility_evaluator` | **VERIFIED** |
+| **FR-013** | Cryptographic Evidence Receipts | `autopsy-evidence` | `test_canonical_ordering_and_hash_stability`, `test_100_runs_determinism`, `test_e2e_invariants_evaluation_all_rules_and_receipts` | **VERIFIED** |
+| **FR-014** | Honest Semantic Coverage (`UNKNOWN != PASS`) | `autopsy-invariants`, `autopsy-domain` | `test_unknown_never_collapses_to_pass`, `test_e2e_unknown_never_equals_pass_hard_boundary` | **VERIFIED** |
 | **FR-015..024** | CLI, SQLite Storage, Reporting | `autopsy-cli`, `autopsy-storage`, `autopsy-report` | Phase 5 Target | Pending |
 | **FR-025** | Benchmark Harness & Baselines | `benchmarks/` | Phase 6 Target | Pending |
 

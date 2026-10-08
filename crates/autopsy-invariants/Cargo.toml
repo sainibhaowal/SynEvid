@@ -5,5 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-graph = { path = "../autopsy-graph" }
+autopsy-diff = { path = "../autopsy-diff" }
+autopsy-contracts = { path = "../autopsy-contracts" }
+autopsy-evidence = { path = "../autopsy-evidence" }
+blake3 = { workspace = true }
+glob = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
