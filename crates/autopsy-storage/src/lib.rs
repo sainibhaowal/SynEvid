@@ -382,10 +382,17 @@ impl StorageEngine {
 
             let target_path = dir.join(rest);
             if !target_path.exists() {
-                // Atomic write via temporary file
-                let tmp_path = dir.join(format!(".tmp-{}", rest));
+                // Atomic write via PID-isolated temporary file
+                let tmp_path = dir.join(format!(".tmp-{}-{}", std::process::id(), rest));
                 fs::write(&tmp_path, content)?;
-                fs::rename(tmp_path, target_path)?;
+                match fs::rename(&tmp_path, &target_path) {
+                    Ok(()) => {}
+                    Err(_) if target_path.exists() => {
+                        // Concurrent writer finished first; safely clean up temporary file
+                        let _ = fs::remove_file(&tmp_path);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
 

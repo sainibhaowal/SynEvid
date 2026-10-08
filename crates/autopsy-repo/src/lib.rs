@@ -57,6 +57,43 @@ pub struct CacheConfig {
     pub directory: String,
 }
 
+impl Default for AutopsyConfig {
+    fn default() -> Self {
+        Self {
+            config_version: "0.0.1".to_string(),
+            repository: RepositoryConfig::default(),
+            analysis: AnalysisConfig::default(),
+            cache: CacheConfig::default(),
+        }
+    }
+}
+
+impl Default for RepositoryConfig {
+    fn default() -> Self {
+        Self {
+            roots: vec![".".to_string()],
+            exclude: vec!["target/**".to_string(), "node_modules/**".to_string()],
+        }
+    }
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            default_profile: "pr".to_string(),
+            max_traversal_nodes: 50_000,
+        }
+    }
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            directory: ".autopsy/cache".to_string(),
+        }
+    }
+}
+
 /// Invariant configuration schema corresponding to `.autopsy/invariants.yml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvariantsConfig {
@@ -214,6 +251,42 @@ pub fn classify_language(path: &Path) -> String {
     }
 }
 
+/// Checks if a recognized language is text-based source code subject to line-ending normalization.
+pub fn is_text_language(lang: &str) -> bool {
+    matches!(
+        lang,
+        "typescript"
+            | "javascript"
+            | "rust"
+            | "python"
+            | "json"
+            | "toml"
+            | "yaml"
+            | "markdown"
+            | "html"
+            | "css"
+    )
+}
+
+/// Normalizes CRLF (`\r\n`) line endings to POSIX LF (`\n`) for deterministic hashing across OSs.
+pub fn normalize_line_endings(bytes: &[u8]) -> Vec<u8> {
+    if !bytes.contains(&b'\r') {
+        return bytes.to_vec();
+    }
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            normalized.push(b'\n');
+            i += 2;
+        } else {
+            normalized.push(bytes[i]);
+            i += 1;
+        }
+    }
+    normalized
+}
+
 /// Helper function to detect if content represents generated code.
 pub fn is_generated_code(content: &[u8]) -> bool {
     let prefix_len = content.len().min(4096);
@@ -338,10 +411,15 @@ pub fn scan_repository(
                 continue;
             }
 
-            let bytes = fs::read(path)?;
-            let content_hash = blake3::hash(&bytes).to_hex().to_string();
+            let raw_bytes = fs::read(path)?;
             let language = classify_language(path);
-            let is_generated = is_generated_code(&bytes);
+            let canonical_bytes = if is_text_language(&language) {
+                normalize_line_endings(&raw_bytes)
+            } else {
+                raw_bytes
+            };
+            let content_hash = blake3::hash(&canonical_bytes).to_hex().to_string();
+            let is_generated = is_generated_code(&canonical_bytes);
 
             files.insert(
                 rel_path.clone(),
@@ -557,5 +635,20 @@ mod tests {
 
         let digest = compute_file_set_digest(&files);
         assert!(!digest.is_empty());
+    }
+
+    #[test]
+    fn test_cross_platform_crlf_lf_determinism() {
+        let lf_content = b"export const x = 1;\nexport const y = 2;\n";
+        let crlf_content = b"export const x = 1;\r\nexport const y = 2;\r\n";
+
+        let norm_lf = normalize_line_endings(lf_content);
+        let norm_crlf = normalize_line_endings(crlf_content);
+
+        assert_eq!(norm_lf, norm_crlf);
+        assert_eq!(
+            blake3::hash(&norm_lf).to_hex(),
+            blake3::hash(&norm_crlf).to_hex()
+        );
     }
 }
