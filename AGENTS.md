@@ -12,6 +12,7 @@ You are an expert systems engineer working on **Synevid (Code Autopsy)**, an off
 - **Honest Semantic Coverage (FR-014, FR-030):** Unsupported or dynamic constructs must emit explicit `CoverageState::Unknown` or `Partial`. Never convert `UNKNOWN` into `PASS`.
 - **Clean Architectural Inversion:** Presentation, GUI, and MCP layers depend on core public interfaces, never the reverse (`ARCH_NO_CORE_TO_MCP`).
 - **Ground Truth Integrity:** Never alter benchmark ground truth to improve benchmark scores.
+- **Universal Hardware & Sandboxing Invariants (INV-CROSS-001, INV-SANDBOX-001..004):** Strict path normalization (`/`) and CRLF/LF line-ending determinism across Linux, macOS, and Windows. Symlink escape containment (`follow_links(false)`), path traversal sanitization (rejection of `..` sequences), traversal resource bounds (`max_traversal_nodes`), zero sub-process execution, and zero outbound network sockets.
 - **Do-Not-Build Prohibitions (4.1 Ch.13):** No LLM in core, no vector DB/RAG, no Neo4j, no K8s, one language first (TypeScript), no fake claims of perfect blast radius.
 
 ---

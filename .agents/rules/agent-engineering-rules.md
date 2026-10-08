@@ -31,6 +31,12 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
    - If multiple files share identical content hashes or multiple symbols share a signature in the same scope, renames MUST stay `Added` + `Deleted` / `Added` + `Removed`. Never guess.
 9. **Cross-Platform Path Determinism (INV-CROSS-001):**
    - Every relative path emitted in snapshots, multigraphs, or diffs MUST strictly use POSIX forward slash (`/`). Windows backslashes (`\`) MUST be normalized to forward slashes at scanner ingestion.
+10. **Enterprise Sandboxing & Defense-in-Depth (INV-SANDBOX-001..004):**
+   - Symlinks are NEVER followed (`follow_links(false)`). Symlink entries are rejected to prevent escaping workspace roots.
+   - Normalized relative paths cannot contain `..` escape sequences or absolute prefixes.
+   - Resource bounds (`max_traversal_nodes`) are enforced to prevent denial-of-service on adversarial cyclic graphs.
+   - Zero code execution (in-memory AST parsing only, zero sub-processes).
+   - Zero network socket requests (100% air-gapped, offline analysis).
 
 ---
 
@@ -136,6 +142,10 @@ Before any commit:
     - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
     - [`05_phase5_cli_storage_report_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05_phase5_cli_storage_report_verification.md)
     - [`06_phase6_benchmark_harness_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06_phase6_benchmark_harness_verification.md)
+    - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
+    - [`08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
+    - [`09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
+    - [`10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.
