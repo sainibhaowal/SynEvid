@@ -1,0 +1,9 @@
+{
+  "name": "@code-autopsy/web-inspector",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Read-only visual evidence inspector and blast radius explorer for Code Autopsy artifacts",
+  "scripts": {
+    "start": "npx serve -l 3000 ."
+  }
+}

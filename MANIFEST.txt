@@ -27,8 +27,16 @@ README.md
 SECURITY.md
 START_HERE.md
 apps/mcp-server/README.md
+apps/mcp-server/package-lock.json
 apps/mcp-server/package.json
+apps/mcp-server/src/cli.ts
+apps/mcp-server/src/index.ts
+apps/mcp-server/src/server.ts
+apps/mcp-server/test/server.test.js
+apps/mcp-server/tsconfig.json
 apps/web-inspector/README.md
+apps/web-inspector/index.html
+apps/web-inspector/package.json
 assets/banner.jpg
 assets/banner_initial.jpg
 assets/logo.jpg
@@ -194,6 +202,7 @@ docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md
 docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md
 docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md
 docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md
+docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -207,6 +216,7 @@ scripts/verify-determinism.sh
 tests/Cargo.toml
 tests/src/lib.rs
 tests/tests/e2e_adapter_typescript_conformance.rs
+tests/tests/e2e_agent_lifecycle.rs
 tests/tests/e2e_config_validation.rs
 tests/tests/e2e_cross_platform_and_multi_arch.rs
 tests/tests/e2e_domain_canonical_invariants.rs

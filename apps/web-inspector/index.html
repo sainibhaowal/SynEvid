@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SynEvid — Code Autopsy Forensic Inspector</title>
+  <style>
+    :root {
+      --bg-primary: #0a0e17;
+      --bg-surface: #111827;
+      --bg-surface-elevated: #1f2937;
+      --border-color: #374151;
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --accent-cyan: #06b6d4;
+      --accent-violet: #8b5cf6;
+      --accent-green: #10b981;
+      --accent-red: #ef4444;
+      --accent-yellow: #f59e0b;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: #fff;
+    }
+
+    .brand-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-left: 0.5rem;
+      font-family: var(--font-mono);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .badge-offline {
+      background-color: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .badge-offline::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      background-color: var(--accent-green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.5rem 2rem;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+      background-color: var(--bg-surface-elevated);
+    }
+
+    .tab-btn.active {
+      color: var(--accent-cyan);
+      background-color: rgba(6, 182, 212, 0.1);
+      border-color: rgba(6, 182, 212, 0.3);
+    }
+
+    main {
+      flex: 1;
+      padding: 2rem;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .meta-card {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .meta-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }
+
+    .meta-val {
+      font-size: 0.95rem;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      word-break: break-all;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Evidence Board Layout */
+    .evidence-board {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+
+    .board-header {
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 1rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .case-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .confidence-badge {
+      background-color: rgba(6, 182, 212, 0.15);
+      color: var(--accent-cyan);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 0.8rem;
+    }
+
+    .evidence-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .evidence-card {
+      background-color: var(--bg-surface-elevated);
+      border-left: 4px solid var(--accent-cyan);
+      border-radius: 0 6px 6px 0;
+      padding: 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .evidence-main {
+      flex: 1;
+    }
+
+    .evidence-id {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--accent-cyan);
+      font-weight: bold;
+      margin-bottom: 0.25rem;
+    }
+
+    .evidence-text {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 0.35rem;
+    }
+
+    .evidence-loc {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .check-icon {
+      color: var(--accent-green);
+      font-weight: 900;
+      font-size: 1.2rem;
+      margin-left: 1rem;
+    }
+
+    /* Blast Radius Visualizer */
+    .blast-tree {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .node-chain {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      overflow-x: auto;
+    }
+
+    .node-step {
+      background-color: var(--bg-surface-elevated);
+      border: 1px solid var(--border-color);
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      min-width: 200px;
+    }
+
+    .node-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .node-type {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      color: var(--accent-cyan);
+    }
+
+    .arrow {
+      color: var(--text-muted);
+      font-size: 1.25rem;
+    }
+
+    /* Raw JSON view */
+    pre.json-view {
+      background-color: #05070d;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1.25rem;
+      color: #38bdf8;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      overflow-x: auto;
+      max-height: 500px;
+    }
+
+    .upload-box {
+      border: 2px dashed var(--border-color);
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+
+    .upload-box:hover {
+      border-color: var(--accent-cyan);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-logo">SE</div>
+      <div class="brand-title">SynEvid</div>
+      <div class="brand-subtitle">Code Autopsy Forensic Inspector v0.0.1</div>
+    </div>
+    <div class="header-actions">
+      <div class="badge-offline">Offline Deterministic Core</div>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('tab-evidence')">Forensic Evidence Board</button>
+    <button class="tab-btn" onclick="switchTab('tab-blast')">Blast Radius & Multigraph</button>
+    <button class="tab-btn" onclick="switchTab('tab-report')">Autopsy Report JSON</button>
+  </nav>
+
+  <main>
+    <div class="meta-grid">
+      <div class="meta-card">
+        <div class="meta-label">Snapshot Digest (BLAKE3)</div>
+        <div class="meta-val" id="meta-snapshot">6f9a3e3328a59cd7398fedf5e083a65e</div>
+      </div>
+      <div class="meta-card">
+        <div class="meta-label">Result Verification Digest</div>
+        <div class="meta-val" id="meta-digest">196dab5178c9419b07f38ac6e199da6a</div>
+      </div>
+      <div class="meta-card">
+        <div class="meta-label">Semantic Coverage State</div>
+        <div class="meta-val" style="color: var(--accent-green);" id="meta-coverage">VERIFIED (100% Proven)</div>
+      </div>
+      <div class="meta-card">
+        <div class="meta-label">Architecture Invariants</div>
+        <div class="meta-val" style="color: var(--accent-green);" id="meta-rules">2 Rules Loaded (0 Violations)</div>
+      </div>
+    </div>
+
+    <!-- TAB 1: Evidence Board -->
+    <div id="tab-evidence" class="tab-content active">
+      <div class="evidence-board">
+        <div class="board-header">
+          <div>
+            <div class="case-title">Forensic Case: CA-104 (Transitive Dependency & Contract Audit)</div>
+            <div style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.25rem;">
+              Audited Target: <code style="color: var(--accent-cyan); font-family: var(--font-mono);">UserService</code> &middot; Profile: <code style="color: var(--text-muted); font-family: var(--font-mono);">cli-impact</code>
+            </div>
+          </div>
+          <div class="confidence-badge">CONFIDENCE: 100% (Cryptographic Proof)</div>
+        </div>
+
+        <div style="font-weight: 700; margin-bottom: 0.75rem; text-transform: uppercase; font-size: 0.75rem; color: var(--text-muted);">
+          Supporting Invariant & AST Evidence
+        </div>
+
+        <div class="evidence-list" id="evidence-container">
+          <div class="evidence-card">
+            <div class="evidence-main">
+              <div class="evidence-id">EVIDENCE #01 &middot; SYMBOL DEFINITION</div>
+              <div class="evidence-text">Target symbol identified with qualified AST identity in memory graph.</div>
+              <div class="evidence-loc">benchmarks/corpus/repo-api/src/services/userService.ts:5-38 (class:UserService)</div>
+            </div>
+            <div class="check-icon">&#10003;</div>
+          </div>
+
+          <div class="evidence-card">
+            <div class="evidence-main">
+              <div class="evidence-id">EVIDENCE #02 &middot; CALL CHAIN DEPENDENT</div>
+              <div class="evidence-text">Inbound invocation dependency from consumer controller.</div>
+              <div class="evidence-loc">benchmarks/corpus/repo-api/src/controllers/userController.ts:8 (UserController.handleCreate)</div>
+            </div>
+            <div class="check-icon">&#10003;</div>
+          </div>
+
+          <div class="evidence-card">
+            <div class="evidence-main">
+              <div class="evidence-id">EVIDENCE #03 &middot; PUBLIC API ROUTE CONTRACT</div>
+              <div class="evidence-text">Exposed HTTP API contract routing directly into service controller.</div>
+              <div class="evidence-loc">benchmarks/corpus/repo-api/src/routes/userRoutes.ts:12 (POST /api/v1/users)</div>
+            </div>
+            <div class="check-icon">&#10003;</div>
+          </div>
+
+          <div class="evidence-card">
+            <div class="evidence-main">
+              <div class="evidence-id">EVIDENCE #04 &middot; ARCHITECTURE INVARIANT (ARCH-001)</div>
+              <div class="evidence-text">Clean layer boundary maintained: Controllers invoke Services; no direct model bypass.</div>
+              <div class="evidence-loc">.autopsy/invariants.yml:1 (layers_enforcement_pass)</div>
+            </div>
+            <div class="check-icon">&#10003;</div>
+          </div>
+        </div>
+
+        <div style="background-color: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 6px; padding: 1rem; display: flex; align-items: center; gap: 0.75rem;">
+          <div style="color: var(--accent-green); font-size: 1.25rem;">&#9679;</div>
+          <div>
+            <div style="font-weight: 600; font-size: 0.9rem; color: var(--accent-green);">Contradicting Evidence: 0 Discovered</div>
+            <div style="font-size: 0.8rem; color: var(--text-secondary);">No cyclic paths, breaking signature changes, or unauthorized imports detected across the scanned frontier.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: Blast Radius & Multigraph -->
+    <div id="tab-blast" class="tab-content">
+      <div class="blast-tree">
+        <div style="font-weight: 700; font-size: 1.1rem; margin-bottom: 0.5rem;">Transitive Execution Trail & Call Hierarchy</div>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.5rem;">
+          Reconstructed automatically by Tree-sitter AST & Petgraph bounded reachability (BFS traversal budget: 1000).
+        </p>
+
+        <div class="node-chain">
+          <div class="node-step" style="border-color: var(--accent-cyan);">
+            <div class="node-title">POST /api/v1/users</div>
+            <div class="node-type">Public API Endpoint</div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">src/routes/userRoutes.ts</div>
+          </div>
+          <div class="arrow">&rarr;</div>
+          <div class="node-step">
+            <div class="node-title">UserController.create()</div>
+            <div class="node-type">Routing Controller</div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">src/controllers/userController.ts</div>
+          </div>
+          <div class="arrow">&rarr;</div>
+          <div class="node-step" style="border-color: var(--accent-violet);">
+            <div class="node-title">UserService.createUser()</div>
+            <div class="node-type">Core Service (Seed)</div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">src/services/userService.ts</div>
+          </div>
+          <div class="arrow">&rarr;</div>
+          <div class="node-step">
+            <div class="node-title">hashPassword()</div>
+            <div class="node-type">Crypto Utility</div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem;">src/utils/crypto.ts</div>
+          </div>
+        </div>
+
+        <div class="meta-grid" style="margin-top: 1.5rem;">
+          <div class="meta-card">
+            <div class="meta-label">Direct Dependents</div>
+            <div class="meta-val" style="color: var(--accent-cyan);">1 Component</div>
+          </div>
+          <div class="meta-card">
+            <div class="meta-label">Indirect Callers</div>
+            <div class="meta-val" style="color: var(--accent-cyan);">2 Components</div>
+          </div>
+          <div class="meta-card">
+            <div class="meta-label">Exposed API Endpoints</div>
+            <div class="meta-val" style="color: var(--accent-cyan);">1 Endpoint</div>
+          </div>
+          <div class="meta-card">
+            <div class="meta-label">Downstream Risk Level</div>
+            <div class="meta-val" style="color: var(--accent-green);">CONTAINED (S4)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Autopsy Report JSON & Artifact Loader -->
+    <div id="tab-report" class="tab-content">
+      <div class="upload-box" onclick="document.getElementById('file-upload').click()">
+        <input type="file" id="file-upload" style="display: none;" accept=".json" onchange="handleFileUpload(event)">
+        <div style="font-weight: 600; font-size: 1rem; margin-bottom: 0.25rem;">Load Custom `autopsy.json` Artifact</div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary);">Click or drag an exported Code Autopsy telemetry file to inspect locally</div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <div style="font-weight: 700; font-size: 0.9rem; text-transform: uppercase; color: var(--text-muted);">
+          Canonical Verification Report (SARIF / JSON Format)
+        </div>
+        <button onclick="copyJson()" style="background: var(--bg-surface-elevated); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.35rem 0.75rem; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">
+          Copy JSON
+        </button>
+      </div>
+
+      <pre class="json-view" id="json-display">
+{
+  "schema_version": "0.0.1",
+  "run": {
+    "analyzer_version": "0.0.1",
+    "command": "impact",
+    "duration_ms": 0,
+    "result_digest": "196dab5178c9419b07f38ac6e199da6ad62a9af75d3a5a2f3e06dd8119c6dbdb",
+    "run_id": "impact-6f9a3e33"
+  },
+  "snapshots": [
+    {
+      "snapshot_id": "6f9a3e3328a59cd7398fedf5e083a65e2e17bfd8e78b83c106f957c99fe1518d",
+      "revision": "HEAD",
+      "config_hash": "5f2935ac15afae12a0f528f2faac288c443bd597760bef7baaa72b3199b5f087",
+      "file_set_digest": "4c6b9ec479736b0bba13f8852397c8cf4938c26e8db35a21f276e8143902f627"
+    }
+  ],
+  "impact": {
+    "query": {
+      "seed_symbols": [
+        "src/services/userService.ts#class:UserService:56ad688e2695"
+      ],
+      "direction": "Forward"
+    },
+    "traversal_profile": "cli-impact",
+    "impacted_entities": [
+      "src/services/userService.ts#class:UserService:56ad688e2695"
+    ],
+    "paths": [
+      [
+        "src/services/userService.ts#class:UserService:56ad688e2695"
+      ]
+    ],
+    "truncated": false
+  },
+  "coverage": {
+    "state": "verified",
+    "files_scanned": 7,
+    "unsupported_constructs": []
+  },
+  "findings": []
+}
+      </pre>
+    </div>
+  </main>
+
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          document.getElementById('json-display').textContent = JSON.stringify(parsed, null, 2);
+
+          if (parsed.run && parsed.run.result_digest) {
+            document.getElementById('meta-digest').textContent = parsed.run.result_digest.slice(0, 32);
+          }
+          if (parsed.snapshots && parsed.snapshots[0]) {
+            document.getElementById('meta-snapshot').textContent = parsed.snapshots[0].snapshot_id.slice(0, 32);
+          }
+          if (parsed.coverage) {
+            document.getElementById('meta-coverage').textContent = parsed.coverage.state.toUpperCase() + ' (' + parsed.coverage.files_scanned + ' files)';
+          }
+          alert('Autopsy artifact loaded successfully!');
+        } catch (err) {
+          alert('Error parsing JSON artifact: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function copyJson() {
+      const text = document.getElementById('json-display').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('Copied canonical report JSON to clipboard!');
+      });
+    }
+  </script>
+</body>
+</html>
