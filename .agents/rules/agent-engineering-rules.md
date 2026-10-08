@@ -29,6 +29,8 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
    - Presentation, GUI (`apps/web-inspector`), and MCP (`apps/mcp-server`) layers depend on core public interfaces, NEVER the reverse. Enforced by `ARCH_NO_CORE_TO_MCP`.
 8. **Ambiguous Rename Rule (FR-007):**
    - If multiple files share identical content hashes or multiple symbols share a signature in the same scope, renames MUST stay `Added` + `Deleted` / `Added` + `Removed`. Never guess.
+9. **Cross-Platform Path Determinism (INV-CROSS-001):**
+   - Every relative path emitted in snapshots, multigraphs, or diffs MUST strictly use POSIX forward slash (`/`). Windows backslashes (`\`) MUST be normalized to forward slashes at scanner ingestion.
 
 ---
 

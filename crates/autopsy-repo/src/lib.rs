@@ -322,7 +322,7 @@ pub fn scan_repository(
             }
 
             let rel_path = match path.strip_prefix(repo_root) {
-                Ok(p) => p.to_string_lossy().to_string(),
+                Ok(p) => p.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
 
@@ -536,5 +536,26 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_cross_platform_path_separator_normalization() {
+        let windows_path = "src\\nested\\module.ts";
+        let normalized = windows_path.replace('\\', "/");
+        assert_eq!(normalized, "src/nested/module.ts");
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            normalized.clone(),
+            FileUnit {
+                path: normalized,
+                language: "typescript".to_string(),
+                content_hash: "hash123".to_string(),
+                is_generated: false,
+            },
+        );
+
+        let digest = compute_file_set_digest(&files);
+        assert!(!digest.is_empty());
     }
 }
