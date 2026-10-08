@@ -4,8 +4,26 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "autopsy"
+path = "src/main.rs"
+
 [dependencies]
-serde = { workspace = true }
-thiserror = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-repo = { path = "../autopsy-repo" }
+autopsy-adapter-api = { path = "../autopsy-adapter-api" }
+autopsy-adapter-typescript = { path = "../autopsy-adapter-typescript" }
+autopsy-symbols = { path = "../autopsy-symbols" }
+autopsy-graph = { path = "../autopsy-graph" }
+autopsy-diff = { path = "../autopsy-diff" }
+autopsy-impact = { path = "../autopsy-impact" }
+autopsy-contracts = { path = "../autopsy-contracts" }
+autopsy-invariants = { path = "../autopsy-invariants" }
+autopsy-evidence = { path = "../autopsy-evidence" }
+autopsy-storage = { path = "../autopsy-storage" }
+autopsy-report = { path = "../autopsy-report" }

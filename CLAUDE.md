@@ -8,5 +8,6 @@ Please read and follow the mandatory engineering rules and protocols defined in:
 5. [`docs/evidence/02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
 6. [`docs/evidence/03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md)
 7. [`docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
+8. [`docs/evidence/05_phase5_cli_storage_report_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05_phase5_cli_storage_report_verification.md)
 
 Always run `make check` or `pre-commit run --all-files` before finalizing changes.

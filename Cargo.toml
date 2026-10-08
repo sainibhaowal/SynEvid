@@ -35,3 +35,4 @@ serde_yaml = "0.9"
 ignore = "0.4"
 glob = "0.3"
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
