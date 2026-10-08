@@ -191,6 +191,7 @@ docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md
 docs/evidence/05_phase5_cli_storage_report_verification.md
 docs/evidence/06_phase6_benchmark_harness_verification.md
 docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md
+docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -199,11 +200,13 @@ schemas/benchmark-task.schema.json
 schemas/invariant.schema.json
 scripts/patch_banner.py
 scripts/verify-arch-boundaries.sh
+scripts/verify-cross-platform.sh
 scripts/verify-determinism.sh
 tests/Cargo.toml
 tests/src/lib.rs
 tests/tests/e2e_adapter_typescript_conformance.rs
 tests/tests/e2e_config_validation.rs
+tests/tests/e2e_cross_platform_and_multi_arch.rs
 tests/tests/e2e_domain_canonical_invariants.rs
 tests/tests/e2e_graph_and_diff_conformance.rs
 tests/tests/e2e_phase4_impact_and_invariants.rs

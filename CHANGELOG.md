@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-Platform Hardening & Enterprise CI/CD (Phase 3.2):**
   - Universal hardware & architecture support: Linux (`x86_64`, `aarch64`), macOS Apple Silicon (`aarch64-apple-darwin`), macOS Intel (`x86_64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`).
   - Cross-platform path separator normalization (`/`) in `autopsy-repo` scanner, ensuring byte-identical BLAKE3 digests and snapshot IDs across Linux, macOS, and Windows.
+  - Cross-platform CRLF vs LF line-ending normalization (`normalize_line_endings`) in `autopsy-repo`, guaranteeing byte-identical content hashes regardless of git checkout line endings.
+  - Concurrent atomic cache write resilience in `autopsy-storage` with PID-isolated staging and collision-safe rename handling on Windows NTFS and POSIX filesystems.
+  - Integration test suite `e2e_cross_platform_and_multi_arch.rs` (4 tests) asserting CRLF/LF invariance, path normalization, concurrent cache writes, and BLAKE3 boundary vectors.
+  - Dedicated verification script `scripts/verify-cross-platform.sh` integrated into `Makefile` and `pre-commit` hooks.
   - Upgraded GitHub Actions CI/CD suite:
     - Pre-merge multi-platform matrix (`.github/workflows/ci.yml`) across Ubuntu, macOS (Apple Silicon), and Windows runners with concurrency cancellation and dependency caching.
     - Post-merge release pipeline (`.github/workflows/post-merge.yml`) on `main` cross-compiling release binaries, verifying golden baselines, and uploading release packages.
