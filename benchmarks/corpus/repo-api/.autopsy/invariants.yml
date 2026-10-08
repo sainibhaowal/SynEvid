@@ -1,0 +1,10 @@
+version: "0.0.1"
+invariants:
+  - id: "api-compatibility"
+    description: "Exported API contracts must maintain backward compatibility"
+    kind: "api_compatibility"
+    severity: "error"
+  - id: "no-circular-deps"
+    description: "No circular dependencies permitted"
+    kind: "no_new_cycle"
+    severity: "error"

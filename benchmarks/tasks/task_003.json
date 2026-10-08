@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [
+      "removed_public_method"
+    ],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/services/userService.ts::UserService::deleteUser"
+    ]
+  },
+  "id": "TASK-API-003",
+  "is_held_out": false,
+  "prompt": "Remove method deleteUser from UserService.",
+  "repository": "repo-api"
+}

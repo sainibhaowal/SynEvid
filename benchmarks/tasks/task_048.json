@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup"
+    ]
+  },
+  "id": "TASK-DED-048",
+  "is_held_out": false,
+  "prompt": "Modify leaf node OrphanCleaner.performCleanup.",
+  "repository": "repo-dead-call"
+}

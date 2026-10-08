@@ -1,0 +1,22 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_contract_required_param"
+    ],
+    "expected_impacted_symbols": [
+      "src/controllers/userController.ts::UserController::handleCreate",
+      "src/routes/userRoutes.ts::routeRequest"
+    ],
+    "seed_symbols": [
+      "src/services/userService.ts::UserService::createUser"
+    ]
+  },
+  "id": "TASK-API-001",
+  "is_held_out": false,
+  "prompt": "Add a new required parameter 'tenantId: string' to UserService.createUser.",
+  "repository": "repo-api"
+}

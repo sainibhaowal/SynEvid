@@ -1,0 +1,13 @@
+version: "0.0.1"
+invariants:
+  - id: "core-independence"
+    description: "Core package must never depend on consumer packages (client, server, plugin)"
+    kind: "forbidden_dependency"
+    severity: "error"
+    scope:
+      source: "packages/core/**"
+      target: "packages/(client|server|plugin)/**"
+  - id: "no-circular-deps"
+    description: "No circular dependencies permitted"
+    kind: "no_new_cycle"
+    severity: "error"

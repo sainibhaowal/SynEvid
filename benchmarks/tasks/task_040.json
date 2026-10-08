@@ -1,0 +1,21 @@
+{
+  "base_ref": "HEAD",
+  "category": "cross_package",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "no-circular-deps"
+    ],
+    "expected_impacted_symbols": [
+      "packages/server/src/server.ts::LoggingServerHandler"
+    ],
+    "seed_symbols": [
+      "packages/client/src/client.ts::AppClient"
+    ]
+  },
+  "id": "TASK-PKG-040",
+  "is_held_out": true,
+  "prompt": "Create cross-package cycle: client.ts imports server.ts and server.ts imports client.ts.",
+  "repository": "repo-cross-package"
+}

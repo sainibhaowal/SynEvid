@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/legacy/oldStorage.ts::OldStorage"
+    ],
+    "seed_symbols": [
+      "src/adapters/sqlAdapter.ts::SqlAdapter"
+    ]
+  },
+  "id": "TASK-MIG-012",
+  "is_held_out": false,
+  "prompt": "SqlAdapter in adapters/ imports OldStorage instead of NewStorage.",
+  "repository": "repo-migration"
+}

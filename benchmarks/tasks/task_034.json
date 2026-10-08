@@ -1,0 +1,20 @@
+{
+  "base_ref": "HEAD",
+  "category": "cross_package",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "packages/core/src/index.ts::EventBus::publish",
+      "packages/client/src/client.ts::AppClient::sendNotification"
+    ],
+    "seed_symbols": [
+      "packages/core/src/types.ts::MessageEnvelope"
+    ]
+  },
+  "id": "TASK-PKG-034",
+  "is_held_out": false,
+  "prompt": "Add optional property 'priority?: number' to MessageEnvelope in core.",
+  "repository": "repo-cross-package"
+}

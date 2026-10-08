@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/auth/authGuard.ts::authenticateUser"
+    ],
+    "seed_symbols": [
+      "src/utils/crypto.ts::generateToken"
+    ]
+  },
+  "id": "TASK-API-010",
+  "is_held_out": true,
+  "prompt": "Transitive query: Trace impact from crypto.ts::generateToken to callers.",
+  "repository": "repo-api"
+}

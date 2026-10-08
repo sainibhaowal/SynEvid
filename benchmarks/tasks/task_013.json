@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/services/migrationRunner.ts::MigrationRunner"
+    ],
+    "seed_symbols": [
+      "src/legacy/oldStorage.ts"
+    ]
+  },
+  "id": "TASK-MIG-013",
+  "is_held_out": false,
+  "prompt": "Unambiguously rename src/legacy/oldStorage.ts to src/legacy/deprecatedStorage.ts.",
+  "repository": "repo-migration"
+}

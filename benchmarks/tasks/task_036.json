@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "cross_package",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "packages/core/src/index.ts::EventBus"
+    ]
+  },
+  "id": "TASK-PKG-036",
+  "is_held_out": false,
+  "prompt": "Add unsubscribe method to EventBus class in core package.",
+  "repository": "repo-cross-package"
+}

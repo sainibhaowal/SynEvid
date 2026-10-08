@@ -1,0 +1,15 @@
+version: "0.0.1"
+invariants:
+  - id: "architecture-layers"
+    description: "Strict architecture layers: presentation -> domain -> infrastructure"
+    kind: "layers"
+    severity: "error"
+    rule:
+      layers:
+        - "src/presentation/**"
+        - "src/domain/**"
+        - "src/infrastructure/**"
+  - id: "no-circular-deps"
+    description: "No circular dependencies permitted"
+    kind: "no_new_cycle"
+    severity: "error"

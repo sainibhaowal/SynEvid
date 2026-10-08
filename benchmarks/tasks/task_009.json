@@ -1,0 +1,17 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/services/userService.ts::UserService"
+    ]
+  },
+  "id": "TASK-API-009",
+  "is_held_out": false,
+  "prompt": "Add internal private method 'validateEmailFormat' to UserService.",
+  "repository": "repo-api"
+}

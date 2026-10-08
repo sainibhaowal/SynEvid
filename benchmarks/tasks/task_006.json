@@ -1,0 +1,23 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_interface_required_prop"
+    ],
+    "expected_impacted_symbols": [
+      "src/services/userService.ts::UserService::createUser",
+      "src/controllers/userController.ts::UserController::handleCreate",
+      "src/routes/userRoutes.ts::routeRequest"
+    ],
+    "seed_symbols": [
+      "src/dto/userDto.ts::CreateUserDto"
+    ]
+  },
+  "id": "TASK-API-006",
+  "is_held_out": false,
+  "prompt": "Add required property 'phoneNumber: string' to CreateUserDto interface.",
+  "repository": "repo-api"
+}

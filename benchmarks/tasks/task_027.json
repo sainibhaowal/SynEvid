@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/shared/logger.ts::logInfo"
+    ],
+    "seed_symbols": [
+      "src/infrastructure/database.ts::DatabaseDriver"
+    ]
+  },
+  "id": "TASK-REL-027",
+  "is_held_out": false,
+  "prompt": "Add permitted log call to shared logger from database driver.",
+  "repository": "repo-relayer"
+}

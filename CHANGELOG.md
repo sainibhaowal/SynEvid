@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `autopsy-report`: Reporting engine with canonical indented JSON strictly matching `schemas/autopsy-result.schema.json v0.0.1`, formatted human-readable terminal text with line-span badges, and OASIS SARIF 2.1.0 output for CI / GitHub code scanning.
   - `autopsy-cli`: Unified binary CLI providing commands `baseline`, `diff`, `impact`, `verify`, `explain`, `doctor`, and `version` with pure machine-readable `stdout`, diagnostic `stderr`, deterministic exit codes (0 pass, 2 policy failure, 3 analysis error, 4 unsupported/unknown), and offline network-off execution guarantee.
   - E2E integration test suite (`tests/tests/e2e_phase5_cli_and_storage.rs`) asserting all 7 CLI commands, exit code mapping, storage roundtrips, offline isolation, and 100-run determinism.
+- **Benchmark Harness & Evaluation Suite (Phase 6):**
+  - Standardized benchmark corpus with 5 TypeScript repositories (`benchmarks/corpus/`: `repo-api`, `repo-migration`, `repo-relayer`, `repo-cross-package`, `repo-dead-call`).
+  - 50 deterministic benchmark tasks (`benchmarks/tasks/`: `task_001.json` - `task_050.json`) spanning 5 categories (`api_change`, `migration`, `relayer`, `cross_package`, `dead_call`) strictly conforming to `schemas/benchmark-task.schema.json`, including partitioned held-out validation tasks.
+  - Three comparative baselines: Baseline A (agent + grep text search), Baseline B (agent + LSP 1-hop AST references), and Baseline C (agent + Autopsy deterministic multigraph reachability).
+  - Benchmark evaluation engine (`benchmarks/engine/`) calculating recall, precision, F1, tool calls, tokens, latency, and structural failure class discovery.
+  - Pre-registered gate verification (01 Ch.12): **PASSED** with +31.73pp recall lift (threshold $\ge +10\text{pp}$), 56.90% cost reduction (threshold $\ge 40\%$), and 16 newly discovered structural failure classes.
+  - Automated reproduction report generation (`benchmarks/results/reproduction_report.json` and `reproduction_report.md`).
+  - E2E integration test suite (`tests/tests/e2e_phase6_benchmarks.rs`) asserting corpus integrity, task schema conformance, and gate passage.
 - **Engine Core Verification Architecture:**
   - 14 Rust crates implementing foundation pipeline (`autopsy-repo`, `autopsy-domain`, `autopsy-symbols`, `autopsy-graph`, `autopsy-diff`, `autopsy-impact`, `autopsy-invariants`, `autopsy-evidence`, `autopsy-storage`, `autopsy-contracts`, `autopsy-report`, `autopsy-cli`).
   - Cryptographic BLAKE3 100-run snapshot determinism invariant test suite.

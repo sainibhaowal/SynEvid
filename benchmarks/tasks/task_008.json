@@ -1,0 +1,20 @@
+{
+  "base_ref": "HEAD",
+  "category": "api_change",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/utils/crypto.ts::verifyPassword",
+      "src/services/userService.ts::UserService::createUser"
+    ],
+    "seed_symbols": [
+      "src/utils/crypto.ts::hashPassword"
+    ]
+  },
+  "id": "TASK-API-008",
+  "is_held_out": false,
+  "prompt": "Change internal hashing salt inside crypto.ts::hashPassword without signature changes.",
+  "repository": "repo-api"
+}

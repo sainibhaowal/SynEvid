@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "unknown",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "unsupported_construct_eval"
+    ],
+    "expected_impacted_symbols": [],
+    "seed_symbols": [
+      "src/dynamic/evalProxy.ts::dynamicCompute"
+    ]
+  },
+  "id": "TASK-DED-044",
+  "is_held_out": false,
+  "prompt": "Verify file evalProxy.ts containing dynamic eval construct with --strict mode.",
+  "repository": "repo-dead-call"
+}

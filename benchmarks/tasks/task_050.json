@@ -1,0 +1,20 @@
+{
+  "base_ref": "HEAD",
+  "category": "dead_call",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/active/livePipeline.ts::LiveDataPipeline::processMessage",
+      "src/analytics/telemetry.ts::TelemetryCollector::trackEvent"
+    ],
+    "seed_symbols": [
+      "src/helpers/stringFormat.ts::capitalize"
+    ]
+  },
+  "id": "TASK-DED-050",
+  "is_held_out": true,
+  "prompt": "Simultaneous invariant verification and honest coverage evaluation in dead-call repo.",
+  "repository": "repo-dead-call"
+}

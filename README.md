@@ -25,7 +25,7 @@
   <a href="#deterministic-pipeline"><img src="https://img.shields.io/badge/Determinism-100%2F100%20BLAKE3-00f0ff?style=for-the-badge&logo=rust" alt="100/100 Determinism"></a>
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.85%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
-  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-84%2F84%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
+  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-87%2F87%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
 </p>
 
 ---
@@ -181,6 +181,9 @@ make check
 
 # 4. Run workspace unit and E2E integration tests
 make test
+
+# 5. Run Phase 6 Benchmark Evaluation Suite (50 tasks across 5 TS repos)
+python3 benchmarks/run_benchmarks.py --check-gate
 ```
 
 ---
@@ -188,7 +191,13 @@ make test
 ## 8. Requirements Traceability & Evidence
 
 * **Requirements Matrix:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001 through FR-030).
-* **Engineering Evidence Log:** [`docs/evidence/01_phase0_phase1_implementation_and_verification.md`](docs/evidence/01_phase0_phase1_implementation_and_verification.md).
+* **Engineering Evidence Log:**
+  - [`01_phase0_phase1_implementation_and_verification.md`](docs/evidence/01_phase0_phase1_implementation_and_verification.md)
+  - [`02_phase2_typescript_adapter_verification.md`](docs/evidence/02_phase2_typescript_adapter_verification.md)
+  - [`03_phase3_graph_diff_verification.md`](docs/evidence/03_phase3_graph_diff_verification.md)
+  - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
+  - [`05_phase5_cli_storage_report_verification.md`](docs/evidence/05_phase5_cli_storage_report_verification.md)
+  - [`06_phase6_benchmark_harness_verification.md`](docs/evidence/06_phase6_benchmark_harness_verification.md)
 * **AI Coding Agent Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 * **Architecture Decision Records:** [`docs/adr/`](docs/adr/).
 

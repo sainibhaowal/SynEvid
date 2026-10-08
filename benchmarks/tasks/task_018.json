@@ -1,0 +1,19 @@
+{
+  "base_ref": "HEAD",
+  "category": "migration",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": false,
+    "expected_failure_classes": [],
+    "expected_impacted_symbols": [
+      "src/adapters/sqlAdapter.ts::SqlAdapter"
+    ],
+    "seed_symbols": [
+      "src/config/dbConfig.ts::defaultDbConfig"
+    ]
+  },
+  "id": "TASK-MIG-018",
+  "is_held_out": false,
+  "prompt": "Update defaultDbConfig port to 5433.",
+  "repository": "repo-migration"
+}

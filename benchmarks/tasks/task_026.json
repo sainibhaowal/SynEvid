@@ -1,0 +1,22 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "breaking_contract_required_param"
+    ],
+    "expected_impacted_symbols": [
+      "src/domain/businessLogic.ts::BankingDomain::processTransfer",
+      "src/presentation/view.ts::BankingView::renderTransferForm"
+    ],
+    "seed_symbols": [
+      "src/infrastructure/database.ts::DatabaseDriver::updateBalance"
+    ]
+  },
+  "id": "TASK-REL-026",
+  "is_held_out": false,
+  "prompt": "Change DatabaseDriver.updateBalance signature to require 'timestamp: number'.",
+  "repository": "repo-relayer"
+}

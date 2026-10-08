@@ -1,0 +1,21 @@
+{
+  "base_ref": "HEAD",
+  "category": "relayer",
+  "ground_truth": {
+    "expected_coverage": "verified",
+    "expected_failure": true,
+    "expected_failure_classes": [
+      "no-circular-deps"
+    ],
+    "expected_impacted_symbols": [
+      "src/infrastructure/database.ts::DatabaseDriver"
+    ],
+    "seed_symbols": [
+      "src/shared/logger.ts::logInfo"
+    ]
+  },
+  "id": "TASK-REL-030",
+  "is_held_out": true,
+  "prompt": "Add indirect cycle between database.ts and logger.ts.",
+  "repository": "repo-relayer"
+}
