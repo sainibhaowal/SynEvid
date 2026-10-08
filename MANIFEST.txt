@@ -43,6 +43,7 @@ crates/autopsy-adapter-api/src/lib.rs
 crates/autopsy-adapter-typescript/Cargo.toml
 crates/autopsy-adapter-typescript/src/lib.rs
 crates/autopsy-cli/Cargo.toml
+crates/autopsy-cli/src/lib.rs
 crates/autopsy-cli/src/main.rs
 crates/autopsy-contracts/Cargo.toml
 crates/autopsy-contracts/src/lib.rs
@@ -82,6 +83,7 @@ docs/evidence/01_phase0_phase1_implementation_and_verification.md
 docs/evidence/02_phase2_typescript_adapter_verification.md
 docs/evidence/03_phase3_graph_diff_verification.md
 docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md
+docs/evidence/05_phase5_cli_storage_report_verification.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -98,5 +100,6 @@ tests/tests/e2e_config_validation.rs
 tests/tests/e2e_domain_canonical_invariants.rs
 tests/tests/e2e_graph_and_diff_conformance.rs
 tests/tests/e2e_phase4_impact_and_invariants.rs
+tests/tests/e2e_phase5_cli_and_storage.rs
 tests/tests/e2e_repo_scan_and_ignores.rs
 tests/tests/e2e_snapshot_determinism.rs

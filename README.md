@@ -25,7 +25,7 @@
   <a href="#deterministic-pipeline"><img src="https://img.shields.io/badge/Determinism-100%2F100%20BLAKE3-00f0ff?style=for-the-badge&logo=rust" alt="100/100 Determinism"></a>
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.85%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
-  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-72%2F72%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
+  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-84%2F84%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
 </p>
 
 ---
@@ -75,23 +75,26 @@ flowchart TD
 ## 4. Foundation Command Interface
 
 ```bash
-# Snapshot repository baseline state
-autopsy baseline
+# Snapshot repository baseline state into SQLite & content-addressed cache
+autopsy baseline --format json
 
-# Compute semantic change-set between revisions
-autopsy diff <base_rev> <head_rev>
+# Compute semantic change-set between snapshots or against worktree
+autopsy diff --before <snapshot_id> --after <snapshot_id> --format json
 
-# Traverse bounded blast radius for a symbol or path
-autopsy impact <symbol_or_path> --depth 3 --profile pr
+# Traverse bounded blast radius for a symbol with ranked shortest paths
+autopsy impact -s "src/index.ts::main" --direction forward --max-depth 5
 
-# Verify architectural policies and contract compatibility
-autopsy verify <base_rev> <head_rev> --policy .autopsy/invariants.yml
+# Verify architectural policies and contract compatibility (exit: 0 pass, 2 fail, 4 unknown)
+autopsy verify --strict --invariants-file .autopsy/invariants.yml
 
-# Trace exact evidence derivation and paths for a finding
+# Trace exact evidence derivation, line spans, and paths for a finding
 autopsy explain <finding_id>
 
-# Run environment and adapter diagnostics
+# Run environment, storage integrity, adapter, and offline diagnostics
 autopsy doctor
+
+# Print engine version and adapter capabilities
+autopsy version
 ```
 
 ---
@@ -113,7 +116,7 @@ SynEvid/
 │   ├── autopsy-invariants/         # Invariant YAML evaluators (layers, cycles, forbidden)
 │   ├── autopsy-evidence/           # Verifiable finding receipts & path sequences
 │   ├── autopsy-storage/            # SQLite & content-addressed local disk cache
-│   ├── autopsy-report/             # Canonical JSON & terminal diagnostic reporting
+│   ├── autopsy-report/             # Canonical JSON, human text & SARIF reporting
 │   └── autopsy-cli/                # Deterministic CLI binary entrypoint
 ├── apps/
 │   ├── mcp-server/                 # Model Context Protocol adapter (read-only)
@@ -149,7 +152,7 @@ Architectural Boundary Gate (Zero LLM/MCP in Core Crates)...Passed
 ### GitHub Actions Pre-Merge Gate
 Every pull request and push to `main` executes a multi-job verification matrix ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 1. **`rust-quality`**: `cargo fmt` + `cargo clippy --workspace --all-targets -- -D warnings`
-2. **`rust-tests`**: 72 unit and integration tests across all crates (Phases 0, 1, 2, 3, 4)
+2. **`rust-tests`**: 84 unit and integration tests across all crates (Phases 0, 1, 2, 3, 4, 5)
 3. **`determinism-gate`**: 100 sequential runs asserting byte-identical snapshot digests
 4. **`arch-boundary-gate`**: Asserts core crates contain no LLM or presentation dependencies
 5. **`schemas-and-configs`**: Validates JSON Schemas and engine TOML/YAML files

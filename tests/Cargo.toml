@@ -16,9 +16,11 @@ autopsy-impact = { path = "../crates/autopsy-impact" }
 autopsy-contracts = { path = "../crates/autopsy-contracts" }
 autopsy-invariants = { path = "../crates/autopsy-invariants" }
 autopsy-evidence = { path = "../crates/autopsy-evidence" }
+autopsy-storage = { path = "../crates/autopsy-storage" }
+autopsy-report = { path = "../crates/autopsy-report" }
+autopsy-cli = { path = "../crates/autopsy-cli" }
 blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 serde_yaml = { workspace = true }
-

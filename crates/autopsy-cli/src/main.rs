@@ -1,3 +1,6 @@
+//! autopsy binary entrypoint.
+
 fn main() {
-    println!("Code Autopsy v0.0.1 foundation scaffold");
+    let exit_code = autopsy_cli::run_from_env();
+    std::process::exit(exit_code);
 }

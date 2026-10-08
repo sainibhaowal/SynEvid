@@ -27,6 +27,10 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **FR-012** | Deterministic Invariant Evaluators | `autopsy-invariants` | `test_forbidden_dep_evaluator_pass_and_fail`, `test_layers_evaluator_pass_and_fail`, `test_no_new_cycles_evaluator`, `test_api_compatibility_evaluator` | **VERIFIED** |
 | **FR-013** | Cryptographic Evidence Receipts | `autopsy-evidence` | `test_canonical_ordering_and_hash_stability`, `test_100_runs_determinism`, `test_e2e_invariants_evaluation_all_rules_and_receipts` | **VERIFIED** |
 | **FR-014** | Honest Semantic Coverage (`UNKNOWN != PASS`) | `autopsy-invariants`, `autopsy-domain` | `test_unknown_never_collapses_to_pass`, `test_e2e_unknown_never_equals_pass_hard_boundary` | **VERIFIED** |
-| **FR-015..024** | CLI, SQLite Storage, Reporting | `autopsy-cli`, `autopsy-storage`, `autopsy-report` | Phase 5 Target | Pending |
+| **FR-015** | Unified CLI Command Interface (`baseline`, `diff`, `impact`, `verify`, `explain`, `doctor`, `version`) | `autopsy-cli` | `test_cli_version_and_doctor`, `test_cli_diff_and_impact`, `test_cli_baseline_storage_and_cache_roundtrip` | **VERIFIED** |
+| **FR-016** | Deterministic Exit Code Protocol (0, 2, 3, 4) | `autopsy-cli` | `test_cli_verify_policy_failure_exit_code`, `test_cli_verify_strict_mode_unsupported_exit_code`, `test_cli_analysis_error_on_invalid_input` | **VERIFIED** |
+| **FR-017** | Reporting Engine (Canonical JSON, Human Text, SARIF 2.1.0) | `autopsy-report` | `test_report_canonical_json_and_digest_determinism`, `test_report_human_text_and_sarif`, `test_offline_network_off_isolation` | **VERIFIED** |
+| **FR-024** | SQLite Storage with Versioned Migrations & Content-Addressed Cache | `autopsy-storage` | `test_storage_migrations_and_roundtrip`, `test_content_addressed_cache`, `test_cli_baseline_storage_and_cache_roundtrip` | **VERIFIED** |
+| **FR-028** | Canonical BLAKE3 Result Digesting & 100/100 Offline Determinism | `autopsy-report`, `autopsy-cli`, `tests` | `test_phase5_100_runs_determinism`, `scripts/verify-determinism.sh` | **VERIFIED** |
 | **FR-025** | Benchmark Harness & Baselines | `benchmarks/` | Phase 6 Target | Pending |
 

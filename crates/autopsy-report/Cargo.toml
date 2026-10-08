@@ -6,4 +6,10 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+blake3 = { workspace = true }
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-evidence = { path = "../autopsy-evidence" }
+autopsy-diff = { path = "../autopsy-diff" }
+autopsy-impact = { path = "../autopsy-impact" }
