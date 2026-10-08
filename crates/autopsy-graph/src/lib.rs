@@ -116,6 +116,16 @@ impl DependencyGraph {
         self.node_indices.get(id).map(|&idx| &self.inner[idx])
     }
 
+    /// Returns a reference to the underlying petgraph directed graph.
+    pub fn raw_graph(&self) -> &DiGraph<Symbol, Edge> {
+        &self.inner
+    }
+
+    /// Retrieves the internal NodeIndex for a SymbolId, if it exists.
+    pub fn get_node_index(&self, id: &SymbolId) -> Option<NodeIndex> {
+        self.node_indices.get(id).copied()
+    }
+
     /// Checks if a symbol exists in the graph.
     pub fn contains_node(&self, id: &SymbolId) -> bool {
         self.node_indices.contains_key(id)

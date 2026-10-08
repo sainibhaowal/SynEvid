@@ -12,6 +12,10 @@ autopsy-adapter-api = { path = "../crates/autopsy-adapter-api" }
 autopsy-adapter-typescript = { path = "../crates/autopsy-adapter-typescript" }
 autopsy-graph = { path = "../crates/autopsy-graph" }
 autopsy-diff = { path = "../crates/autopsy-diff" }
+autopsy-impact = { path = "../crates/autopsy-impact" }
+autopsy-contracts = { path = "../crates/autopsy-contracts" }
+autopsy-invariants = { path = "../crates/autopsy-invariants" }
+autopsy-evidence = { path = "../crates/autopsy-evidence" }
 blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
