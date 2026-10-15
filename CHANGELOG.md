@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–2 (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–3 (2026-10-16)
 
-Steps 28–36 of the 4.2 implementation sequence. Pillars 3–6 (Steps 37–45)
-are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`
-and `docs/evidence/18_phase4_2_pillar2_test_impact.md`.
+Steps 28–37 of the 4.2 implementation sequence. Pillars 4–6 (Steps 38–45)
+are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
+`docs/evidence/18_phase4_2_pillar2_test_impact.md`, and
+`docs/evidence/19_phase4_2_pillar3_openapi.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -80,6 +81,23 @@ and `docs/evidence/18_phase4_2_pillar2_test_impact.md`.
 - **`schemas/test-selection.schema.json`:** closed (`additionalProperties:
   false`) schema for the selection plan, plus a conformance test suite that
   cross-checks the schema against real serialised plans.
+- **OpenAPI 3.2.1 contract engine (`autopsy-contracts-distributed`, Step 37):**
+  parses `paths`, operations, parameters, request bodies, and responses into a
+  canonical `BTreeMap`-ordered model with eager local `$ref` resolution, and
+  classifies compatibility between two revisions. The verdict algebra is the
+  point: **`breaking` is asserted from a positive finding and therefore does not
+  depend on coverage**, while `compatible` is a claim that nothing was missed
+  and is therefore asserted only over fully-modelled documents. Everything in
+  between is `unknown`, which is never an approval —
+  `CompatibilityVerdict::is_approval()` exists so that no consumer writes
+  `verdict != Breaking` by hand and silently promotes `unknown` to a pass.
+  Direction is respected: request-side narrowing is breaking, and where no
+  directional evidence exists (a changed *response* schema) the change is
+  reported as unclassified rather than guessed at.
+- **`schemas/distributed-contract.schema.json`:** closed schema for the delta,
+  with a conformance suite that enumerates the Rust enums exhaustively via
+  `ChangeKind::ALL` and compares them against the schema through `serde`, so an
+  added variant or a `#[serde(rename)]` cannot drift unnoticed.
 
 ### Fixed
 - Temporal replay no longer mints a duplicate fact on re-observation. Because
@@ -88,6 +106,28 @@ and `docs/evidence/18_phase4_2_pillar2_test_impact.md`.
   subsequent commit; the fixture exposed 9 facts where 5 were correct.
 - Removed an item-invariant filter in the lineage similarity pass that could
   only ever match all candidates or none.
+- `Document::pointer` refused array-index descent, so every legal JSON Pointer
+  addressing a list element — including the extremely common
+  `#/paths/.../parameters/0/schema` — failed to resolve, which silently made the
+  whole document `Unknown`. Now follows RFC 6901 in full: the token's meaning is
+  decided by the value it is applied to, so `0` is an index under an array and
+  the key `"0"` under an object. Leading zeros and the append token `-` are
+  refused. Found by the test suite, not by inspection.
+- Resolved `$ref` nodes had their child pointers computed from the *reference
+  site* rather than from where the node was found. A
+  `{"$ref": "#/components/parameters/Q"}` parameter has no `/schema` child of its
+  own, so the lookup always missed and the contract was permanently `Unknown`.
+  `resolve_shallow` now returns the resolved pointer alongside the resolved
+  value.
+- A parameter the parser rejected (for example a path parameter absent from its
+  route) was dropped with a note but without degrading coverage, so a document
+  containing an unreadable parameter could still claim `Verified`. Dropped
+  parameters now degrade coverage, because an unread parameter is exactly the
+  kind of gap that must not read as completeness.
+- Adding an *optional* request body was classified as breaking. Severity depends
+  on `required`, so the kind must too; an added optional body rejects nothing
+  that existing callers relied on. Caught by clippy after removing a branch that
+  did nothing.
 - A forced full run now emits the mandatory `plan_summary` reason. Previously
   only the narrowed path emitted it, so a consumer reporting the narrowing ratio
   got nothing on exactly the runs where "we narrowed nothing" matters most. The
@@ -113,6 +153,30 @@ and `docs/evidence/18_phase4_2_pillar2_test_impact.md`.
   test declaration is classified `Unknown` and therefore always runs; this is
   deliberately noisy in exchange for never silently excluding a suite we did not
   understand.
+- `autopsy-contracts-distributed` adds **no new external dependency**:
+  `serde_yaml` is already a production dependency of `autopsy-invariants` and
+  `autopsy-repo`, so no new supply-chain edge is introduced. The pre-existing
+  `serde_yaml` advisory (`RUSTSEC-2024-0449`) is unchanged by this work.
+- **YAML merge keys (`<<:`) are rejected outright** rather than parsed.
+  `serde_yaml` does not apply them, so a document using them parses with every
+  inherited field silently absent — and a compatibility checker would then
+  report those fields as *removed*, producing a confident false positive. The
+  detection is line-based and can therefore refuse a document that merely
+  contains `<<:` inside a block scalar. That asymmetry is deliberate: refusing
+  to analyse is recoverable, a confident wrong answer is not.
+- JSON Schema composition (`allOf`, `oneOf`, `anyOf`, `not`, `if`/`then`/`else`)
+  is recorded but **not interpreted**. Every occurrence is named by JSON pointer
+  and degrades that subtree, so a composed schema cannot yield a `compatible`
+  verdict. This is deliberately pessimistic: almost every real specification
+  uses composition somewhere, and pretending to model it would produce the worst
+  possible answer for a compatibility gate.
+- Response-body schema changes are reported with severity `unknown`, not
+  `breaking` and not `non_breaking`. Request-side narrowing rules do not apply to
+  responses, and this engine holds no directional evidence for them, so it says
+  so instead of guessing.
+- `autopsy-contracts-distributed` is a **library API only**. Steps 38 (AsyncAPI
+  3.1.0) and 39 (Pact) are not implemented; no CLI subcommand, storage
+  write-back to `distributed_contracts`, or MCP surface is wired.
 - `autopsy-test-impact` is a **library API only**. No CLI subcommand, storage
   write-back to `test_mappings`, or MCP surface is wired yet.
 - `Cargo.toml` version remains `0.0.1`.

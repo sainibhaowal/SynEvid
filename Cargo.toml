@@ -18,6 +18,7 @@ members = [
     "crates/autopsy-cli",
     "crates/autopsy-temporal",
     "crates/autopsy-test-impact",
+    "crates/autopsy-contracts-distributed",
     "tests"
 ]
 

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Code Autopsy Distributed Contract Delta",
+  "description": "Schema for the interface-compatibility delta produced by the Phase 4.2 Pillar 3 engines (OpenAPI 3.2.1, Step 37; AsyncAPI 3.1.0, Step 38; Pact, Step 39). The load-bearing property of this document is the verdict algebra: `breaking` is asserted from a positive finding and therefore does not depend on coverage, while `compatible` is a claim that nothing was missed and is therefore only ever asserted over fully-verified coverage. Any consumer that treats `unknown` as a pass has inverted the meaning of this format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "from_path",
+    "to_path",
+    "from_digest",
+    "to_digest",
+    "version_change",
+    "changes",
+    "verdict",
+    "coverage",
+    "notes",
+    "digest"
+  ],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "description": "Which contract engine produced this delta.",
+      "enum": ["openapi", "asyncapi", "pact"]
+    },
+    "from_path": {
+      "type": "string",
+      "description": "Repository-relative POSIX path of the baseline contract document."
+    },
+    "to_path": {
+      "type": "string",
+      "description": "Repository-relative POSIX path of the candidate contract document."
+    },
+    "from_digest": {
+      "type": "string",
+      "description": "BLAKE3 over the canonical baseline contract value. Formatting-insensitive: comments, indentation, and key order do not reach it, so a reformat is not a contract change.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "to_digest": {
+      "type": "string",
+      "description": "BLAKE3 over the canonical candidate contract value.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "version_change": {
+      "description": "Present only when the two documents declare different specification versions. `null` when unchanged.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "string", "minLength": 1 },
+            "to": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "changes": {
+      "type": "array",
+      "description": "Detected changes, sorted by kind then subject then detail. Ordering is canonical so that a reordering of the traversal cannot move bytes.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "severity", "subject", "detail", "coverage"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Stable machine-readable change kind.",
+            "enum": [
+              "endpoint_removed",
+              "endpoint_added",
+              "method_removed",
+              "method_added",
+              "required_parameter_added",
+              "optional_parameter_added",
+              "parameter_removed",
+              "parameter_became_required",
+              "parameter_became_optional",
+              "parameter_type_narrowed",
+              "parameter_type_widened",
+              "parameter_enum_value_removed",
+              "parameter_enum_value_added",
+              "request_body_added",
+              "optional_request_body_added",
+              "request_body_became_required",
+              "request_body_became_optional",
+              "request_body_removed",
+              "media_type_removed",
+              "media_type_added",
+              "request_property_removed",
+              "required_property_added",
+              "optional_property_added",
+              "request_additional_properties_disallowed",
+              "request_enum_value_removed",
+              "response_status_removed",
+              "response_status_added",
+              "response_schema_changed",
+              "incomparable_subtree"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "description": "`unknown` means the change was detected but no directional evidence exists for it. It prevents a `compatible` verdict without asserting a break.",
+            "enum": ["breaking", "unknown", "non_breaking"]
+          },
+          "subject": {
+            "type": "string",
+            "description": "`METHOD /path` for operation-level changes, `METHOD /path location `name`` for parameters, or a JSON pointer for schema-level changes.",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "description": "Human-readable statement of what changed, including the concrete values involved.",
+            "minLength": 1
+          },
+          "coverage": {
+            "type": "string",
+            "description": "How completely the affected surface was modelled.",
+            "enum": ["verified", "partial", "unsupported", "unknown"]
+          }
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "description": "`breaking` if any change classified breaking was found. Otherwise `unknown` if any change could not be classified or coverage is not `verified`. `compatible` is the only verdict that claims nothing was missed, so it is the only one gated on completeness.",
+      "enum": ["compatible", "breaking", "unknown"]
+    },
+    "coverage": {
+      "type": "string",
+      "description": "Worst-case coverage across both documents.",
+      "enum": ["verified", "partial", "unsupported", "unknown"]
+    },
+    "notes": {
+      "type": "array",
+      "description": "Sorted, deduplicated reasons the verdict is not `compatible`.",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "digest": {
+      "type": "string",
+      "description": "BLAKE3 over the canonical delta body. Excludes `notes` prose, includes `severity`, so a reclassification is a different digest even when the underlying changes are identical.",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

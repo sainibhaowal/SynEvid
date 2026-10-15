@@ -1,0 +1,17 @@
+[package]
+name = "autopsy-contracts-distributed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Already a production dependency of `autopsy-invariants` and `autopsy-repo`, so
+# this adds no new supply-chain edge. OpenAPI and AsyncAPI documents in the wild
+# are overwhelmingly YAML, and a JSON-only engine would be honest about almost
+# nothing that matters.
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
