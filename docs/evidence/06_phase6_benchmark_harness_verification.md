@@ -1,5 +1,15 @@
 # Phase 6 Evidence: Benchmark Harness & Evaluation Suite Verification
 
+> **SUPERSEDED (2026-10-09):** Baseline-C figures below (100% precision,
+> 353 tokens, 16 classes, cost-gate PASS) came from a simulated baseline
+> that copied ground truth into predictions. Baseline-C was rewritten to
+> execute the real engine binary per task. Authoritative re-measurement:
+> **recall 100.00% (+31.73pp, PASS)**, precision 5.98%, F1 10.80%,
+> 2693 tokens (cost FAIL), 0 task-vocabulary failure classes (FAIL) —
+> see `13_forensic_closure_verification.md` §3. The harness, corpus,
+> schema, and gate machinery described here are unchanged and VERIFIED;
+> only the Baseline-C numbers below are withdrawn.
+
 ## 1. Executive Summary & Verification Statement
 
 Phase 6 implements the enterprise-grade benchmark harness and evaluation engine for **Synevid (Code Autopsy)**, fulfilling requirements **FR-025**, use case **UC-08**, and research questions **RQ1–RQ5**.

@@ -43,6 +43,7 @@ fn test_e2e_canonical_json_schema_shape_compatibility() {
         config_hash: "cfg_hash_789".to_string(),
         file_set_digest: "digest_456".to_string(),
         files,
+        skipped_oversize_files: Vec::new(),
     };
 
     let snapshot_json = serde_json::to_string_pretty(&snapshot).unwrap();

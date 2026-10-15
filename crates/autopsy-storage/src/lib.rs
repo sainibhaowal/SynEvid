@@ -416,6 +416,72 @@ impl StorageEngine {
         }
         Ok(None)
     }
+
+    /// Validates a content hash for safe use as a cache shard path.
+    /// Only full-length lowercase BLAKE3 hex digests are accepted,
+    /// closing path-injection via crafted snapshot records.
+    fn validate_content_hash(hash: &str) -> Result<(), StorageError> {
+        if hash.len() == 64
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            Ok(())
+        } else {
+            Err(StorageError::Migration(format!(
+                "invalid content hash for artifact cache: '{}'",
+                hash.chars().take(32).collect::<String>()
+            )))
+        }
+    }
+
+    /// Stores a per-file analysis artifact under its content hash
+    /// (`.autopsy/cache/artifacts/xx/rest`). Idempotent: identical bytes
+    /// map to identical keys, so unchanged files need no rewrite.
+    pub fn put_file_artifact(
+        &self,
+        content_hash: &str,
+        artifact_json: &[u8],
+    ) -> Result<(), StorageError> {
+        Self::validate_content_hash(content_hash)?;
+        if let Some(cache_root) = &self.cache_dir {
+            let dir = cache_root.join("artifacts").join(&content_hash[0..2]);
+            fs::create_dir_all(&dir)?;
+            let target_path = dir.join(&content_hash[2..]);
+            if !target_path.exists() {
+                let tmp_path = dir.join(format!(
+                    ".tmp-{}-{}",
+                    std::process::id(),
+                    &content_hash[2..8]
+                ));
+                fs::write(&tmp_path, artifact_json)?;
+                match fs::rename(&tmp_path, &target_path) {
+                    Ok(()) => {}
+                    Err(_) if target_path.exists() => {
+                        let _ = fs::remove_file(&tmp_path);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Retrieves a per-file analysis artifact by content hash.
+    pub fn get_file_artifact(&self, content_hash: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        Self::validate_content_hash(content_hash)?;
+        if let Some(cache_root) = &self.cache_dir {
+            let target_path = cache_root
+                .join("artifacts")
+                .join(&content_hash[0..2])
+                .join(&content_hash[2..]);
+            if target_path.exists() {
+                let bytes = fs::read(target_path)?;
+                return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +501,7 @@ mod tests {
             config_hash: "cfg_hash_1".to_string(),
             file_set_digest: "files_digest_1".to_string(),
             files: BTreeMap::new(),
+            skipped_oversize_files: Vec::new(),
         };
         storage.save_snapshot(&snapshot).unwrap();
 

@@ -18,6 +18,7 @@ autopsy-domain = { path = "../autopsy-domain" }
 autopsy-repo = { path = "../autopsy-repo" }
 autopsy-adapter-api = { path = "../autopsy-adapter-api" }
 autopsy-adapter-typescript = { path = "../autopsy-adapter-typescript" }
+autopsy-adapter-python = { path = "../autopsy-adapter-python" }
 autopsy-symbols = { path = "../autopsy-symbols" }
 autopsy-graph = { path = "../autopsy-graph" }
 autopsy-diff = { path = "../autopsy-diff" }

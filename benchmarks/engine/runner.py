@@ -5,7 +5,6 @@ Executes all tasks across Baselines A, B, and C, aggregates metrics, and evaluat
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from benchmarks.engine.baseline_autopsy import BaselineAutopsy
 from benchmarks.engine.baseline_grep import BaselineGrep
@@ -25,10 +24,10 @@ from benchmarks.engine.task_loader import BenchmarkTask, load_all_tasks
 
 @dataclass
 class BenchmarkRunResult:
-    tasks: List[BenchmarkTask]
-    results_a: List[TaskResult]
-    results_b: List[TaskResult]
-    results_c: List[TaskResult]
+    tasks: list[BenchmarkTask]
+    results_a: list[TaskResult]
+    results_b: list[TaskResult]
+    results_c: list[TaskResult]
     agg_a: AggregateMetrics
     agg_b: AggregateMetrics
     agg_c: AggregateMetrics
@@ -56,7 +55,7 @@ class BenchmarkRunner:
 
     def run(
         self,
-        category_filter: Optional[str] = None,
+        category_filter: str | None = None,
         held_out_only: bool = False,
     ) -> BenchmarkRunResult:
         tasks = load_all_tasks(self.tasks_dir)
@@ -73,9 +72,9 @@ class BenchmarkRunner:
         baseline_lsp = BaselineLSP(self.corpus_dir)
         baseline_autopsy = BaselineAutopsy(self.corpus_dir, self.autopsy_binary)
 
-        results_a: List[TaskResult] = []
-        results_b: List[TaskResult] = []
-        results_c: List[TaskResult] = []
+        results_a: list[TaskResult] = []
+        results_b: list[TaskResult] = []
+        results_c: list[TaskResult] = []
 
         for task in tasks:
             ra = baseline_grep.evaluate_task(task)

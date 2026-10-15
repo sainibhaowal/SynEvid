@@ -14,5 +14,12 @@ Please read and follow the mandatory engineering rules and protocols defined in:
 11. [`docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
 12. [`docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
 13. [`docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
+14. [`docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md)
+15. [`docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md)
+16. [`docs/evidence/13_forensic_closure_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13_forensic_closure_verification.md) (real-binary Baseline-C, identity/shape split ADR-0009)
+17. [`docs/evidence/14_precision_incremental_pr_gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14_precision_incremental_pr_gate.md) — current: ranked top-k, callers profile, incremental baseline, PR gate
+18. [`docs/evidence/15_phase4_1_gap_closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15_phase4_1_gap_closure.md) — current: 4.1 audit fixes (config fail-open, graph pagination, deny, eslint, SBOM)
+19. [`docs/adr/0009-symbol-identity-shape-split.md`](file:///home/ravi/Projects/SynEvid/docs/adr/0009-symbol-identity-shape-split.md)
 
 Always run `make check` or `pre-commit run --all-files` before finalizing changes.
+19. [`docs/evidence/16_landscape_parity.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/16_landscape_parity.md) — current: universal install, Python adapter, agent pack

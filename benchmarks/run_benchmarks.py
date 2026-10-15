@@ -6,8 +6,8 @@ Evaluates pre-registered gate (>=10pp recall lift OR >=40% cost cut at equal acc
 """
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Ensure repository root is on sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -92,13 +92,15 @@ def main():
             category_filter=args.category,
             held_out_only=args.held_out_only,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top-level CLI crash guard with exit code
         print(f"ERROR: Benchmark execution failed: {e}", file=sys.stderr)
         sys.exit(1)
 
     print("\nBENCHMARK RESULTS SUMMARY:")
     print("-" * 80)
-    print(f"{'Baseline':<28} | {'Recall':<8} | {'Precision':<10} | {'F1':<6} | {'Tokens':<8} | {'Tool Calls':<10}")
+    print(
+        f"{'Baseline':<28} | {'Recall':<8} | {'Precision':<10} | {'F1':<6} | {'Tokens':<8} | {'Tool Calls':<10}"
+    )
     print("-" * 80)
     for agg in [run_res.agg_a, run_res.agg_b, run_res.agg_c]:
         print(
@@ -114,9 +116,15 @@ def main():
     gate = run_res.gate_result
     print("\nPRE-REGISTERED GATE STATUS (01 Ch.12):")
     print(f"  Decision:              {'[ PASS ]' if gate.passed else '[ FAIL - STOP ]'}")
-    print(f"  Recall Lift:           +{gate.recall_lift_pp:.2f}pp (Threshold: >= +10.0pp) -> {'PASS' if gate.gate_1_recall_lift_passed else 'FAIL'}")
-    print(f"  Cost Cut:              {gate.cost_cut_percent:.2f}% (Threshold: >= 40.0% at equal accuracy) -> {'PASS' if gate.gate_2_cost_cut_passed else 'FAIL'}")
-    print(f"  New Failure Classes:   {gate.new_failure_classes_found} detected -> {'PASS' if gate.gate_3_new_failure_class_passed else 'FAIL'}")
+    print(
+        f"  Recall Lift:           +{gate.recall_lift_pp:.2f}pp (Threshold: >= +10.0pp) -> {'PASS' if gate.gate_1_recall_lift_passed else 'FAIL'}"
+    )
+    print(
+        f"  Cost Cut:              {gate.cost_cut_percent:.2f}% (Threshold: >= 40.0% at equal accuracy) -> {'PASS' if gate.gate_2_cost_cut_passed else 'FAIL'}"
+    )
+    print(
+        f"  New Failure Classes:   {gate.new_failure_classes_found} detected -> {'PASS' if gate.gate_3_new_failure_class_passed else 'FAIL'}"
+    )
     print(f"  Rationale:             {gate.rationale}")
     print("-" * 80)
     print(f"Reproduction JSON Report: {run_res.json_report_path}")

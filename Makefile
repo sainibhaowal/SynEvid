@@ -24,7 +24,7 @@ schemas:
 	python3 -c 'import glob, json, tomllib, yaml; [json.load(open(f)) for f in glob.glob("schemas/*.json")]; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); json.load(open(".autopsy/baseline.json")); print("All schemas and configs valid.")'
 
 mcp-check:
-	cd apps/mcp-server && npm run typecheck && npm test
+	cd apps/mcp-server && npm run typecheck && npm run lint && npm test
 
 check: fmt boundaries schemas determinism cross-platform mcp-check
 	cargo clippy --workspace --all-targets -- -D warnings

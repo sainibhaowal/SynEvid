@@ -5,6 +5,7 @@ members = [
     "crates/autopsy-repo",
     "crates/autopsy-adapter-api",
     "crates/autopsy-adapter-typescript",
+    "crates/autopsy-adapter-python",
     "crates/autopsy-symbols",
     "crates/autopsy-graph",
     "crates/autopsy-diff",

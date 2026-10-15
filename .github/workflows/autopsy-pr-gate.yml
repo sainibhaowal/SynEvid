@@ -1,0 +1,155 @@
+name: Autopsy PR Forensic Gate
+
+# Production PR integration: deterministic blast-radius evidence and
+# invariant verification on every pull request (developer workflow,
+# no LLM, no external services).
+#
+# - verify (single-state invariants) gates the merge (exit 2 fails)
+# - impact (callers profile, top-10) runs per changed TS file
+# - SARIF + JSON reports uploaded as immutable artifacts
+# - human-readable summary commented on the PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: ["main", "master", "develop"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: autopsy-pr-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  forensic-gate:
+    name: Blast Radius & Invariant Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR Head (full history for base comparison)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Autopsy CLI
+        run: cargo build --locked -p autopsy-cli
+
+      - name: Baseline PR Head
+        id: baseline
+        run: |
+          BIN="target/debug/autopsy"
+          $BIN --repo-root . baseline --format json > /tmp/autopsy-baseline.json
+          SNAP=$(python3 -c "import json; print(json.load(open('/tmp/autopsy-baseline.json'))['snapshots'][0]['snapshot_id'])")
+          echo "snapshot_id=$SNAP" >> "$GITHUB_OUTPUT"
+          echo "Baseline snapshot: $SNAP"
+
+      - name: Verify Invariants (single-state)
+        id: verify
+        run: |
+          BIN="target/debug/autopsy"
+          set +e
+          $BIN --repo-root . verify --format json > /tmp/autopsy-verify.json
+          $BIN --repo-root . verify --format sarif > /tmp/autopsy-verify.sarif
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/autopsy-verify.json'))
+          fails = [f for f in d.get('findings', []) if f.get('status') == 'fail']
+          unknowns = [f for f in d.get('findings', []) if f.get('status') == 'unknown']
+          print(f\"findings={len(d.get('findings', []))} fail={len(fails)} unknown={len(unknowns)}\")
+          "
+          # Exit 2 (policy failure) fails the gate; 0/4 pass with annotation.
+          if [ "$CODE" -eq 2 ]; then
+            echo "INVARIANT FAILURES DETECTED"
+            exit 2
+          fi
+          exit 0
+
+      - name: Impact Changed TypeScript Files (callers profile, top-10)
+        id: impact
+        run: |
+          BIN="target/debug/autopsy"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD -- '*.ts' '*.tsx' | head -20)
+          echo "Changed TS files:"
+          echo "$CHANGED"
+          : > /tmp/autopsy-impact.md
+          for f in $CHANGED; do
+            [ -f "$f" ] || continue
+            echo "## \`$f\`" >> /tmp/autopsy-impact.md
+            if $BIN --repo-root . impact -s "$f" --profile callers --top-k 10 --format json > /tmp/imp.json 2>/dev/null; then
+              python3 -c "
+              import json
+              d = json.load(open('/tmp/imp.json'))
+              imp = d.get('impact', {}) or {}
+              top = imp.get('ranked_top', []) or imp.get('impacted_entities', [])
+              total = imp.get('total_impacted', len(imp.get('impacted_entities', [])))
+              print(f'impact seed: $f -> top {len(top)} of {total}', flush=True)
+              " >> /tmp/autopsy-impact.md
+              python3 -c "
+              import json
+              d = json.load(open('/tmp/imp.json'))
+              imp = d.get('impact', {}) or {}
+              top = imp.get('ranked_top', []) or imp.get('impacted_entities', [])
+              for e in top[:10]:
+                  print(f'- \`{e}\`')
+              " >> /tmp/autopsy-impact.md
+            else
+              echo "_impact analysis unavailable for this file_" >> /tmp/autopsy-impact.md
+            fi
+          done
+          if [ ! -s /tmp/autopsy-impact.md ]; then
+            echo "_No TypeScript files changed in this PR._" > /tmp/autopsy-impact.md
+          fi
+
+      - name: Upload Forensic Artifacts (JSON + SARIF)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopsy-pr-forensics
+          path: |
+            /tmp/autopsy-baseline.json
+            /tmp/autopsy-verify.json
+            /tmp/autopsy-verify.sarif
+            /tmp/autopsy-impact.md
+
+      - name: Comment PR Summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let verifyLine = 'verify: not run';
+            try {
+              const v = JSON.parse(fs.readFileSync('/tmp/autopsy-verify.json', 'utf8'));
+              const fails = (v.findings || []).filter(f => f.status === 'fail');
+              const unknowns = (v.findings || []).filter(f => f.status === 'unknown');
+              verifyLine = `verify: ${v.findings.length} findings (${fails.length} fail / ${unknowns.length} unknown), digest \`${(v.result_digest || '').slice(0, 16)}…\``;
+              if (fails.length > 0) {
+                verifyLine += '\n**Failing rules:** ' + fails.map(f => `\`${f.rule_id}\`: ${f.message}`).join('; ');
+              }
+            } catch (e) { verifyLine = 'verify: report unavailable (' + e.message + ')'; }
+            let impact = '';
+            try { impact = fs.readFileSync('/tmp/autopsy-impact.md', 'utf8'); } catch (e) { impact = '_impact report unavailable_'; }
+            const exitCode = '${{ steps.verify.outputs.exit_code }}';
+            const verdict = exitCode === '2' ? '❌ **FAIL — invariant violations**' : '✅ **PASS**';
+            const body = `## 🔬 SynEvid Forensic Gate ${verdict}\n\n${verifyLine}\n\n### Blast radius (callers profile, top-10 per file)\n${impact}\n\n_Engine: deterministic offline analysis, zero LLM. Full JSON + SARIF in workflow artifacts._`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body.slice(0, 60000),
+            });

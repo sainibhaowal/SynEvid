@@ -6,13 +6,16 @@
   "required": ["version", "accepted_debt"],
   "properties": {
     "version": {
-      "type": "string"
+      "type": "string",
+      "description": "Baseline file format version."
     },
     "created_at_snapshot": {
-      "type": "string"
+      "type": "string",
+      "description": "Snapshot ID the debt was accepted against (informational)."
     },
     "accepted_debt": {
       "type": "array",
+      "description": "Pre-existing violations waived by fingerprint. Only exact fingerprint (or wildcard) plus rule matches convert Fail to accepted Pass.",
       "items": {
         "type": "object",
         "required": ["fingerprint", "rule_id"],

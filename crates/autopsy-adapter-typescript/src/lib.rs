@@ -12,12 +12,26 @@ use autopsy_domain::{
     Contract, CoverageState, Edge, EdgeKind, FileUnit, Severity, SourceLocation, Symbol, SymbolId,
     Visibility,
 };
+use autopsy_symbols::{SymbolKind, overload_id, qualified_name, short_name, stable_symbol_id};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser, Tree};
 
 pub const ADAPTER_VERSION: &str = "0.0.1";
 pub const LANGUAGE_ID: &str = "typescript";
+
+/// Mutable scope cursor for the call-edge AST walk.
+#[derive(Debug, Clone, Default)]
+struct CallWalkContext {
+    /// Innermost enclosing callable symbol (None => module scope).
+    enclosing: Option<SymbolId>,
+    /// Innermost enclosing class name (for `this.` resolution).
+    enclosing_class: String,
+}
+
+/// Declared receiver-type maps: `(scope, binding) -> type name`.
+/// Used for fields (`(class, field)`) and locals (`(function, name)`).
+type ReceiverMap = BTreeMap<(String, String), String>;
 
 /// Compiler bridge for resolving module specifiers and symbol references.
 #[derive(Debug, Clone, Default)]
@@ -410,7 +424,8 @@ impl LanguageAdapter for TypeScriptAdapter {
         let root = tree.root_node();
         let mut symbols = Vec::new();
 
-        self.collect_symbols(root, &content, &parsed.file.path, "", &mut symbols);
+        self.collect_symbols(root, &content, &parsed.file.path, "", 0, &mut symbols);
+        self.disambiguate_overloads(&mut symbols);
 
         Ok(symbols)
     }
@@ -488,6 +503,20 @@ impl LanguageAdapter for TypeScriptAdapter {
             &mut edges,
         );
 
+        // 4. Call edges (bare calls, this-method calls, constructor calls).
+        //    These power transitive blast-radius traversal (FR-008).
+        //    The global symbol index enables cross-file import resolution.
+        self.collect_call_edges(
+            root,
+            &content,
+            &parsed.file.path,
+            &file_symbol_id,
+            &extracted_symbols,
+            symbol_index,
+            parsed.coverage,
+            &mut edges,
+        );
+
         Ok(edges)
     }
 
@@ -507,43 +536,75 @@ impl LanguageAdapter for TypeScriptAdapter {
         let root = tree.root_node();
         let mut contracts = Vec::new();
 
-        self.collect_contracts(root, &content, &parsed.file.path, "", &mut contracts);
+        self.collect_contracts(root, &content, &parsed.file.path, "", 0, &mut contracts);
 
-        Ok(contracts)
+        // Overloaded declarations share one owner identity; keep the last
+        // in traversal order (TS places the implementation signature
+        // after overload signatures). Deterministic by construction.
+        let mut by_owner: BTreeMap<SymbolId, Contract> = BTreeMap::new();
+        for contract in contracts {
+            by_owner.insert(contract.owner.clone(), contract);
+        }
+        Ok(by_owner.into_values().collect())
     }
 }
 
 impl TypeScriptAdapter {
+    /// Builds the stable identity for a symbol via the `autopsy-symbols`
+    /// authority (FR-005). Identity carries file + kind + scope + name
+    /// only; signature material is stored on the record, never embedded.
+    fn symbol_identity(
+        &self,
+        file_path: &str,
+        kind: SymbolKind,
+        parent_scope: &str,
+        name: &str,
+    ) -> SymbolId {
+        stable_symbol_id(file_path, kind, parent_scope, name)
+    }
+
     fn collect_symbols(
         &self,
         node: Node,
         content: &str,
         file_path: &str,
         parent_scope: &str,
+        function_depth: u32,
         symbols: &mut Vec<Symbol>,
     ) {
         let kind = node.kind();
 
+        // Children of any function-like node are one level deeper; only
+        // module-level (`depth == 0`, no class scope) declarations become
+        // variable/enum symbols.
+        let child_depth = match kind {
+            "function_declaration"
+            | "function_signature"
+            | "generator_function_declaration"
+            | "method_definition"
+            | "arrow_function"
+            | "function_expression" => function_depth + 1,
+            _ => function_depth,
+        };
+
         match kind {
-            "function_declaration" => {
+            // `function_signature` = bodiless overload declaration shape.
+            "function_declaration" | "function_signature" | "generator_function_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = &content[name_node.byte_range()];
-                    let qname = if parent_scope.is_empty() {
-                        format!("{}::{}", file_path, name)
-                    } else {
-                        format!("{}::{}::{}", file_path, parent_scope, name)
-                    };
-
+                    let qname = qualified_name(file_path, parent_scope, name);
                     let sig = self.compute_signature(node, content);
-                    let sig_hash = blake3::hash(sig.as_bytes()).to_hex()[0..12].to_string();
-                    let stable_id =
-                        SymbolId::new(format!("{}#fn:{}:{}", file_path, name, sig_hash));
                     let visibility = self.detect_visibility(node, content);
 
                     symbols.push(Symbol {
-                        stable_id,
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Function,
+                            parent_scope,
+                            name,
+                        ),
                         language_id: LANGUAGE_ID.to_string(),
-                        kind: "function".to_string(),
+                        kind: SymbolKind::Function.kind_str().to_string(),
                         qualified_name: qname,
                         range: Some(self.node_location(node, file_path)),
                         normalized_signature: Some(sig),
@@ -554,21 +615,18 @@ impl TypeScriptAdapter {
             "class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = &content[name_node.byte_range()];
-                    let qname = if parent_scope.is_empty() {
-                        format!("{}::{}", file_path, name)
-                    } else {
-                        format!("{}::{}::{}", file_path, parent_scope, name)
-                    };
-
-                    let sig_hash = blake3::hash(name.as_bytes()).to_hex()[0..12].to_string();
-                    let stable_id =
-                        SymbolId::new(format!("{}#class:{}:{}", file_path, name, sig_hash));
+                    let qname = qualified_name(file_path, parent_scope, name);
                     let visibility = self.detect_visibility(node, content);
 
                     symbols.push(Symbol {
-                        stable_id,
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Class,
+                            parent_scope,
+                            name,
+                        ),
                         language_id: LANGUAGE_ID.to_string(),
-                        kind: "class".to_string(),
+                        kind: SymbolKind::Class.kind_str().to_string(),
                         qualified_name: qname.clone(),
                         range: Some(self.node_location(node, file_path)),
                         normalized_signature: Some(format!("class {}", name)),
@@ -579,7 +637,14 @@ impl TypeScriptAdapter {
                     if let Some(body) = node.child_by_field_name("body") {
                         let mut cursor = body.walk();
                         for child in body.children(&mut cursor) {
-                            self.collect_symbols(child, content, file_path, name, symbols);
+                            self.collect_symbols(
+                                child,
+                                content,
+                                file_path,
+                                name,
+                                child_depth,
+                                symbols,
+                            );
                         }
                     }
                     return;
@@ -590,17 +655,17 @@ impl TypeScriptAdapter {
                     let name = &content[name_node.byte_range()];
                     let qname = format!("{}::{}::{}", file_path, parent_scope, name);
                     let sig = self.compute_signature(node, content);
-                    let sig_hash = blake3::hash(sig.as_bytes()).to_hex()[0..12].to_string();
-                    let stable_id = SymbolId::new(format!(
-                        "{}#method:{}.{}:{}",
-                        file_path, parent_scope, name, sig_hash
-                    ));
                     let visibility = self.detect_member_visibility(node, content);
 
                     symbols.push(Symbol {
-                        stable_id,
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Method,
+                            parent_scope,
+                            name,
+                        ),
                         language_id: LANGUAGE_ID.to_string(),
-                        kind: "method".to_string(),
+                        kind: SymbolKind::Method.kind_str().to_string(),
                         qualified_name: qname,
                         range: Some(self.node_location(node, file_path)),
                         normalized_signature: Some(sig),
@@ -608,39 +673,86 @@ impl TypeScriptAdapter {
                     });
                 }
             }
+            // Interface / ambient member signatures: tracked as method
+            // symbols so member edits surface in semantic diff even
+            // though bodiless members carry no callable contract yet.
+            "method_signature" | "abstract_method_signature" => {
+                if !parent_scope.is_empty()
+                    && let Some(name_node) = node.child_by_field_name("name")
+                {
+                    let name = &content[name_node.byte_range()];
+                    let qname = format!("{}::{}::{}", file_path, parent_scope, name);
+                    let sig = self.compute_signature(node, content);
+
+                    symbols.push(Symbol {
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Method,
+                            parent_scope,
+                            name,
+                        ),
+                        language_id: LANGUAGE_ID.to_string(),
+                        kind: SymbolKind::Method.kind_str().to_string(),
+                        qualified_name: qname,
+                        range: Some(self.node_location(node, file_path)),
+                        normalized_signature: Some(sig),
+                        visibility: Visibility::Public,
+                    });
+                }
+            }
             "interface_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = &content[name_node.byte_range()];
-                    let qname = format!("{}::{}", file_path, name);
-                    let sig_hash = blake3::hash(name.as_bytes()).to_hex()[0..12].to_string();
-                    let stable_id =
-                        SymbolId::new(format!("{}#interface:{}:{}", file_path, name, sig_hash));
+                    let qname = qualified_name(file_path, parent_scope, name);
                     let visibility = self.detect_visibility(node, content);
 
                     symbols.push(Symbol {
-                        stable_id,
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Interface,
+                            parent_scope,
+                            name,
+                        ),
                         language_id: LANGUAGE_ID.to_string(),
-                        kind: "interface".to_string(),
+                        kind: SymbolKind::Interface.kind_str().to_string(),
                         qualified_name: qname,
                         range: Some(self.node_location(node, file_path)),
                         normalized_signature: Some(format!("interface {}", name)),
                         visibility,
                     });
+
+                    // Visit interface body for member signatures
+                    if let Some(body) = node.child_by_field_name("body") {
+                        let mut cursor = body.walk();
+                        for child in body.children(&mut cursor) {
+                            self.collect_symbols(
+                                child,
+                                content,
+                                file_path,
+                                name,
+                                child_depth,
+                                symbols,
+                            );
+                        }
+                    }
+                    return;
                 }
             }
             "type_alias_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = &content[name_node.byte_range()];
-                    let qname = format!("{}::{}", file_path, name);
-                    let sig_hash = blake3::hash(name.as_bytes()).to_hex()[0..12].to_string();
-                    let stable_id =
-                        SymbolId::new(format!("{}#type:{}:{}", file_path, name, sig_hash));
+                    let qname = qualified_name(file_path, parent_scope, name);
                     let visibility = self.detect_visibility(node, content);
 
                     symbols.push(Symbol {
-                        stable_id,
+                        stable_id: self.symbol_identity(
+                            file_path,
+                            SymbolKind::Type,
+                            parent_scope,
+                            name,
+                        ),
                         language_id: LANGUAGE_ID.to_string(),
-                        kind: "type".to_string(),
+                        kind: SymbolKind::Type.kind_str().to_string(),
                         qualified_name: qname,
                         range: Some(self.node_location(node, file_path)),
                         normalized_signature: Some(format!("type {}", name)),
@@ -648,12 +760,119 @@ impl TypeScriptAdapter {
                     });
                 }
             }
+            "enum_declaration" => {
+                // Module-level enums only (FR-005 stable scope).
+                if function_depth == 0
+                    && parent_scope.is_empty()
+                    && let Some(name_node) = node.child_by_field_name("name")
+                {
+                    let name = &content[name_node.byte_range()];
+                    let qname = qualified_name(file_path, "", name);
+                    let visibility = self.detect_visibility(node, content);
+
+                    symbols.push(Symbol {
+                        stable_id: self.symbol_identity(file_path, SymbolKind::Enum, "", name),
+                        language_id: LANGUAGE_ID.to_string(),
+                        kind: SymbolKind::Enum.kind_str().to_string(),
+                        qualified_name: qname,
+                        range: Some(self.node_location(node, file_path)),
+                        normalized_signature: Some(format!("enum {}", name)),
+                        visibility,
+                    });
+                }
+            }
+            "variable_declarator" => {
+                // Module-level named bindings only. Arrow/function values
+                // become callable symbols; plain values become variables.
+                if function_depth == 0
+                    && parent_scope.is_empty()
+                    && let Some(name_node) = node.child_by_field_name("name")
+                    && name_node.kind() == "identifier"
+                {
+                    let name = &content[name_node.byte_range()];
+                    let qname = qualified_name(file_path, "", name);
+                    let visibility = self.detect_declarator_visibility(node, content);
+                    let value_kind = node
+                        .child_by_field_name("value")
+                        .map(|v| v.kind().to_string());
+
+                    match value_kind.as_deref() {
+                        Some("arrow_function") => {
+                            if let Some(value) = node.child_by_field_name("value") {
+                                let sig = self.compute_arrow_signature(name, value, content);
+                                symbols.push(Symbol {
+                                    stable_id: self.symbol_identity(
+                                        file_path,
+                                        SymbolKind::Function,
+                                        "",
+                                        name,
+                                    ),
+                                    language_id: LANGUAGE_ID.to_string(),
+                                    kind: SymbolKind::Function.kind_str().to_string(),
+                                    qualified_name: qname,
+                                    range: Some(self.node_location(node, file_path)),
+                                    normalized_signature: Some(sig),
+                                    visibility,
+                                });
+                            }
+                        }
+                        Some("function_expression") => {
+                            if let Some(value) = node.child_by_field_name("value") {
+                                let sig = self.compute_signature(value, content);
+                                let named_sig = if let Some(rest) = sig.strip_prefix("anonymous") {
+                                    format!("{}{}", name, rest)
+                                } else {
+                                    sig
+                                };
+                                symbols.push(Symbol {
+                                    stable_id: self.symbol_identity(
+                                        file_path,
+                                        SymbolKind::Function,
+                                        "",
+                                        name,
+                                    ),
+                                    language_id: LANGUAGE_ID.to_string(),
+                                    kind: SymbolKind::Function.kind_str().to_string(),
+                                    qualified_name: qname,
+                                    range: Some(self.node_location(node, file_path)),
+                                    normalized_signature: Some(named_sig),
+                                    visibility,
+                                });
+                            }
+                        }
+                        _ => {
+                            let declarator_text = content[node.byte_range()].trim().to_string();
+                            symbols.push(Symbol {
+                                stable_id: self.symbol_identity(
+                                    file_path,
+                                    SymbolKind::Variable,
+                                    "",
+                                    name,
+                                ),
+                                language_id: LANGUAGE_ID.to_string(),
+                                kind: SymbolKind::Variable.kind_str().to_string(),
+                                qualified_name: qname,
+                                range: Some(self.node_location(node, file_path)),
+                                normalized_signature: Some(declarator_text),
+                                visibility,
+                            });
+                        }
+                    }
+                }
+            }
             _ => {}
         }
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.collect_symbols(child, content, file_path, parent_scope, symbols);
+            self.collect_symbols(
+                child,
+                content,
+                file_path,
+                parent_scope,
+                child_depth,
+                symbols,
+            );
         }
     }
 
@@ -710,7 +929,10 @@ impl TypeScriptAdapter {
             && let Some(name_node) = node.child_by_field_name("name")
         {
             let name = &content[name_node.byte_range()];
-            let class_symbol = SymbolId::new(format!("{}#class:{}", file_path, name));
+            // Identity MUST match the emitted class symbol exactly
+            // (identity/shape split: no signature hash), otherwise
+            // hierarchy edges dangle off placeholder nodes.
+            let class_symbol = self.symbol_identity(file_path, SymbolKind::Class, "", name);
 
             // Check heritage clauses (extends, implements)
             let mut cursor = node.walk();
@@ -767,29 +989,851 @@ impl TypeScriptAdapter {
         }
     }
 
+    /// Resolves deterministic `:overload:N` suffixes for symbols that
+    /// share one base identity (e.g. TS function overloads sharing a
+    /// name). Groups are ordered by normalized-signature bytes so
+    /// numbering is stable across runs and platforms.
+    fn disambiguate_overloads(&self, symbols: &mut [Symbol]) {
+        let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (idx, sym) in symbols.iter().enumerate() {
+            groups
+                .entry(sym.stable_id.as_str().to_string())
+                .or_default()
+                .push(idx);
+        }
+        for indices in groups.values() {
+            if indices.len() < 2 {
+                continue;
+            }
+            let mut ordered = indices.clone();
+            ordered.sort_by(|&a, &b| {
+                symbols[a]
+                    .normalized_signature
+                    .cmp(&symbols[b].normalized_signature)
+                    .then_with(|| symbols[a].range.cmp(&symbols[b].range))
+            });
+            for (rank, &sym_idx) in ordered.iter().enumerate() {
+                let base = symbols[sym_idx].stable_id.clone();
+                symbols[sym_idx].stable_id = overload_id(&base, rank);
+            }
+        }
+        // Keep emission order deterministic after renames.
+        symbols.sort_by(|a, b| {
+            a.stable_id
+                .cmp(&b.stable_id)
+                .then_with(|| a.qualified_name.cmp(&b.qualified_name))
+        });
+    }
+
+    /// Collects local import bindings: local name -> resolved module path.
+    fn collect_imported_names(
+        &self,
+        node: Node,
+        content: &str,
+        file_path: &str,
+    ) -> BTreeMap<String, String> {
+        let mut bindings = BTreeMap::new();
+        self.collect_imported_names_inner(node, content, file_path, &mut bindings);
+        bindings
+    }
+
+    fn collect_imported_names_inner(
+        &self,
+        node: Node,
+        content: &str,
+        file_path: &str,
+        bindings: &mut BTreeMap<String, String>,
+    ) {
+        if node.kind() == "import_statement" {
+            let source_node = node.child_by_field_name("source").or_else(|| {
+                let mut cursor = node.walk();
+                node.children(&mut cursor).find(|c| c.kind() == "string")
+            });
+            let resolved = source_node.map(|s| {
+                let spec = content[s.byte_range()].trim_matches('\'').trim_matches('"');
+                self.compiler_bridge
+                    .resolve_module_specifier(file_path, spec)
+            });
+            if let Some(target) = resolved {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "import_clause" {
+                        let mut c_cursor = child.walk();
+                        for clause_child in child.children(&mut c_cursor) {
+                            match clause_child.kind() {
+                                "identifier" => {
+                                    bindings.insert(
+                                        content[clause_child.byte_range()].to_string(),
+                                        target.clone(),
+                                    );
+                                }
+                                "named_imports" => {
+                                    let mut n_cursor = clause_child.walk();
+                                    for spec_node in clause_child.children(&mut n_cursor) {
+                                        if spec_node.kind() == "import_specifier" {
+                                            let local = spec_node
+                                                .child_by_field_name("alias")
+                                                .or_else(|| spec_node.child_by_field_name("name"));
+                                            if let Some(local) = local {
+                                                bindings.insert(
+                                                    content[local.byte_range()].to_string(),
+                                                    target.clone(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_imported_names_inner(child, content, file_path, bindings);
+        }
+    }
+
+    /// Collects `Calls` edges from call/new expressions.
+    ///
+    /// Resolution tiers (honest, syntactic):
+    /// - bare `f()` resolving to exactly one same-file function/variable
+    ///   symbol -> `Calls`, inherits file coverage, `call_expression:local`.
+    /// - `this.m()` inside class `C` with a matching emitted method ->
+    ///   `Calls`, `call_expression:this-method`.
+    /// - `new C()` matching a same-file class -> `Calls`,
+    ///   `new_expression:local-class`.
+    /// - callee bound via a static import resolving to exactly one symbol
+    ///   in the target module (via the global symbol index) -> `Calls`
+    ///   to the real symbol id with `call_expression:imported-resolved`
+    ///   provenance and inherited file coverage.
+    /// - callee bound via a static import but ambiguous or absent in the
+    ///   target module -> `Calls` to `symbol::{name}` with `Partial`
+    ///   coverage and `call_expression:imported-name` provenance
+    ///   (name-level only; binding is NOT resolved).
+    /// - member calls on opaque receivers (`obj.m()`), builtins and
+    ///   ambiguous bare names -> no edge (never invent targets).
+    #[allow(clippy::too_many_arguments)]
+    fn collect_call_edges(
+        &self,
+        root: Node,
+        content: &str,
+        file_path: &str,
+        file_symbol: &SymbolId,
+        file_symbols: &[Symbol],
+        symbol_index: &BTreeMap<String, SymbolId>,
+        coverage: CoverageState,
+        edges: &mut Vec<Edge>,
+    ) {
+        // Short-name -> symbol id for callable same-file symbols
+        // (functions + variables; methods need `this.`, classes need `new`).
+        let mut bare_callables: BTreeMap<String, Vec<SymbolId>> = BTreeMap::new();
+        let mut class_names: BTreeMap<String, SymbolId> = BTreeMap::new();
+        for sym in file_symbols {
+            let short = short_name(&sym.qualified_name).to_string();
+            match sym.kind.as_str() {
+                "function" | "variable" => {
+                    bare_callables
+                        .entry(short)
+                        .or_default()
+                        .push(sym.stable_id.clone());
+                }
+                "class" => {
+                    class_names.insert(short, sym.stable_id.clone());
+                }
+                _ => {}
+            }
+        }
+        let imported = self.collect_imported_names(root, content, file_path);
+        let (field_types, local_types) = self.collect_receiver_types(root, content);
+        let mut ctx = CallWalkContext {
+            enclosing: None,
+            enclosing_class: String::new(),
+        };
+        self.collect_call_edges_inner(
+            root,
+            content,
+            file_path,
+            file_symbol,
+            file_symbols,
+            &bare_callables,
+            &class_names,
+            &imported,
+            symbol_index,
+            &field_types,
+            &local_types,
+            coverage,
+            &mut ctx,
+            edges,
+        );
+        // Deterministic emission order.
+        edges.sort_by(|a, b| (&a.kind, &a.source, &a.target).cmp(&(&b.kind, &b.source, &b.target)));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_call_edges_inner(
+        &self,
+        node: Node,
+        content: &str,
+        file_path: &str,
+        file_symbol: &SymbolId,
+        file_symbols: &[Symbol],
+        bare_callables: &BTreeMap<String, Vec<SymbolId>>,
+        class_names: &BTreeMap<String, SymbolId>,
+        imported: &BTreeMap<String, String>,
+        symbol_index: &BTreeMap<String, SymbolId>,
+        field_types: &BTreeMap<(String, String), String>,
+        local_types: &BTreeMap<(String, String), String>,
+        coverage: CoverageState,
+        ctx: &mut CallWalkContext,
+        edges: &mut Vec<Edge>,
+    ) {
+        let kind = node.kind();
+
+        // Track enclosing callable scope + enclosing class for `this.`.
+        if matches!(
+            kind,
+            "function_declaration" | "generator_function_declaration" | "method_definition"
+        ) && let Some(name_node) = node.child_by_field_name("name")
+        {
+            let name = &content[name_node.byte_range()];
+            let row = node.start_position().row + 1;
+            if let Some(sym) = file_symbols.iter().find(|s| {
+                short_name(&s.qualified_name) == name
+                    && s.range.as_ref().map(|r| r.start_line) == Some(row as u32)
+            }) {
+                ctx.enclosing = Some(sym.stable_id.clone());
+            }
+        }
+        if kind == "class_declaration"
+            && let Some(name_node) = node.child_by_field_name("name")
+        {
+            ctx.enclosing_class = content[name_node.byte_range()].to_string();
+        }
+        if kind == "variable_declarator"
+            && let Some(name_node) = node.child_by_field_name("name")
+            && let Some(value) = node.child_by_field_name("value")
+            && matches!(value.kind(), "arrow_function" | "function_expression")
+        {
+            let name = &content[name_node.byte_range()];
+            let row = node.start_position().row + 1;
+            if let Some(sym) = file_symbols.iter().find(|s| {
+                short_name(&s.qualified_name) == name
+                    && s.range.as_ref().map(|r| r.start_line) == Some(row as u32)
+            }) {
+                ctx.enclosing = Some(sym.stable_id.clone());
+            }
+        }
+
+        if kind == "call_expression"
+            && let Some(func) = node.child_by_field_name("function")
+        {
+            // Skip `import(...)` (dynamic construct, handled in parse).
+            let func_text = &content[func.byte_range()];
+            if func_text != "import" {
+                self.emit_call_edge(
+                    func,
+                    false,
+                    content,
+                    file_path,
+                    file_symbol,
+                    file_symbols,
+                    bare_callables,
+                    class_names,
+                    imported,
+                    symbol_index,
+                    field_types,
+                    local_types,
+                    coverage,
+                    ctx,
+                    node,
+                    edges,
+                );
+            }
+        }
+        if kind == "new_expression" {
+            let ctor = node.child_by_field_name("constructor").or_else(|| {
+                let mut cursor = node.walk();
+                node.children(&mut cursor).next()
+            });
+            if let Some(ctor) = ctor {
+                self.emit_call_edge(
+                    ctor,
+                    true,
+                    content,
+                    file_path,
+                    file_symbol,
+                    file_symbols,
+                    bare_callables,
+                    class_names,
+                    imported,
+                    symbol_index,
+                    field_types,
+                    local_types,
+                    coverage,
+                    ctx,
+                    node,
+                    edges,
+                );
+            }
+        }
+
+        // Recurse with scope save/restore so siblings don't leak scope.
+        let saved_enclosing = ctx.enclosing.clone();
+        let saved_class = ctx.enclosing_class.clone();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_call_edges_inner(
+                child,
+                content,
+                file_path,
+                file_symbol,
+                file_symbols,
+                bare_callables,
+                class_names,
+                imported,
+                symbol_index,
+                field_types,
+                local_types,
+                coverage,
+                ctx,
+                edges,
+            );
+        }
+        // Function-like nodes own their scope; restore on exit.
+        if matches!(
+            kind,
+            "function_declaration"
+                | "generator_function_declaration"
+                | "method_definition"
+                | "arrow_function"
+                | "function_expression"
+                | "class_declaration"
+        ) {
+            ctx.enclosing = saved_enclosing;
+            ctx.enclosing_class = saved_class;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_call_edge(
+        &self,
+        func: Node,
+        is_ctor: bool,
+        content: &str,
+        file_path: &str,
+        file_symbol: &SymbolId,
+        file_symbols: &[Symbol],
+        bare_callables: &BTreeMap<String, Vec<SymbolId>>,
+        class_names: &BTreeMap<String, SymbolId>,
+        imported: &BTreeMap<String, String>,
+        symbol_index: &BTreeMap<String, SymbolId>,
+        field_types: &BTreeMap<(String, String), String>,
+        local_types: &BTreeMap<(String, String), String>,
+        coverage: CoverageState,
+        ctx: &CallWalkContext,
+        site: Node,
+        edges: &mut Vec<Edge>,
+    ) {
+        let source = ctx.enclosing.clone().unwrap_or_else(|| file_symbol.clone());
+
+        // Cross-file import resolution against the global symbol index:
+        // exactly one same-named symbol in the resolved target module
+        // links to the real id; zero or several keep the honest
+        // name-level reference.
+        let resolve_imported = |name: &str, module: &str| -> Option<SymbolId> {
+            let prefix = format!("{}::", module);
+            let mut candidates: Vec<&SymbolId> = symbol_index
+                .iter()
+                .filter(|(qname, _)| qname.starts_with(&prefix) && short_name(qname) == name)
+                .map(|(_, id)| id)
+                .collect();
+            candidates.sort();
+            candidates.dedup();
+            if candidates.len() == 1 {
+                Some(candidates[0].clone())
+            } else {
+                None
+            }
+        };
+
+        // Resolve target (tiered, honest).
+        let (target, target_coverage, provenance): (Option<SymbolId>, CoverageState, String) =
+            match func.kind() {
+                "identifier" => {
+                    let name = &content[func.byte_range()];
+                    if is_ctor {
+                        if let Some(class_id) = class_names.get(name) {
+                            (
+                                Some(class_id.clone()),
+                                coverage,
+                                "new_expression:local-class".to_string(),
+                            )
+                        } else if let Some(module) = imported.get(name) {
+                            match resolve_imported(name, module) {
+                                Some(real) => (
+                                    Some(real),
+                                    coverage,
+                                    format!("new_expression:imported-resolved:{}", module),
+                                ),
+                                None => (
+                                    Some(SymbolId::new(format!("symbol::{}", name))),
+                                    CoverageState::Partial,
+                                    format!("new_expression:imported-name:{}", module),
+                                ),
+                            }
+                        } else {
+                            (None, coverage, String::new())
+                        }
+                    } else if let Some(cands) = bare_callables.get(name)
+                        && cands.len() == 1
+                    {
+                        (
+                            Some(cands[0].clone()),
+                            coverage,
+                            "call_expression:local".to_string(),
+                        )
+                    } else if let Some(module) = imported.get(name) {
+                        match resolve_imported(name, module) {
+                            Some(real) => (
+                                Some(real),
+                                coverage,
+                                format!("call_expression:imported-resolved:{}", module),
+                            ),
+                            None => (
+                                Some(SymbolId::new(format!("symbol::{}", name))),
+                                CoverageState::Partial,
+                                format!("call_expression:imported-name:{}", module),
+                            ),
+                        }
+                    } else {
+                        (None, coverage, String::new())
+                    }
+                }
+                "member_expression" => {
+                    let object = func.child_by_field_name("object");
+                    let property = func.child_by_field_name("property");
+                    match (object, property) {
+                        (Some(obj), Some(prop))
+                            if obj.kind() == "this"
+                                && prop.kind() != "private_property_identifier"
+                                && !ctx.enclosing_class.is_empty() =>
+                        {
+                            // `this.method()` within a class.
+                            let method = &content[prop.byte_range()];
+                            let method_id = stable_symbol_id(
+                                file_path,
+                                SymbolKind::Method,
+                                &ctx.enclosing_class,
+                                method,
+                            );
+                            // Only link when the method was actually emitted
+                            // (overload suffixes included); never invent ids.
+                            let known = edges
+                                .iter()
+                                .any(|e| e.target == method_id && e.kind == EdgeKind::Contains);
+                            if known {
+                                (
+                                    Some(method_id),
+                                    coverage,
+                                    "call_expression:this-method".to_string(),
+                                )
+                            } else {
+                                (None, coverage, String::new())
+                            }
+                        }
+                        (Some(obj), Some(prop)) => {
+                            // Typed receivers: `this.field.method()` via the
+                            // field's declared class, or `local.method()`
+                            // via an annotated / `new`-bound local.
+                            let obj_text = &content[obj.byte_range()];
+                            let method = &content[prop.byte_range()];
+                            if prop.kind() == "private_property_identifier"
+                                || method.is_empty()
+                                || method.contains(|c: char| {
+                                    !c.is_alphanumeric() && c != '_' && c != '$'
+                                })
+                            {
+                                (None, coverage, String::new())
+                            } else {
+                                let receiver_type = if let Some(field) =
+                                    obj_text.strip_prefix("this.").and_then(|f| {
+                                        // `this.a.b` chains stay unresolved.
+                                        if f.contains('.') {
+                                            None
+                                        } else {
+                                            field_types
+                                                .get(&(ctx.enclosing_class.clone(), f.to_string()))
+                                        }
+                                    }) {
+                                    Some(field.clone())
+                                } else if !obj_text.contains('.') {
+                                    let fn_key = Self::enclosing_fn_key(&ctx.enclosing);
+                                    local_types.get(&(fn_key, obj_text.to_string())).cloned()
+                                } else {
+                                    None
+                                };
+                                match receiver_type.and_then(|ty| {
+                                    self.resolve_class_symbol(
+                                        &ty,
+                                        file_path,
+                                        file_symbols,
+                                        symbol_index,
+                                        imported,
+                                    )
+                                }) {
+                                    Some((_, class_file, class_name)) => {
+                                        let method_id = stable_symbol_id(
+                                            &class_file,
+                                            SymbolKind::Method,
+                                            &class_name,
+                                            method,
+                                        );
+                                        let known =
+                                            symbol_index.values().any(|id| id == &method_id)
+                                                || file_symbols
+                                                    .iter()
+                                                    .any(|s| s.stable_id == method_id);
+                                        if known {
+                                            (
+                                                Some(method_id),
+                                                coverage,
+                                                "call_expression:typed-receiver".to_string(),
+                                            )
+                                        } else {
+                                            (None, coverage, String::new())
+                                        }
+                                    }
+                                    None => (None, coverage, String::new()),
+                                }
+                            }
+                        }
+                        _ => (None, coverage, String::new()),
+                    }
+                }
+                _ => (None, coverage, String::new()),
+            };
+
+        if let Some(target) = target
+            && target != source
+        {
+            edges.push(Edge {
+                source,
+                target,
+                kind: EdgeKind::Calls,
+                coverage: target_coverage,
+                location: Some(self.node_location(site, file_path)),
+                provenance,
+            });
+        }
+    }
+
+    /// Collects declared receiver types for member-call resolution.
+    ///
+    /// Returns `(field_types, local_types)` where `field_types` maps
+    /// `(class, field) -> type name` (property declarations + constructor
+    /// parameter properties) and `local_types` maps
+    /// `(enclosing_function_name, binding) -> type name` (annotated
+    /// parameters, annotated declarators, `new C(...)` initializers).
+    /// Only plain-identifier annotations are honored; generics, unions
+    /// and computed shapes stay unresolved (honest syntactic scope).
+    fn collect_receiver_types(&self, root: Node, content: &str) -> (ReceiverMap, ReceiverMap) {
+        let mut fields = BTreeMap::new();
+        let mut locals = BTreeMap::new();
+        self.collect_receiver_types_inner(root, content, "", "", &mut fields, &mut locals);
+        (fields, locals)
+    }
+
+    fn collect_receiver_types_inner(
+        &self,
+        node: Node,
+        content: &str,
+        enclosing_class: &str,
+        enclosing_fn: &str,
+        fields: &mut BTreeMap<(String, String), String>,
+        locals: &mut BTreeMap<(String, String), String>,
+    ) {
+        let kind = node.kind();
+        let mut next_class = enclosing_class.to_string();
+        let mut next_fn = enclosing_fn.to_string();
+
+        if kind == "class_declaration"
+            && let Some(name_node) = node.child_by_field_name("name")
+        {
+            next_class = content[name_node.byte_range()].to_string();
+        }
+        if matches!(
+            kind,
+            "function_declaration"
+                | "generator_function_declaration"
+                | "function_signature"
+                | "method_definition"
+        ) && let Some(name_node) = node.child_by_field_name("name")
+        {
+            next_fn = content[name_node.byte_range()].to_string();
+            // Annotated parameters: `controller: UserController`.
+            if let Some(params) = node.child_by_field_name("parameters") {
+                let mut cursor = params.walk();
+                for param in params.children(&mut cursor) {
+                    if !matches!(param.kind(), "required_parameter" | "optional_parameter") {
+                        continue;
+                    }
+                    // Constructor parameter properties declare fields.
+                    let is_field = {
+                        let mut pc = param.walk();
+                        param
+                            .children(&mut pc)
+                            .any(|c| c.kind() == "accessibility_modifier")
+                    };
+                    let Some(pat) = param
+                        .child_by_field_name("pattern")
+                        .or_else(|| param.child_by_field_name("name"))
+                    else {
+                        continue;
+                    };
+                    let binding = content[pat.byte_range()].trim().to_string();
+                    if binding.is_empty()
+                        || binding.contains(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                    {
+                        continue;
+                    }
+                    if let Some(ty) = self.plain_type_name(param, content) {
+                        if is_field && !next_class.is_empty() {
+                            fields.insert((next_class.clone(), binding.clone()), ty.clone());
+                        }
+                        locals.insert((next_fn.clone(), binding), ty);
+                    }
+                }
+            }
+        }
+        // Class field declarations: `private userService: UserService;`
+        if kind == "property_definition"
+            && !enclosing_class.is_empty()
+            && let Some(name_node) = node.child_by_field_name("name")
+            && let Some(ty) = self.plain_type_name(node, content)
+        {
+            let field = content[name_node.byte_range()].to_string();
+            fields.insert((enclosing_class.to_string(), field), ty);
+        }
+        // `const x: C = ...` and `const x = new C(...)` bindings.
+        if kind == "variable_declarator"
+            && let Some(name_node) = node.child_by_field_name("name")
+            && name_node.kind() == "identifier"
+        {
+            let binding = content[name_node.byte_range()].to_string();
+            let mut ty = self.plain_type_name(node, content);
+            if ty.is_none()
+                && let Some(value) = node.child_by_field_name("value")
+                && value.kind() == "new_expression"
+                && let Some(ctor) = value.child_by_field_name("constructor").or_else(|| {
+                    let mut vc = value.walk();
+                    value.children(&mut vc).next()
+                })
+                && ctor.kind() == "identifier"
+            {
+                ty = Some(content[ctor.byte_range()].to_string());
+            }
+            if let Some(ty) = ty {
+                locals.insert((next_fn.clone(), binding), ty);
+            }
+        }
+        // Arrow-function parameters: `(controller: UserController) => ...`
+        if kind == "arrow_function" {
+            // Name arrows by their declarator below; parameters handled
+            // when the declarator scope resolves. Best effort: record
+            // under the enclosing function scope.
+            if let Some(params) = node.child_by_field_name("parameters") {
+                let mut cursor = params.walk();
+                for param in params.children(&mut cursor) {
+                    if !matches!(param.kind(), "required_parameter" | "optional_parameter") {
+                        continue;
+                    }
+                    let Some(pat) = param
+                        .child_by_field_name("pattern")
+                        .or_else(|| param.child_by_field_name("name"))
+                    else {
+                        continue;
+                    };
+                    let binding = content[pat.byte_range()].trim().to_string();
+                    if let Some(ty) = self.plain_type_name(param, content) {
+                        locals.insert((next_fn.clone(), binding), ty);
+                    }
+                }
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_receiver_types_inner(
+                child,
+                content,
+                &next_class,
+                &next_fn,
+                fields,
+                locals,
+            );
+        }
+    }
+
+    /// Extracts a plain identifier type name from a `type_annotation`
+    /// child (`: UserService`). Returns None for anything composite.
+    fn plain_type_name(&self, node: Node, content: &str) -> Option<String> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "type_annotation" {
+                let mut tc = child.walk();
+                for ty in child.children(&mut tc) {
+                    if ty.kind() == "type_identifier" {
+                        return Some(content[ty.byte_range()].to_string());
+                    }
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Resolves a class name to its emitted class symbol: same-file
+    /// first, then the import-bound module, then a unique global match.
+    /// Returns None on ambiguity (never guess across files).
+    fn resolve_class_symbol(
+        &self,
+        class_name: &str,
+        file_path: &str,
+        file_symbols: &[Symbol],
+        symbol_index: &BTreeMap<String, SymbolId>,
+        imported: &BTreeMap<String, String>,
+    ) -> Option<(SymbolId, String, String)> {
+        // 1. Same-file class.
+        let same_file = stable_symbol_id(file_path, SymbolKind::Class, "", class_name);
+        if file_symbols.iter().any(|s| s.stable_id == same_file) {
+            return Some((same_file, file_path.to_string(), class_name.to_string()));
+        }
+        // 2. Import-bound module: the local binding names the class.
+        if let Some(module) = imported.get(class_name) {
+            let qname = format!("{}::{}", module, class_name);
+            if let Some(id) = symbol_index.get(&qname) {
+                return Some((id.clone(), module.clone(), class_name.to_string()));
+            }
+        }
+        // 3. Unique global class match (file recovered from the
+        // qualified name, never by splitting the identity string).
+        let mut matches: Vec<(String, SymbolId)> = symbol_index
+            .iter()
+            .filter(|(qname, id)| {
+                id.as_str().contains(&format!("#class:{}", class_name))
+                    && short_name(qname) == class_name
+            })
+            .map(|(qname, id)| (qname.clone(), id.clone()))
+            .collect();
+        matches.sort();
+        matches.dedup();
+        if matches.len() == 1 {
+            let (qname, id) = matches[0].clone();
+            // Qualified names are `file::Name`; file paths never
+            // contain `::`, so the file is everything but the tail.
+            let mut parts: Vec<&str> = qname.split("::").collect();
+            if parts.len() >= 2 {
+                parts.pop();
+                return Some((id, parts.join("::"), class_name.to_string()));
+            }
+        }
+        None
+    }
+
+    /// Derives the receiver-type lookup key from an enclosing symbol id
+    /// (`path#fn:handleCreate` -> `handleCreate`,
+    /// `path#method:C.run` -> `run`).
+    fn enclosing_fn_key(enclosing: &Option<SymbolId>) -> String {
+        if let Some(id) = enclosing {
+            let s = id.as_str();
+            let after_hash = s.split('#').nth(1).unwrap_or(s);
+            let after_colon = after_hash.split(':').nth(1).unwrap_or(after_hash);
+            let base = after_colon.rsplit('.').next().unwrap_or(after_colon);
+            base.split(':').next().unwrap_or(base).to_string()
+        } else {
+            String::new()
+        }
+    }
+    fn compute_arrow_signature(&self, name: &str, arrow: Node, content: &str) -> String {
+        let params = arrow
+            .child_by_field_name("parameters")
+            .map(|p| content[p.byte_range()].trim().to_string())
+            .unwrap_or_else(|| "()".to_string());
+        let params = if params.starts_with('(') {
+            params
+        } else {
+            format!("({})", params)
+        };
+        let return_type = arrow
+            .child_by_field_name("return_type")
+            .map(|r| {
+                format!(
+                    ": {}",
+                    content[r.byte_range()]
+                        .trim()
+                        .trim_start_matches(':')
+                        .trim()
+                )
+            })
+            .unwrap_or_default();
+        format!("{}{}{}", name, params, return_type)
+    }
+
+    /// Visibility for module-level declarators: exported -> Public.
+    fn detect_declarator_visibility(&self, node: Node, _content: &str) -> Visibility {
+        let mut current = node.parent();
+        while let Some(parent) = current {
+            if parent.kind() == "export_statement" {
+                return Visibility::Public;
+            }
+            // Stop at statement boundaries; only direct export wrappers count.
+            if matches!(
+                parent.kind(),
+                "program" | "lexical_declaration" | "variable_statement" | "export_statement"
+            ) {
+                current = parent.parent();
+            } else {
+                break;
+            }
+        }
+        Visibility::Internal
+    }
+
     fn collect_contracts(
         &self,
         node: Node,
         content: &str,
         file_path: &str,
         parent_scope: &str,
+        function_depth: u32,
         contracts: &mut Vec<Contract>,
     ) {
         let kind = node.kind();
+        let child_depth = match kind {
+            "function_declaration"
+            | "function_signature"
+            | "generator_function_declaration"
+            | "method_definition"
+            | "arrow_function"
+            | "function_expression" => function_depth + 1,
+            _ => function_depth,
+        };
 
-        if kind == "function_declaration" || kind == "method_definition" {
+        if kind == "function_declaration"
+            || kind == "function_signature"
+            || kind == "generator_function_declaration"
+            || kind == "method_definition"
+        {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = &content[name_node.byte_range()];
-                let sig = self.compute_signature(node, content);
-                let sig_hash = blake3::hash(sig.as_bytes()).to_hex()[0..12].to_string();
 
                 let owner = if parent_scope.is_empty() {
-                    SymbolId::new(format!("{}#fn:{}:{}", file_path, name, sig_hash))
+                    self.symbol_identity(file_path, SymbolKind::Function, "", name)
                 } else {
-                    SymbolId::new(format!(
-                        "{}#method:{}.{}:{}",
-                        file_path, parent_scope, name, sig_hash
-                    ))
+                    self.symbol_identity(file_path, SymbolKind::Method, parent_scope, name)
                 };
 
                 let visibility = if kind == "method_definition" {
@@ -808,6 +1852,27 @@ impl TypeScriptAdapter {
                     effects: Vec::new(),
                 });
             }
+        } else if kind == "variable_declarator"
+            && function_depth == 0
+            && parent_scope.is_empty()
+            && let Some(name_node) = node.child_by_field_name("name")
+            && name_node.kind() == "identifier"
+            && let Some(value) = node.child_by_field_name("value")
+            && matches!(value.kind(), "arrow_function" | "function_expression")
+        {
+            // Callable bindings carry contracts under the same identity
+            // as their emitted function symbol so compat joins align.
+            let name = &content[name_node.byte_range()];
+            let owner = self.symbol_identity(file_path, SymbolKind::Function, "", name);
+            let visibility = self.detect_declarator_visibility(node, content);
+            let (inputs, output) = self.extract_parameter_and_return_types(value, content);
+            contracts.push(Contract {
+                owner,
+                visibility,
+                inputs,
+                output,
+                effects: Vec::new(),
+            });
         } else if kind == "class_declaration"
             && let Some(name_node) = node.child_by_field_name("name")
         {
@@ -815,7 +1880,7 @@ impl TypeScriptAdapter {
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    self.collect_contracts(child, content, file_path, name, contracts);
+                    self.collect_contracts(child, content, file_path, name, child_depth, contracts);
                 }
             }
             return;
@@ -823,7 +1888,14 @@ impl TypeScriptAdapter {
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.collect_contracts(child, content, file_path, parent_scope, contracts);
+            self.collect_contracts(
+                child,
+                content,
+                file_path,
+                parent_scope,
+                child_depth,
+                contracts,
+            );
         }
     }
 
@@ -867,7 +1939,15 @@ impl TypeScriptAdapter {
 
         let return_type = node
             .child_by_field_name("return_type")
-            .map(|r| format!(": {}", &content[r.byte_range()]))
+            .map(|r| {
+                format!(
+                    ": {}",
+                    content[r.byte_range()]
+                        .trim()
+                        .trim_start_matches(':')
+                        .trim()
+                )
+            })
             .unwrap_or_default();
 
         format!("{name}{params}{return_type}")
@@ -1260,5 +2340,423 @@ mod tests {
         assert!(!parsed.syntax_valid);
         assert!(!parsed.diagnostics.is_empty());
         assert_eq!(parsed.coverage, CoverageState::Partial);
+    }
+
+    fn test_file_unit(path: &str) -> FileUnit {
+        FileUnit {
+            path: path.to_string(),
+            language: "typescript".to_string(),
+            content_hash: "test".to_string(),
+            is_generated: false,
+        }
+    }
+
+    fn symbol_index_of(symbols: &[Symbol]) -> BTreeMap<String, SymbolId> {
+        let mut index = BTreeMap::new();
+        for s in symbols {
+            index.insert(s.qualified_name.clone(), s.stable_id.clone());
+        }
+        index
+    }
+
+    #[test]
+    fn test_identity_stable_across_signature_edit() {
+        // Forensic core: adding a required parameter (the breaking-change
+        // event) must preserve identity so diff/compat paths fire.
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/svc.ts");
+
+        let before = "export function create(name: string): string { return name; }";
+        let after =
+            "export function create(name: string, tenantId: string): string { return name; }";
+
+        let parsed_b = adapter.parse(&ctx, &file, before).unwrap();
+        let syms_b = adapter.extract_symbols(&parsed_b).unwrap();
+        let parsed_a = adapter.parse(&ctx, &file, after).unwrap();
+        let syms_a = adapter.extract_symbols(&parsed_a).unwrap();
+
+        assert_eq!(syms_b.len(), 1);
+        assert_eq!(syms_a.len(), 1);
+        assert_eq!(syms_b[0].stable_id, syms_a[0].stable_id);
+        assert_eq!(syms_b[0].stable_id.as_str(), "src/svc.ts#fn:create");
+        assert_ne!(
+            syms_b[0].normalized_signature,
+            syms_a[0].normalized_signature
+        );
+
+        let contracts_b = adapter.extract_contracts(&parsed_b).unwrap();
+        let contracts_a = adapter.extract_contracts(&parsed_a).unwrap();
+        assert_eq!(contracts_b.len(), 1);
+        assert_eq!(contracts_a.len(), 1);
+        assert_eq!(contracts_b[0].owner, contracts_a[0].owner);
+        assert_ne!(contracts_b[0].inputs, contracts_a[0].inputs);
+    }
+
+    #[test]
+    fn test_call_edges_local_this_and_new() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/svc.ts");
+
+        let source = r#"
+export function hashPassword(raw: string): string { return raw; }
+export function createUser(name: string): string { return hashPassword(name); }
+export class Service {
+    public run(): string { return this.helper(); }
+    private helper(): string { return "ok"; }
+}
+export function boot(): Service { return new Service(); }
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let symbols = adapter.extract_symbols(&parsed).unwrap();
+        let index = symbol_index_of(&symbols);
+        let edges = adapter.extract_edges(&parsed, &index).unwrap();
+        let calls: Vec<&Edge> = edges.iter().filter(|e| e.kind == EdgeKind::Calls).collect();
+
+        let has = |src: &str, dst: &str| {
+            calls.iter().any(|e| {
+                e.source.as_str() == src
+                    && e.target.as_str() == dst
+                    && e.coverage == CoverageState::Verified
+            })
+        };
+
+        // Bare local call: createUser -> hashPassword
+        assert!(
+            has("src/svc.ts#fn:createUser", "src/svc.ts#fn:hashPassword"),
+            "missing local call edge: {:?}",
+            calls
+        );
+        // this.method call inside class
+        assert!(
+            has(
+                "src/svc.ts#method:Service.run",
+                "src/svc.ts#method:Service.helper"
+            ),
+            "missing this-method call edge: {:?}",
+            calls
+        );
+        // Constructor call
+        assert!(
+            has("src/svc.ts#fn:boot", "src/svc.ts#class:Service"),
+            "missing constructor call edge: {:?}",
+            calls
+        );
+        // Provenance honesty preserved
+        assert!(calls.iter().all(|e| !e.provenance.is_empty()));
+    }
+
+    #[test]
+    fn test_call_edges_imported_name_is_partial() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/controller.ts");
+
+        let source = r#"
+import { createUser } from "./svc";
+export function handleCreate(): string { return createUser("a"); }
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let symbols = adapter.extract_symbols(&parsed).unwrap();
+        let index = symbol_index_of(&symbols);
+        let edges = adapter.extract_edges(&parsed, &index).unwrap();
+
+        let imported_call = edges
+            .iter()
+            .find(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source.as_str() == "src/controller.ts#fn:handleCreate"
+                    && e.target.as_str() == "symbol::createUser"
+            })
+            .expect("imported-name call edge must exist");
+        // Cross-file binding is NOT resolved: name-level only, Partial.
+        assert_eq!(imported_call.coverage, CoverageState::Partial);
+        assert!(
+            imported_call
+                .provenance
+                .starts_with("call_expression:imported-name:"),
+            "provenance must record imported module: {}",
+            imported_call.provenance
+        );
+    }
+
+    #[test]
+    fn test_call_edges_imported_resolved_via_global_index() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+
+        // Target module symbols, as the CLI two-phase pipeline would index them.
+        let svc_file = test_file_unit("src/svc.ts");
+        let svc_source = r#"
+export function createUser(name: string): string { return name; }
+"#;
+        let parsed_svc = adapter.parse(&ctx, &svc_file, svc_source).unwrap();
+        let svc_symbols = adapter.extract_symbols(&parsed_svc).unwrap();
+
+        let ctl_file = test_file_unit("src/controller.ts");
+        let ctl_source = r#"
+import { createUser } from "./svc";
+export function handleCreate(): string { return createUser("a"); }
+"#;
+        let parsed_ctl = adapter.parse(&ctx, &ctl_file, ctl_source).unwrap();
+        let ctl_symbols = adapter.extract_symbols(&parsed_ctl).unwrap();
+
+        let mut index = symbol_index_of(&svc_symbols);
+        for s in &ctl_symbols {
+            index.insert(s.qualified_name.clone(), s.stable_id.clone());
+        }
+
+        let edges = adapter.extract_edges(&parsed_ctl, &index).unwrap();
+        let resolved = edges
+            .iter()
+            .find(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source.as_str() == "src/controller.ts#fn:handleCreate"
+            })
+            .expect("cross-file call edge must exist");
+        // Real target identity, inherited file coverage, honest provenance.
+        assert_eq!(resolved.target.as_str(), "src/svc.ts#fn:createUser");
+        assert_eq!(resolved.coverage, CoverageState::Verified);
+        assert!(
+            resolved
+                .provenance
+                .starts_with("call_expression:imported-resolved:"),
+            "provenance must record resolution: {}",
+            resolved.provenance
+        );
+    }
+
+    #[test]
+    fn test_call_edges_typed_receivers_di_field_and_param() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+
+        // Service module.
+        let svc_file = test_file_unit("src/services/userService.ts");
+        let svc_source = r#"
+export class UserService {
+    public createUser(name: string): string { return name; }
+}
+"#;
+        let parsed_svc = adapter.parse(&ctx, &svc_file, svc_source).unwrap();
+        let svc_symbols = adapter.extract_symbols(&parsed_svc).unwrap();
+
+        // Controller with constructor-injected typed field.
+        let ctl_file = test_file_unit("src/controllers/userController.ts");
+        let ctl_source = r#"
+import { UserService } from '../services/userService';
+export class UserController {
+    constructor(private userService: UserService) {}
+    public handleCreate(): string {
+        return this.userService.createUser("a");
+    }
+}
+"#;
+        let parsed_ctl = adapter.parse(&ctx, &ctl_file, ctl_source).unwrap();
+
+        // Route handler with annotated parameter receiver.
+        let route_file = test_file_unit("src/routes/userRoutes.ts");
+        let route_source = r#"
+import { UserController } from '../controllers/userController';
+export function routeRequest(controller: UserController): string {
+    return controller.handleCreate();
+}
+"#;
+        let parsed_route = adapter.parse(&ctx, &route_file, route_source).unwrap();
+
+        let mut index = symbol_index_of(&svc_symbols);
+        for s in adapter.extract_symbols(&parsed_ctl).unwrap() {
+            index.insert(s.qualified_name.clone(), s.stable_id.clone());
+        }
+        for s in adapter.extract_symbols(&parsed_route).unwrap() {
+            index.insert(s.qualified_name.clone(), s.stable_id.clone());
+        }
+
+        let ctl_edges = adapter.extract_edges(&parsed_ctl, &index).unwrap();
+        let di_edge = ctl_edges
+            .iter()
+            .find(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source.as_str()
+                        == "src/controllers/userController.ts#method:UserController.handleCreate"
+            })
+            .expect("DI field call edge must exist");
+        assert_eq!(
+            di_edge.target.as_str(),
+            "src/services/userService.ts#method:UserService.createUser"
+        );
+        assert_eq!(di_edge.provenance, "call_expression:typed-receiver");
+
+        let route_edges = adapter.extract_edges(&parsed_route, &index).unwrap();
+        let param_edge = route_edges
+            .iter()
+            .find(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source.as_str() == "src/routes/userRoutes.ts#fn:routeRequest"
+            })
+            .expect("annotated-param call edge must exist");
+        assert_eq!(
+            param_edge.target.as_str(),
+            "src/controllers/userController.ts#method:UserController.handleCreate"
+        );
+        assert_eq!(param_edge.provenance, "call_expression:typed-receiver");
+    }
+
+    #[test]
+    fn test_call_edges_untyped_receiver_stays_silent() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/loose.ts");
+
+        // `any`-flavored and untyped receivers must not invent targets.
+        let source = r#"
+export function run(store: any): void {
+    store.save();
+}
+export function run2(helper): void {
+    helper.work();
+}
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let edges = adapter.extract_edges(&parsed, &BTreeMap::new()).unwrap();
+        assert!(
+            edges.iter().all(|e| e.kind != EdgeKind::Calls),
+            "untyped receivers must yield no call edges: {:?}",
+            edges
+        );
+    }
+
+    #[test]
+    fn test_call_edges_ambiguous_import_stays_partial() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+
+        // Two same-named symbols in the target module: overloads share one
+        // qualified name but the index keeps a single entry; an unrelated
+        // same-name collision must not resolve silently either.
+        let mut index = BTreeMap::new();
+        index.insert(
+            "src/svc.ts::createUser".to_string(),
+            SymbolId::new("src/svc.ts#fn:createUser"),
+        );
+        index.insert(
+            "src/svc.ts::helper::createUser".to_string(),
+            SymbolId::new("src/svc.ts#fn:helper:createUser"),
+        );
+
+        let ctl_file = test_file_unit("src/controller.ts");
+        let ctl_source = r#"
+import { createUser } from "./svc";
+export function handleCreate(): string { return createUser("a"); }
+"#;
+        let parsed_ctl = adapter.parse(&ctx, &ctl_file, ctl_source).unwrap();
+        let edges = adapter.extract_edges(&parsed_ctl, &index).unwrap();
+        let edge = edges
+            .iter()
+            .find(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source.as_str() == "src/controller.ts#fn:handleCreate"
+            })
+            .expect("call edge must exist");
+        assert_eq!(edge.target.as_str(), "symbol::createUser");
+        assert_eq!(edge.coverage, CoverageState::Partial);
+    }
+
+    #[test]
+    fn test_variable_enum_arrow_symbols_module_scope_only() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/defs.ts");
+
+        let source = r#"
+export const MAX_RETRIES = 3;
+export const hash = (raw: string): string => raw;
+export enum Role { Admin, User }
+export function outer(): number {
+    const innerLocal = 1;
+    return innerLocal;
+}
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let symbols = adapter.extract_symbols(&parsed).unwrap();
+        let ids: Vec<&str> = symbols.iter().map(|s| s.stable_id.as_str()).collect();
+
+        assert!(ids.contains(&"src/defs.ts#variable:MAX_RETRIES"));
+        assert!(ids.contains(&"src/defs.ts#fn:hash"));
+        assert!(ids.contains(&"src/defs.ts#enum:Role"));
+        assert!(ids.contains(&"src/defs.ts#fn:outer"));
+        // Function-body locals must never leak into module scope.
+        assert!(
+            !ids.iter().any(|id| id.contains("innerLocal")),
+            "locals leaked: {:?}",
+            ids
+        );
+        // Arrow binding carries a callable contract under the same identity.
+        let contracts = adapter.extract_contracts(&parsed).unwrap();
+        let arrow_contract = contracts
+            .iter()
+            .find(|c| c.owner.as_str() == "src/defs.ts#fn:hash")
+            .expect("arrow binding must carry a contract");
+        assert_eq!(arrow_contract.inputs, vec!["raw: string".to_string()]);
+    }
+
+    #[test]
+    fn test_overload_disambiguation_deterministic() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/over.ts");
+
+        let source = r#"
+export function get(id: string): string;
+export function get(id: number): string;
+export function get(id: unknown): string { return String(id); }
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let first = adapter.extract_symbols(&parsed).unwrap();
+        let second = adapter.extract_symbols(&parsed).unwrap();
+        assert_eq!(first, second, "overload numbering must be deterministic");
+
+        let mut ids: Vec<&str> = first.iter().map(|s| s.stable_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                "src/over.ts#fn:get",
+                "src/over.ts#fn:get:overload:2",
+                "src/over.ts#fn:get:overload:3",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hierarchy_source_joins_emitted_class_symbol() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let file = test_file_unit("src/dog.ts");
+
+        let source = r#"
+export class Dog extends Animal {
+    public bark(): string { return "woof"; }
+}
+"#;
+        let parsed = adapter.parse(&ctx, &file, source).unwrap();
+        let symbols = adapter.extract_symbols(&parsed).unwrap();
+        let class_id = symbols
+            .iter()
+            .find(|s| s.kind == "class")
+            .expect("class symbol must exist")
+            .stable_id
+            .clone();
+        assert_eq!(class_id.as_str(), "src/dog.ts#class:Dog");
+
+        let index = symbol_index_of(&symbols);
+        let edges = adapter.extract_edges(&parsed, &index).unwrap();
+        assert!(
+            edges.iter().any(|e| e.kind == EdgeKind::Inherits
+                && e.source == class_id
+                && e.target.as_str() == "symbol::Animal"),
+            "hierarchy edge must originate at the real class symbol"
+        );
     }
 }

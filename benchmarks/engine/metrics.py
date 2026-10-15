@@ -3,8 +3,7 @@ Metrics computation module for Synevid Phase 6 benchmark harness.
 Computes Recall, Precision, F1, FN, FP, Tool Calls, Tokens, Time, and failure class detection.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from dataclasses import dataclass
 
 
 @dataclass
@@ -13,8 +12,8 @@ class TaskResult:
     baseline: str
     category: str
     is_held_out: bool
-    predicted_symbols: Set[str]
-    ground_truth_symbols: Set[str]
+    predicted_symbols: set[str]
+    ground_truth_symbols: set[str]
     true_positives: int
     false_positives: int
     false_negatives: int
@@ -24,11 +23,11 @@ class TaskResult:
     tool_calls: int
     tokens: int
     time_ms: float
-    detected_failure_classes: List[str]
-    missed_failure_classes: List[str]
+    detected_failure_classes: list[str]
+    missed_failure_classes: list[str]
     notes: str = ""
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "task_id": self.task_id,
             "baseline": self.baseline,
@@ -70,7 +69,7 @@ class AggregateMetrics:
     failure_classes_detected: int
     failure_classes_missed: int
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "baseline": self.baseline,
             "task_count": self.task_count,
@@ -96,13 +95,13 @@ def compute_task_metrics(
     baseline: str,
     category: str,
     is_held_out: bool,
-    predicted: Set[str],
-    ground_truth: Set[str],
+    predicted: set[str],
+    ground_truth: set[str],
     tool_calls: int,
     tokens: int,
     time_ms: float,
-    expected_failure_classes: List[str],
-    detected_failure_classes: List[str],
+    expected_failure_classes: list[str],
+    detected_failure_classes: list[str],
     notes: str = "",
 ) -> TaskResult:
     tp = len(predicted.intersection(ground_truth))
@@ -137,7 +136,7 @@ def compute_task_metrics(
     )
 
 
-def compute_aggregate_metrics(baseline: str, results: List[TaskResult]) -> AggregateMetrics:
+def compute_aggregate_metrics(baseline: str, results: list[TaskResult]) -> AggregateMetrics:
     if not results:
         return AggregateMetrics(
             baseline=baseline,

@@ -56,6 +56,16 @@ pub struct RepositoryConfig {
 pub struct AnalysisConfig {
     pub default_profile: String,
     pub max_traversal_nodes: u64,
+    /// Per-file byte cap (Pillar C resource bound). Files larger than
+    /// this are excluded from the snapshot and reported in
+    /// `RepoSnapshot.skipped_oversize_files` instead of being read.
+    #[serde(default = "default_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+/// Default per-file resource bound: 10 MiB.
+pub fn default_max_file_bytes() -> u64 {
+    10_485_760
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +98,7 @@ impl Default for AnalysisConfig {
         Self {
             default_profile: "pr".to_string(),
             max_traversal_nodes: 50_000,
+            max_file_bytes: default_max_file_bytes(),
         }
     }
 }
@@ -181,6 +192,12 @@ impl AutopsyConfig {
                 reason: "'analysis.max_traversal_nodes' must be greater than zero".to_string(),
             });
         }
+        if self.analysis.max_file_bytes == 0 {
+            return Err(RepoError::InvalidConfig {
+                path: path.to_path_buf(),
+                reason: "'analysis.max_file_bytes' must be greater than zero".to_string(),
+            });
+        }
         for pattern in &self.repository.exclude {
             Pattern::new(pattern).map_err(|e| RepoError::InvalidGlobPattern {
                 pattern: pattern.clone(),
@@ -202,6 +219,7 @@ impl AutopsyConfig {
         }
         hasher.update(self.analysis.default_profile.as_bytes());
         hasher.update(&self.analysis.max_traversal_nodes.to_be_bytes());
+        hasher.update(&self.analysis.max_file_bytes.to_be_bytes());
         hasher.update(self.cache.directory.as_bytes());
         hasher.finalize().to_hex().to_string()
     }
@@ -399,8 +417,20 @@ pub fn create_snapshot(
     config_hash: &str,
     analyzer_version: &str,
 ) -> RepoSnapshot {
+    create_snapshot_with_skipped(files, Vec::new(), revision, config_hash, analyzer_version)
+}
+
+/// Create a snapshot that additionally records size-capped exclusions.
+pub fn create_snapshot_with_skipped(
+    files: BTreeMap<String, FileUnit>,
+    mut skipped_oversize_files: Vec<String>,
+    revision: &str,
+    config_hash: &str,
+    analyzer_version: &str,
+) -> RepoSnapshot {
     let file_set_digest = compute_file_set_digest(&files);
     let snapshot_id = compute_snapshot_id(&file_set_digest, config_hash, analyzer_version);
+    skipped_oversize_files.sort();
 
     RepoSnapshot {
         snapshot_id,
@@ -408,6 +438,7 @@ pub fn create_snapshot(
         config_hash: config_hash.to_string(),
         file_set_digest,
         files,
+        skipped_oversize_files,
     }
 }
 
@@ -428,7 +459,8 @@ pub fn scan_repository(
         );
     }
 
-    let mut files = BTreeMap::new();
+    let mut files: BTreeMap<String, FileUnit> = BTreeMap::new();
+    let mut skipped_oversize: Vec<String> = Vec::new();
 
     for root_rel in &config.repository.roots {
         let scan_path = if root_rel == "." {
@@ -497,6 +529,17 @@ pub fn scan_repository(
                 continue;
             }
 
+            // Pillar C resource bound: check size BEFORE reading so
+            // adversarial multi-gigabyte files never enter memory.
+            // Oversized files are excluded from the snapshot and
+            // reported (never silently dropped). Metadata failures keep
+            // the historical hard-error semantics.
+            let file_len = fs::metadata(path)?.len();
+            if file_len > config.analysis.max_file_bytes {
+                skipped_oversize.push(rel_path.clone());
+                continue;
+            }
+
             let raw_bytes = fs::read(path)?;
             let language = classify_language(path);
             let canonical_bytes = if is_text_language(&language) {
@@ -521,7 +564,13 @@ pub fn scan_repository(
 
     let config_hash = config.content_hash();
     let rev = revision.unwrap_or("HEAD");
-    Ok(create_snapshot(files, rev, &config_hash, analyzer_version))
+    Ok(create_snapshot_with_skipped(
+        files,
+        skipped_oversize,
+        rev,
+        &config_hash,
+        analyzer_version,
+    ))
 }
 
 #[cfg(test)]
@@ -676,6 +725,7 @@ mod tests {
             analysis: AnalysisConfig {
                 default_profile: "pr".to_string(),
                 max_traversal_nodes: 1000,
+                max_file_bytes: default_max_file_bytes(),
             },
             cache: CacheConfig {
                 directory: ".autopsy/cache".to_string(),
@@ -780,5 +830,69 @@ mod tests {
             bad_cache.validate(Path::new("autopsy.toml")),
             Err(RepoError::PathTraversal { .. })
         ));
+    }
+
+    #[test]
+    fn test_max_file_bytes_default_and_validation() {
+        assert_eq!(default_max_file_bytes(), 10_485_760);
+
+        // Zero cap is rejected: a bound of nothing is a misconfiguration.
+        let mut config = AutopsyConfig::default();
+        config.analysis.max_file_bytes = 0;
+        assert!(matches!(
+            config.validate(Path::new("autopsy.toml")),
+            Err(RepoError::InvalidConfig { .. })
+        ));
+
+        // Legacy configs without the field parse via default (no churn).
+        let legacy = r#"
+config_version = "0.0.1"
+[repository]
+roots = ["src"]
+exclude = []
+[analysis]
+default_profile = "default"
+max_traversal_nodes = 50000
+[cache]
+directory = ".autopsy/cache"
+"#;
+        let parsed: AutopsyConfig = toml::from_str(legacy).unwrap();
+        assert_eq!(parsed.analysis.max_file_bytes, default_max_file_bytes());
+    }
+
+    #[test]
+    fn test_oversize_files_excluded_and_reported() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("synevid_test_cap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+        fs::write(temp_dir.join("src/small.ts"), "export const a = 1;").unwrap();
+        // Sparse 5 MiB file: size gate must trigger without reading it.
+        let big_path = temp_dir.join("src/big.ts");
+        let f = fs::File::create(&big_path).unwrap();
+        f.set_len(5 * 1024 * 1024).unwrap();
+        drop(f);
+
+        let mut config = AutopsyConfig::default();
+        config.analysis.max_file_bytes = 1024;
+
+        let snapshot = scan_repository(&temp_dir, &config, "0.0.1", None).unwrap();
+        assert!(snapshot.files.contains_key("src/small.ts"));
+        assert!(!snapshot.files.contains_key("src/big.ts"));
+        assert_eq!(
+            snapshot.skipped_oversize_files,
+            vec!["src/big.ts".to_string()]
+        );
+
+        // Deterministic: identical inputs skip identically.
+        let rerun = scan_repository(&temp_dir, &config, "0.0.1", None).unwrap();
+        assert_eq!(snapshot.snapshot_id, rerun.snapshot_id);
+        assert_eq!(
+            snapshot.skipped_oversize_files,
+            rerun.skipped_oversize_files
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

@@ -38,6 +38,17 @@ pub struct ImpactProfile {
     pub edge_kinds: BTreeSet<EdgeKind>,
     pub max_depth: usize,
     pub budget: usize,
+    /// When false, `file::` module nodes are reported but never expanded
+    /// (unless they are query seeds): files are structural entry points,
+    /// not transit hubs. Suppresses file-graph flooding in exchange for
+    /// relying on resolved symbol-level edges. Defaults true (legacy).
+    #[serde(default = "default_traverse_file_nodes")]
+    pub traverse_file_nodes: bool,
+}
+
+/// Legacy default: file nodes expand like any other node.
+pub fn default_traverse_file_nodes() -> bool {
+    true
 }
 
 impl Default for ImpactProfile {
@@ -54,7 +65,24 @@ impl Default for ImpactProfile {
             edge_kinds: kinds,
             max_depth: 10,
             budget: 1000,
+            traverse_file_nodes: true,
         }
+    }
+}
+
+/// Caller-focused precision preset: backward traversal over invocation
+/// edges with file-node transit suppressed. Answers "who consumes X"
+/// without flooding through module scaffolding.
+pub fn callers_profile(max_depth: usize, budget: usize) -> ImpactProfile {
+    let mut kinds = BTreeSet::new();
+    kinds.insert(EdgeKind::Calls);
+    kinds.insert(EdgeKind::References);
+    ImpactProfile {
+        name: "callers".to_string(),
+        edge_kinds: kinds,
+        max_depth,
+        budget,
+        traverse_file_nodes: false,
     }
 }
 
@@ -114,6 +142,16 @@ impl ImpactEngine {
                 None => return Err(ImpactError::SeedSymbolNotFound(seed.to_string())),
             }
         }
+        let seed_set: BTreeSet<NodeIndex> = seed_indices.iter().map(|(_, idx)| *idx).collect();
+
+        // File-node transit gate: structural `file::` nodes expand only
+        // when they are seeds (or the profile allows transit).
+        let expandable = |neighbor: NodeIndex| -> bool {
+            if query.profile.traverse_file_nodes || seed_set.contains(&neighbor) {
+                return true;
+            }
+            !raw_graph[neighbor].stable_id.as_str().starts_with("file::")
+        };
 
         for (_seed_id, seed_idx) in seed_indices {
             // BFS queue: (node_index, current_depth, current_path)
@@ -142,6 +180,7 @@ impl ImpactEngine {
                         while let Some((edge_idx, neighbor)) = walker.next(raw_graph) {
                             let edge_weight = &raw_graph[edge_idx];
                             if query.profile.edge_kinds.contains(&edge_weight.kind)
+                                && expandable(neighbor)
                                 && !visited_depth.contains_key(&neighbor)
                             {
                                 truncated = true;
@@ -198,7 +237,12 @@ impl ImpactEngine {
                                 }
                             }
 
-                            queue.push_back((neighbor, next_depth, next_path));
+                            // Traversal gate: record non-expandable nodes
+                            // (e.g. suppressed `file::` hubs) but never
+                            // expand through them.
+                            if expandable(neighbor) {
+                                queue.push_back((neighbor, next_depth, next_path));
+                            }
                         }
                     }
                 }
@@ -385,5 +429,144 @@ mod tests {
             .find(|p| p.last() == Some(&SymbolId::new("c")))
             .unwrap();
         assert_eq!(path_to_c, &vec![SymbolId::new("a"), SymbolId::new("c")]);
+    }
+
+    #[test]
+    fn test_file_node_transit_suppression() {
+        // caller --Calls--> callee, callee --Contains(reversed)--> file::m,
+        // file::m --Contains--> sibling, file::m --Imports--> file::other.
+        let mut graph = DependencyGraph::new();
+        for id in [
+            "f.ts#fn:caller",
+            "f.ts#fn:callee",
+            "file::f.ts",
+            "f.ts#fn:sibling",
+            "file::other.ts",
+        ] {
+            graph.add_node(make_test_symbol(id));
+        }
+        graph.add_edge(make_test_edge(
+            "f.ts#fn:caller",
+            "f.ts#fn:callee",
+            EdgeKind::Calls,
+        ));
+        graph.add_edge(make_test_edge(
+            "file::f.ts",
+            "f.ts#fn:callee",
+            EdgeKind::Contains,
+        ));
+        graph.add_edge(make_test_edge(
+            "file::f.ts",
+            "f.ts#fn:sibling",
+            EdgeKind::Contains,
+        ));
+        graph.add_edge(make_test_edge(
+            "file::f.ts",
+            "file::other.ts",
+            EdgeKind::Imports,
+        ));
+
+        let engine = ImpactEngine::new();
+        let mut kinds = BTreeSet::new();
+        kinds.insert(EdgeKind::Calls);
+        kinds.insert(EdgeKind::Contains);
+        kinds.insert(EdgeKind::Imports);
+
+        // Legacy default: file nodes expand (sibling + other reachable).
+        let full_query = ImpactQuery {
+            seed_symbols: vec![SymbolId::new("f.ts#fn:callee")],
+            direction: ImpactDirection::Bidirectional,
+            profile: ImpactProfile::default(),
+        };
+        let full_res = engine.compute_impact(&graph, &full_query).unwrap();
+        assert!(
+            full_res
+                .impacted_entities
+                .contains(&SymbolId::new("f.ts#fn:sibling"))
+        );
+        assert!(
+            full_res
+                .impacted_entities
+                .contains(&SymbolId::new("file::other.ts"))
+        );
+
+        // Suppressed transit: non-seed file nodes are reported, not expanded.
+        let suppressed_query = ImpactQuery {
+            seed_symbols: vec![SymbolId::new("f.ts#fn:callee")],
+            direction: ImpactDirection::Bidirectional,
+            profile: ImpactProfile {
+                name: "no-file-transit".to_string(),
+                edge_kinds: kinds,
+                max_depth: 10,
+                budget: 1000,
+                traverse_file_nodes: false,
+            },
+        };
+        let suppressed_res = engine.compute_impact(&graph, &suppressed_query).unwrap();
+        assert!(
+            suppressed_res
+                .impacted_entities
+                .contains(&SymbolId::new("f.ts#fn:caller"))
+        );
+        assert!(
+            suppressed_res
+                .impacted_entities
+                .contains(&SymbolId::new("file::f.ts"))
+        );
+        assert!(
+            !suppressed_res
+                .impacted_entities
+                .contains(&SymbolId::new("f.ts#fn:sibling")),
+            "sibling must not leak through suppressed file transit: {:?}",
+            suppressed_res.impacted_entities
+        );
+        assert!(
+            !suppressed_res
+                .impacted_entities
+                .contains(&SymbolId::new("file::other.ts")),
+            "imported files must not leak through suppressed file transit"
+        );
+        assert!(!suppressed_res.truncated);
+    }
+
+    #[test]
+    fn test_file_seed_still_expands_under_suppression() {
+        let mut graph = DependencyGraph::new();
+        for id in ["file::f.ts", "f.ts#fn:member"] {
+            graph.add_node(make_test_symbol(id));
+        }
+        graph.add_edge(make_test_edge(
+            "file::f.ts",
+            "f.ts#fn:member",
+            EdgeKind::Contains,
+        ));
+
+        let engine = ImpactEngine::new();
+        let mut profile = callers_profile(10, 1000);
+        profile.edge_kinds.insert(EdgeKind::Contains);
+        let query = ImpactQuery {
+            seed_symbols: vec![SymbolId::new("file::f.ts")],
+            direction: ImpactDirection::Forward,
+            profile,
+        };
+        let res = engine.compute_impact(&graph, &query).unwrap();
+        assert!(
+            res.impacted_entities
+                .contains(&SymbolId::new("f.ts#fn:member"))
+        );
+    }
+
+    #[test]
+    fn test_callers_profile_preset_contents() {
+        let profile = callers_profile(5, 500);
+        assert_eq!(profile.name, "callers");
+        assert_eq!(profile.max_depth, 5);
+        assert_eq!(profile.budget, 500);
+        assert!(profile.edge_kinds.contains(&EdgeKind::Calls));
+        assert!(profile.edge_kinds.contains(&EdgeKind::References));
+        assert!(!profile.edge_kinds.contains(&EdgeKind::Contains));
+        assert!(!profile.traverse_file_nodes);
+        // Legacy default is unchanged (full transit, all core kinds).
+        assert!(ImpactProfile::default().traverse_file_nodes);
     }
 }

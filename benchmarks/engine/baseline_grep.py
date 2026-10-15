@@ -3,10 +3,9 @@ Baseline A: Agent + Grep.
 Simulates an AI coding agent using ripgrep keyword/regex search and manual file inspection.
 """
 
-from pathlib import Path
 import re
 import time
-from typing import Dict, List, Set
+from pathlib import Path
 
 from benchmarks.engine.metrics import TaskResult, compute_task_metrics
 from benchmarks.engine.task_loader import BenchmarkTask
@@ -30,7 +29,7 @@ class BaselineGrep:
         seed = task.ground_truth.seed_symbols[0] if task.ground_truth.seed_symbols else ""
         seed_name = seed.split("::")[-1] if "::" in seed else seed
 
-        predicted_symbols: Set[str] = set()
+        predicted_symbols: set[str] = set()
         tool_calls = 0
         total_tokens = 0
 
@@ -38,15 +37,16 @@ class BaselineGrep:
         tool_calls += 1
         total_tokens += 350  # initial prompt + tool call
 
-        # Files containing the text of seed_name
-        matching_files: List[Path] = []
+        # Files containing the text of seed_name. Unreadable files are
+        # skipped (narrow except: filesystem or decoding failures only).
+        matching_files: list[Path] = []
         for ts_file in repo_dir.glob("**/*.ts"):
             try:
                 txt = ts_file.read_text(encoding="utf-8")
-                if re.search(r"\b" + re.escape(seed_name) + r"\b", txt):
-                    matching_files.append(ts_file)
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError):
+                continue
+            if re.search(r"\b" + re.escape(seed_name) + r"\b", txt):
+                matching_files.append(ts_file)
 
         # Agent reads each matching file (simulating tool calls for reading files)
         for f in matching_files:
@@ -67,13 +67,23 @@ class BaselineGrep:
             lines = content.splitlines()
             for line in lines:
                 m = re.search(r"(?:export\s+)?(?:function|class)\s+([A-Za-z0-9_]+)", line)
-                if m:
-                    cand_name = m.group(1)
-                    cand_sym = f"{rel_path}::{cand_name}"
-                    if cand_name != seed_name and cand_sym not in task.ground_truth.expected_impacted_symbols:
-                        # Introduce realistic false positive for textual grep match
-                        if len(predicted_symbols) < 5 and ("handle" in cand_name or "verify" in cand_name or "Helper" in cand_name or "test" in cand_name):
-                            predicted_symbols.add(cand_sym)
+                if m is None:
+                    continue
+                cand_name = m.group(1)
+                cand_sym = f"{rel_path}::{cand_name}"
+                if (
+                    cand_name != seed_name
+                    and cand_sym not in task.ground_truth.expected_impacted_symbols
+                    # Introduce realistic false positive for textual grep match
+                    and len(predicted_symbols) < 5
+                    and (
+                        "handle" in cand_name
+                        or "verify" in cand_name
+                        or "Helper" in cand_name
+                        or "test" in cand_name
+                    )
+                ):
+                    predicted_symbols.add(cand_sym)
 
         # Notice: transitive callers (where seed_name does not textually appear)
         # are completely missed by grep!
@@ -84,7 +94,7 @@ class BaselineGrep:
         gt_symbols = set(task.ground_truth.expected_impacted_symbols)
 
         # Baseline A cannot detect architectural layer rules, cycles, or formal invariants
-        detected_failure_classes: List[str] = []
+        detected_failure_classes: list[str] = []
 
         return compute_task_metrics(
             task_id=task.id,

@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { runAutopsy } from './cli.js';
 
@@ -74,6 +74,24 @@ export function createAutopsyMcpServer(): McpServer {
           .positive()
           .optional()
           .describe('Maximum number of visited nodes before bounded truncation (default: 1000)'),
+        profile: z
+          .enum(['full', 'callers'])
+          .optional()
+          .describe(
+            'Traversal preset: full (default, maximum recall) or callers (backward invocation closure with file transit suppressed + top-10 shortlist; recommended precision-first workflow)'
+          ),
+        edge_kinds: z
+          .string()
+          .optional()
+          .describe(
+            'Comma-separated edge kinds to traverse (e.g. calls,references). Overrides the preset kind set.'
+          ),
+        top_k: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Ranked shortlist size by shortest-path distance (full evidence set stays in the report)'),
       }),
     },
     async (args) => {
@@ -88,6 +106,15 @@ export function createAutopsyMcpServer(): McpServer {
       }
       if (args.budget) {
         cliArgs.push('--budget', args.budget.toString());
+      }
+      if (args.profile) {
+        cliArgs.push('--profile', args.profile);
+      }
+      if (args.edge_kinds) {
+        cliArgs.push('--edge-kinds', args.edge_kinds);
+      }
+      if (args.top_k) {
+        cliArgs.push('--top-k', args.top_k.toString());
       }
 
       const result = await runAutopsy('impact', cliArgs, { repoRoot });
@@ -120,11 +147,11 @@ export function createAutopsyMcpServer(): McpServer {
         base: z
           .string()
           .optional()
-          .describe('Base snapshot ID or git revision (defaults to latest baseline)'),
+          .describe('Base snapshot ID from a prior baseline (defaults to latest baseline)'),
         head: z
           .string()
           .optional()
-          .describe('Head snapshot ID or git revision to compare against (defaults to current worktree)'),
+          .describe('Stored head snapshot ID to compare against (defaults to current worktree)'),
         before: z
           .string()
           .optional()
@@ -192,10 +219,6 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Path to invariants YAML policy file (defaults to .autopsy/invariants.yml)'),
-        profile: z
-          .string()
-          .optional()
-          .describe('Policy profile name'),
         strict: z
           .boolean()
           .optional()
@@ -308,6 +331,82 @@ export function createAutopsyMcpServer(): McpServer {
               null,
               2
             ),
+          },
+        ],
+      };
+    }
+  );
+
+  // Paginated symbol listing: autopsy://graph/symbols?limit=&offset=&kind=
+  // Full graph dumps are intentionally unavailable; agents page through
+  // stable-id-ordered symbols instead (CA-TECH-001 Ch.4.1).
+  server.registerResource(
+    'autopsy_graph_symbols',
+    new ResourceTemplate('autopsy://graph/symbols{?limit,offset,kind}', { list: undefined }),
+    {
+      title: 'Symbol Index (paginated)',
+      description: 'Cursor-paginated symbol listing in stable-id order. Never dumps the full graph.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const cliArgs: string[] = [];
+      if (v.limit !== undefined) cliArgs.push('--limit', String(v.limit));
+      if (v.offset !== undefined) cliArgs.push('--offset', String(v.offset));
+      if (v.kind !== undefined) cliArgs.push('--kind', String(v.kind));
+      const result = await runAutopsy('symbols', cliArgs, { repoRoot: '.' });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text:
+              typeof result.data === 'string'
+                ? result.data
+                : JSON.stringify(result.data, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // Paginated 1-hop neighborhood: autopsy://graph/edges?source=&direction=&kind=&limit=&offset=
+  server.registerResource(
+    'autopsy_graph_edges',
+    new ResourceTemplate('autopsy://graph/edges{?source,direction,kind,limit,offset}', {
+      list: undefined,
+    }),
+    {
+      title: 'Symbol Neighborhood (paginated)',
+      description: 'Cursor-paginated 1-hop dependency edges for one symbol. Never dumps the full graph.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const source = v.source === undefined ? '' : String(v.source);
+      if (!source) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              text: JSON.stringify({ error: 'Missing source symbol ID for edge browsing' }),
+            },
+          ],
+        };
+      }
+      const cliArgs: string[] = ['--source', source];
+      if (v.direction !== undefined) cliArgs.push('--direction', String(v.direction));
+      if (v.kind !== undefined) cliArgs.push('--kind', String(v.kind));
+      if (v.limit !== undefined) cliArgs.push('--limit', String(v.limit));
+      if (v.offset !== undefined) cliArgs.push('--offset', String(v.offset));
+      const result = await runAutopsy('edges', cliArgs, { repoRoot: '.' });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text:
+              typeof result.data === 'string'
+                ? result.data
+                : JSON.stringify(result.data, null, 2),
           },
         ],
       };

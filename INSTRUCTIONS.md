@@ -16,7 +16,7 @@ Please refer to:
 # Complete quality, boundary, and determinism check (all 8 gates):
 make check
 
-# Run all unit and end-to-end integration tests (72/72 passing):
+# Run all unit and end-to-end integration tests (161/161 passing):
 make test
 
 # Format code:

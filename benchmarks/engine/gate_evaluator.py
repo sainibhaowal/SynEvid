@@ -4,10 +4,9 @@ Enforces Chapter 12 / FR-025 pre-registered gate:
 >= 10pp recall lift OR >= 40% cost cut at equal accuracy OR new failure class.
 """
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from benchmarks.engine.metrics import AggregateMetrics, TaskResult
 
@@ -23,7 +22,7 @@ class GateEvaluationResult:
     gate_3_new_failure_class_passed: bool
     rationale: str
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "passed": self.passed,
             "recall_lift_pp": round(self.recall_lift_pp, 2),
@@ -60,7 +59,9 @@ class GateEvaluator:
         min_baseline_tokens = min(agg_a.mean_tokens, agg_b.mean_tokens)
         cost_cut_percent = 0.0
         if min_baseline_tokens > 0:
-            cost_cut_percent = ((min_baseline_tokens - agg_c.mean_tokens) / min_baseline_tokens) * 100.0
+            cost_cut_percent = (
+                (min_baseline_tokens - agg_c.mean_tokens) / min_baseline_tokens
+            ) * 100.0
         equal_or_better_accuracy = (
             agg_c.mean_recall >= max_baseline_recall
             and agg_c.mean_precision >= max(agg_a.mean_precision, agg_b.mean_precision)
@@ -80,11 +81,19 @@ class GateEvaluator:
         if gate_1:
             reasons.append(f"Recall lift of +{recall_lift_pp:.2f}pp exceeds +10pp threshold")
         if gate_2:
-            reasons.append(f"Cost cut of {cost_cut_percent:.2f}% exceeds 40% threshold at equal/better accuracy")
+            reasons.append(
+                f"Cost cut of {cost_cut_percent:.2f}% exceeds 40% threshold at equal/better accuracy"
+            )
         if gate_3:
-            reasons.append(f"{new_fc_found} new failure classes uniquely identified by invariant verifier")
+            reasons.append(
+                f"{new_fc_found} new failure classes uniquely identified by invariant verifier"
+            )
 
-        rationale = "; ".join(reasons) if passed else "Failed all three pre-registered gate criteria (STOP per 01 Ch.12)"
+        rationale = (
+            "; ".join(reasons)
+            if passed
+            else "Failed all three pre-registered gate criteria (STOP per 01 Ch.12)"
+        )
 
         return GateEvaluationResult(
             passed=passed,
@@ -104,8 +113,8 @@ def write_reproduction_report(
     agg_a: AggregateMetrics,
     agg_b: AggregateMetrics,
     agg_c: AggregateMetrics,
-    task_results: Dict[str, List[TaskResult]],
-) -> Tuple[Path, Path]:
+    task_results: dict[str, list[TaskResult]],
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "reproduction_report.json"
     md_path = output_dir / "reproduction_report.md"
@@ -118,9 +127,7 @@ def write_reproduction_report(
             "baseline_b_lsp": agg_b.to_dict(),
             "baseline_c_autopsy": agg_c.to_dict(),
         },
-        "task_results": {
-            k: [r.to_dict() for r in v] for k, v in task_results.items()
-        },
+        "task_results": {k: [r.to_dict() for r in v] for k, v in task_results.items()},
     }
 
     with open(json_path, "w", encoding="utf-8") as f:

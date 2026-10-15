@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Generates 50 deterministic benchmark tasks conforming to schemas/benchmark-task.schema.json.
 Tasks cover:
@@ -27,12 +26,12 @@ TASKS = [
             "seed_symbols": ["src/services/userService.ts::UserService::createUser"],
             "expected_impacted_symbols": [
                 "src/controllers/userController.ts::UserController::handleCreate",
-                "src/routes/userRoutes.ts::routeRequest"
+                "src/routes/userRoutes.ts::routeRequest",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_required_param"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-002",
@@ -48,8 +47,8 @@ TASKS = [
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-003",
@@ -63,8 +62,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": ["removed_public_method"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-004",
@@ -78,12 +77,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "src/utils/crypto.ts::verifyPassword",
                 "src/services/userService.ts::UserService::createUser",
-                "src/controllers/userController.ts::UserController::handleCreate"
+                "src/controllers/userController.ts::UserController::handleCreate",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_symbol_rename"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-005",
@@ -97,8 +96,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_return_type"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-006",
@@ -112,12 +111,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "src/services/userService.ts::UserService::createUser",
                 "src/controllers/userController.ts::UserController::handleCreate",
-                "src/routes/userRoutes.ts::routeRequest"
+                "src/routes/userRoutes.ts::routeRequest",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_interface_required_prop"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-007",
@@ -130,12 +129,12 @@ TASKS = [
             "seed_symbols": ["src/dto/userDto.ts::UserResponseDto"],
             "expected_impacted_symbols": [
                 "src/services/userService.ts::UserService::createUser",
-                "src/controllers/userController.ts::UserController::handleCreate"
+                "src/controllers/userController.ts::UserController::handleCreate",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-008",
@@ -148,12 +147,12 @@ TASKS = [
             "seed_symbols": ["src/utils/crypto.ts::hashPassword"],
             "expected_impacted_symbols": [
                 "src/utils/crypto.ts::verifyPassword",
-                "src/services/userService.ts::UserService::createUser"
+                "src/services/userService.ts::UserService::createUser",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-009",
@@ -167,8 +166,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-API-010",
@@ -179,15 +178,12 @@ TASKS = [
         "is_held_out": True,
         "ground_truth": {
             "seed_symbols": ["src/utils/crypto.ts::generateToken"],
-            "expected_impacted_symbols": [
-                "src/auth/authGuard.ts::authenticateUser"
-            ],
+            "expected_impacted_symbols": ["src/auth/authGuard.ts::authenticateUser"],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
-
     # -------------------------------------------------------------------------
     # 2. Migrations (Tasks 11 - 20) in repo-migration
     # -------------------------------------------------------------------------
@@ -203,8 +199,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/legacy/oldStorage.ts::OldStorage"],
             "expected_failure": True,
             "expected_failure_classes": ["deprecated-storage-prohibition"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-012",
@@ -218,8 +214,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/legacy/oldStorage.ts::OldStorage"],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-013",
@@ -230,13 +226,11 @@ TASKS = [
         "is_held_out": False,
         "ground_truth": {
             "seed_symbols": ["src/legacy/oldStorage.ts"],
-            "expected_impacted_symbols": [
-                "src/services/migrationRunner.ts::MigrationRunner"
-            ],
+            "expected_impacted_symbols": ["src/services/migrationRunner.ts::MigrationRunner"],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-014",
@@ -250,8 +244,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": ["ambiguous_rename_guard"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-015",
@@ -265,8 +259,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-016",
@@ -282,12 +276,12 @@ TASKS = [
                 "src/legacy/oldStorage.ts::OldStorage::saveOld",
                 "src/modern/newStorage.ts::NewStorage::insertRecord",
                 "src/adapters/sqlAdapter.ts::SqlAdapter::executeInsert",
-                "src/services/migrationRunner.ts::MigrationRunner::migrateAll"
+                "src/services/migrationRunner.ts::MigrationRunner::migrateAll",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_type"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-017",
@@ -301,8 +295,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_async"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-018",
@@ -313,13 +307,11 @@ TASKS = [
         "is_held_out": False,
         "ground_truth": {
             "seed_symbols": ["src/config/dbConfig.ts::defaultDbConfig"],
-            "expected_impacted_symbols": [
-                "src/adapters/sqlAdapter.ts::SqlAdapter"
-            ],
+            "expected_impacted_symbols": ["src/adapters/sqlAdapter.ts::SqlAdapter"],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-019",
@@ -333,12 +325,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "src/legacy/oldStorage.ts",
                 "src/modern/newStorage.ts",
-                "src/adapters/sqlAdapter.ts"
+                "src/adapters/sqlAdapter.ts",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-MIG-020",
@@ -351,14 +343,13 @@ TASKS = [
             "seed_symbols": ["src/modern/newStorage.ts::NewStorage::insertRecord"],
             "expected_impacted_symbols": [
                 "src/adapters/sqlAdapter.ts::SqlAdapter::executeInsert",
-                "src/services/migrationRunner.ts::MigrationRunner::migrateAll"
+                "src/services/migrationRunner.ts::MigrationRunner::migrateAll",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
-
     # -------------------------------------------------------------------------
     # 3. Relayering (Tasks 21 - 30) in repo-relayer
     # -------------------------------------------------------------------------
@@ -374,8 +365,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/presentation/view.ts::BankingView"],
             "expected_failure": True,
             "expected_failure_classes": ["architecture-layers", "no_new_cycle"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-022",
@@ -389,8 +380,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/infrastructure/database.ts::DatabaseDriver"],
             "expected_failure": True,
             "expected_failure_classes": ["architecture-layers"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-023",
@@ -404,8 +395,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/presentation/view.ts::BankingView"],
             "expected_failure": True,
             "expected_failure_classes": ["no-circular-deps", "architecture-layers"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-024",
@@ -416,11 +407,13 @@ TASKS = [
         "is_held_out": False,
         "ground_truth": {
             "seed_symbols": ["src/presentation/view.ts::BankingView::renderTransferForm"],
-            "expected_impacted_symbols": ["src/domain/businessLogic.ts::BankingDomain::processTransfer"],
+            "expected_impacted_symbols": [
+                "src/domain/businessLogic.ts::BankingDomain::processTransfer"
+            ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-025",
@@ -433,12 +426,12 @@ TASKS = [
             "seed_symbols": ["src/core/contracts.ts::TransactionRequest"],
             "expected_impacted_symbols": [
                 "src/domain/businessLogic.ts::BankingDomain::processTransfer",
-                "src/presentation/view.ts::BankingView::renderTransferForm"
+                "src/presentation/view.ts::BankingView::renderTransferForm",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_interface_required_prop"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-026",
@@ -451,12 +444,12 @@ TASKS = [
             "seed_symbols": ["src/infrastructure/database.ts::DatabaseDriver::updateBalance"],
             "expected_impacted_symbols": [
                 "src/domain/businessLogic.ts::BankingDomain::processTransfer",
-                "src/presentation/view.ts::BankingView::renderTransferForm"
+                "src/presentation/view.ts::BankingView::renderTransferForm",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_required_param"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-027",
@@ -470,8 +463,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/shared/logger.ts::logInfo"],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-028",
@@ -487,8 +480,8 @@ TASKS = [
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-029",
@@ -501,12 +494,12 @@ TASKS = [
             "seed_symbols": ["src/presentation/view.ts::BankingView"],
             "expected_impacted_symbols": [
                 "src/domain/businessLogic.ts::BankingDomain",
-                "src/infrastructure/database.ts::DatabaseDriver"
+                "src/infrastructure/database.ts::DatabaseDriver",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-REL-030",
@@ -520,10 +513,9 @@ TASKS = [
             "expected_impacted_symbols": ["src/infrastructure/database.ts::DatabaseDriver"],
             "expected_failure": True,
             "expected_failure_classes": ["no-circular-deps"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
-
     # -------------------------------------------------------------------------
     # 4. Cross-Package (Tasks 31 - 40) in repo-cross-package
     # -------------------------------------------------------------------------
@@ -539,8 +531,8 @@ TASKS = [
             "expected_impacted_symbols": ["packages/client/src/client.ts::AppClient"],
             "expected_failure": True,
             "expected_failure_classes": ["core-independence"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-032",
@@ -554,8 +546,8 @@ TASKS = [
             "expected_impacted_symbols": ["packages/server/src/server.ts::LoggingServerHandler"],
             "expected_failure": True,
             "expected_failure_classes": ["core-independence"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-033",
@@ -571,12 +563,12 @@ TASKS = [
                 "packages/core/src/index.ts::EventBus::publish",
                 "packages/client/src/client.ts::AppClient::sendNotification",
                 "packages/server/src/server.ts::LoggingServerHandler::handle",
-                "packages/plugin/src/plugin.ts::CustomPluginHandler::handle"
+                "packages/plugin/src/plugin.ts::CustomPluginHandler::handle",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_interface_required_prop"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-034",
@@ -589,12 +581,12 @@ TASKS = [
             "seed_symbols": ["packages/core/src/types.ts::MessageEnvelope"],
             "expected_impacted_symbols": [
                 "packages/core/src/index.ts::EventBus::publish",
-                "packages/client/src/client.ts::AppClient::sendNotification"
+                "packages/client/src/client.ts::AppClient::sendNotification",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-035",
@@ -608,12 +600,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "packages/server/src/server.ts::LoggingServerHandler::handle",
                 "packages/plugin/src/plugin.ts::CustomPluginHandler::handle",
-                "packages/core/src/index.ts::EventBus::publish"
+                "packages/core/src/index.ts::EventBus::publish",
             ],
             "expected_failure": True,
             "expected_failure_classes": ["breaking_contract_required_param"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-036",
@@ -627,8 +619,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-037",
@@ -642,8 +634,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-038",
@@ -659,8 +651,8 @@ TASKS = [
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-039",
@@ -674,8 +666,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-PKG-040",
@@ -689,10 +681,9 @@ TASKS = [
             "expected_impacted_symbols": ["packages/server/src/server.ts::LoggingServerHandler"],
             "expected_failure": True,
             "expected_failure_classes": ["no-circular-deps"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
-
     # -------------------------------------------------------------------------
     # 5. Dead Call & Dynamic Constructs (Tasks 41 - 50) in repo-dead-call
     # -------------------------------------------------------------------------
@@ -710,8 +701,8 @@ TASKS = [
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-042",
@@ -725,8 +716,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-043",
@@ -740,12 +731,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "src/active/livePipeline.ts::LiveDataPipeline::processMessage",
                 "src/analytics/telemetry.ts::TelemetryCollector::trackEvent",
-                "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup"
+                "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-044",
@@ -759,8 +750,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": True,
             "expected_failure_classes": ["unsupported_construct_eval"],
-            "expected_coverage": "unknown"
-        }
+            "expected_coverage": "unknown",
+        },
     },
     {
         "id": "TASK-DED-045",
@@ -774,8 +765,8 @@ TASKS = [
             "expected_impacted_symbols": ["src/obsolete/deprecatedHandler.ts::DeprecatedHandler"],
             "expected_failure": True,
             "expected_failure_classes": ["clean-active-pipeline"],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-046",
@@ -789,12 +780,12 @@ TASKS = [
             "expected_impacted_symbols": [
                 "src/active/livePipeline.ts::LiveDataPipeline::processMessage",
                 "src/analytics/telemetry.ts::TelemetryCollector::trackEvent",
-                "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup"
+                "src/cleanup/orphanCleaner.ts::OrphanCleaner::performCleanup",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-047",
@@ -808,8 +799,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "unknown"
-        }
+            "expected_coverage": "unknown",
+        },
     },
     {
         "id": "TASK-DED-048",
@@ -823,8 +814,8 @@ TASKS = [
             "expected_impacted_symbols": [],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-049",
@@ -840,8 +831,8 @@ TASKS = [
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
+            "expected_coverage": "verified",
+        },
     },
     {
         "id": "TASK-DED-050",
@@ -854,14 +845,15 @@ TASKS = [
             "seed_symbols": ["src/helpers/stringFormat.ts::capitalize"],
             "expected_impacted_symbols": [
                 "src/active/livePipeline.ts::LiveDataPipeline::processMessage",
-                "src/analytics/telemetry.ts::TelemetryCollector::trackEvent"
+                "src/analytics/telemetry.ts::TelemetryCollector::trackEvent",
             ],
             "expected_failure": False,
             "expected_failure_classes": [],
-            "expected_coverage": "verified"
-        }
-    }
+            "expected_coverage": "verified",
+        },
+    },
 ]
+
 
 def main():
     tasks_dir = Path(__file__).parent / "tasks"
@@ -875,6 +867,7 @@ def main():
             json.dump(task, f, indent=2, sort_keys=True)
             f.write("\n")
     print(f"Successfully generated all {len(TASKS)} benchmark tasks.")
+
 
 if __name__ == "__main__":
     main()

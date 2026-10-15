@@ -450,6 +450,26 @@ impl InvariantEvaluator {
         let mut breaking_changes = Vec::new();
         let mut violating_entities = BTreeSet::new();
 
+        // Honesty gate (FR-010, FR-030): backward compatibility is a
+        // two-state property. Without baseline contracts there is nothing
+        // to compare against, so the verdict is Unknown -- never a
+        // vacuous Pass.
+        if ctx.contracts_before.is_empty() {
+            let receipt = builder
+                .build()
+                .map_err(|e| InvariantError::Evaluation(e.to_string()))?;
+            let finding = Finding {
+                id: finding_id,
+                rule_id: rule.id.clone(),
+                status: FindingStatus::Unknown,
+                severity: parse_severity(&rule.severity),
+                message: "No baseline contracts available; single-state analysis cannot assess backward compatibility (provide --baseline-id)".to_string(),
+                entities: Vec::new(),
+                coverage: ctx.coverage_state,
+            };
+            return Ok((finding, receipt));
+        }
+
         for (sym_id, before_contract) in ctx.contracts_before {
             if let Some(after_contract) = ctx.contracts_after.get(sym_id) {
                 // Only public/exported contracts are constrained by API backward compatibility
@@ -897,5 +917,44 @@ invariants:
         // CRITICAL INVARIANT: UNKNOWN != PASS
         assert_ne!(res[0].0.status, FindingStatus::Pass);
         assert_eq!(res[0].0.status, FindingStatus::Unknown);
+    }
+
+    #[test]
+    fn test_api_compat_without_baseline_is_unknown_not_pass() {
+        // FR-010 / FR-030: compatibility is a two-state property. An
+        // empty before-map (no --baseline-id) must yield Unknown, never
+        // a vacuous Pass, even under Verified coverage.
+        let yaml = r#"
+version: "0.0.1"
+invariants:
+  - id: "API"
+    description: "API compat"
+    kind: "api_compatibility"
+    severity: "error"
+"#;
+        let config = InvariantsConfig::from_yaml_str(yaml).unwrap();
+        let evaluator = InvariantEvaluator::new();
+        let graph = DependencyGraph::new();
+        let empty = BTreeMap::new();
+
+        let ctx = EvaluationContext {
+            snapshot_id: SnapshotId::new("snap_single"),
+            analyzer_version: "0.0.1",
+            graph: &graph,
+            baseline_graph: None,
+            diff: None,
+            contracts_before: &empty,
+            contracts_after: &empty,
+            coverage_state: CoverageState::Verified,
+        };
+
+        let res = evaluator.evaluate(&config, &ctx).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0.status, FindingStatus::Unknown);
+        assert!(
+            res[0].0.message.contains("baseline"),
+            "message must direct the operator to provide a baseline: {}",
+            res[0].0.message
+        );
     }
 }

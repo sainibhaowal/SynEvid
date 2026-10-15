@@ -130,6 +130,11 @@ pub struct RepoSnapshot {
     pub file_set_digest: String,
     /// Canonical map of relative file path -> FileUnit (sorted by path)
     pub files: BTreeMap<String, FileUnit>,
+    /// Files excluded by the size cap, sorted. Informational only:
+    /// exclusion is already reflected in `files`/`file_set_digest`.
+    /// `#[serde(default)]` keeps pre-cap snapshots loadable.
+    #[serde(default)]
+    pub skipped_oversize_files: Vec<String>,
 }
 
 /// Normalized callable or interface contract.

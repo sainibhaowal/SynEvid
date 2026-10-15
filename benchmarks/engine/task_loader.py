@@ -2,22 +2,22 @@
 Task loader and schema validator for Synevid Phase 6 benchmark harness.
 """
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
 class GroundTruth:
-    seed_symbols: List[str]
-    expected_impacted_symbols: List[str]
+    seed_symbols: list[str]
+    expected_impacted_symbols: list[str]
     expected_failure: bool
-    expected_failure_classes: List[str]
+    expected_failure_classes: list[str]
     expected_coverage: str
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GroundTruth":
+    def from_dict(cls, data: dict[str, Any]) -> "GroundTruth":
         return cls(
             seed_symbols=list(data.get("seed_symbols", [])),
             expected_impacted_symbols=list(data.get("expected_impacted_symbols", [])),
@@ -36,10 +36,10 @@ class BenchmarkTask:
     category: str
     is_held_out: bool
     ground_truth: GroundTruth
-    raw_data: Dict[str, Any] = field(default_factory=dict, repr=False)
+    raw_data: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BenchmarkTask":
+    def from_dict(cls, data: dict[str, Any]) -> "BenchmarkTask":
         for req in ["id", "repository", "base_ref", "prompt", "ground_truth"]:
             if req not in data:
                 raise ValueError(f"Missing required field '{req}' in benchmark task")
@@ -66,9 +66,9 @@ def load_task_file(path: Path) -> BenchmarkTask:
     return BenchmarkTask.from_dict(data)
 
 
-def load_all_tasks(tasks_dir: Path) -> List[BenchmarkTask]:
+def load_all_tasks(tasks_dir: Path) -> list[BenchmarkTask]:
     task_files = sorted(tasks_dir.glob("task_*.json"))
-    tasks: List[BenchmarkTask] = []
+    tasks: list[BenchmarkTask] = []
     for tf in task_files:
         tasks.append(load_task_file(tf))
     return tasks

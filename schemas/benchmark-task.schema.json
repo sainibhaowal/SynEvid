@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Code Autopsy Benchmark Task",
+  "description": "Single ground-truth benchmark task: a historical change prompt with blind evaluation (the analyzer never receives the expected lists). Ground truth is immutable under ordinary engine work.",
   "type": "object",
   "required": [
     "id",
@@ -11,19 +12,24 @@
   ],
   "properties": {
     "id": {
-      "type": "string"
+      "type": "string",
+      "description": "Stable task identifier (e.g. TASK-API-001)."
     },
     "repository": {
-      "type": "string"
+      "type": "string",
+      "description": "Corpus repository directory name under benchmarks/corpus."
     },
     "base_ref": {
-      "type": "string"
+      "type": "string",
+      "description": "Repository ref the change applies to (informational; evaluation is single-state unless stated)."
     },
     "prompt": {
-      "type": "string"
+      "type": "string",
+      "description": "Change description given to the evaluated workflow."
     },
     "ground_truth": {
-      "type": "object"
+      "type": "object",
+      "description": "Held-out expectations: seed_symbols (query entry points), expected_impacted_symbols (qualified names or file paths), expected_failure flag, expected_failure_classes (change vocabulary), expected_coverage, and is_held_out partitioning."
     }
   }
 }

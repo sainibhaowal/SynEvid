@@ -62,7 +62,7 @@ repos:
 
       - id: mcp-check
         name: TypeScript MCP Server TypeCheck & Tests
-        entry: bash -c 'cd apps/mcp-server && npm run typecheck && npm test'
+        entry: bash -c 'cd apps/mcp-server && npm run typecheck && npm run lint && npm test'
         language: system
         pass_filenames: false
         always_run: true

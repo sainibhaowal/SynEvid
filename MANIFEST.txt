@@ -1,5 +1,8 @@
 .agents/rules/agent-engineering-rules.md
 .agents/skills/synevid-core-engineer/SKILL.md
+agents/hooks/claude-settings.example.json
+agents/hooks/safe-edit.sh
+agents/skills/synevid-forensics.md
 .autopsy/baseline.json
 .autopsy/invariants.yml
 .github/ISSUE_TEMPLATE/bug_report.md
@@ -9,6 +12,7 @@
 .github/PULL_REQUEST_TEMPLATE.md
 .github/workflows/benchmarks.yml
 .github/workflows/ci.yml
+.github/workflows/autopsy-pr-gate.yml
 .github/workflows/post-merge.yml
 .gitignore
 .pre-commit-config.yaml
@@ -192,6 +196,7 @@ docs/adr/0005-no-llm-core.md
 docs/adr/0006-gui-later.md
 docs/adr/0007-one-language-first.md
 docs/adr/0008-sarif-export.md
+docs/adr/0009-symbol-identity-shape-split.md
 docs/architecture/OVERVIEW.md
 docs/benchmark/PROTOCOL.md
 docs/evidence/01_phase0_phase1_implementation_and_verification.md
@@ -206,6 +211,10 @@ docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md
 docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md
 docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md
 docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md
+docs/evidence/13_forensic_closure_verification.md
+docs/evidence/14_precision_incremental_pr_gate.md
+docs/evidence/16_landscape_parity.md
+docs/evidence/15_phase4_1_gap_closure.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
 rust-toolchain.toml
@@ -214,6 +223,10 @@ schemas/baseline.schema.json
 schemas/benchmark-task.schema.json
 schemas/invariant.schema.json
 scripts/patch_banner.py
+scripts/install.sh
+scripts/forensic-case.sh
+scripts/setup-agent-hosts.py
+scripts/verify-perf-tiers.sh
 scripts/verify-arch-boundaries.sh
 scripts/verify-cross-platform.sh
 scripts/verify-determinism.sh
@@ -225,6 +238,7 @@ tests/tests/e2e_config_validation.rs
 tests/tests/e2e_cross_platform_and_multi_arch.rs
 tests/tests/e2e_domain_canonical_invariants.rs
 tests/tests/e2e_enterprise_sandboxing_and_defense.rs
+tests/tests/e2e_forensic_closure.rs
 tests/tests/e2e_fuzz_parsers_and_schemas.rs
 tests/tests/e2e_graph_and_diff_conformance.rs
 tests/tests/e2e_phase4_impact_and_invariants.rs
@@ -232,3 +246,9 @@ tests/tests/e2e_phase5_cli_and_storage.rs
 tests/tests/e2e_phase6_benchmarks.rs
 tests/tests/e2e_repo_scan_and_ignores.rs
 tests/tests/e2e_snapshot_determinism.rs
+docs/COMPARISON.md
+
+apps/mcp-server/eslint.config.mjs
+benchmarks/tests/test_harness_smoke.py
+crates/autopsy-adapter-python/Cargo.toml
+crates/autopsy-adapter-python/src/lib.rs

@@ -61,6 +61,7 @@ impl TestSandbox {
             analysis: autopsy_repo::AnalysisConfig {
                 default_profile: "pr".to_string(),
                 max_traversal_nodes: 50_000,
+                max_file_bytes: autopsy_repo::default_max_file_bytes(),
             },
             cache: autopsy_repo::CacheConfig {
                 directory: ".autopsy/cache".to_string(),

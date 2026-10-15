@@ -1,0 +1,17 @@
+{
+  "$comment": "EXAMPLE ONLY — merge the hooks section into your existing settings file. The hook is advisory and fail-open: it always exits 0 and prints guidance or nothing.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AUTOPSY_BIN=/absolute/path/to/autopsy /absolute/path/to/SynEvid/agents/hooks/safe-edit.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

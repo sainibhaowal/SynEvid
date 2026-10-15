@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://code-autopsy.dev/schema/autopsy-result-v0.0.1.json",
   "title": "Code Autopsy Result",
+  "description": "Canonical, versioned result envelope emitted by every engine command (system of record). Byte-identical inputs always produce byte-identical result_digest values.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,122 +16,139 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "0.0.1"
+      "const": "0.0.1",
+      "description": "Pinned contract version. Breaking changes require a new version plus changelog and compat test."
     },
     "run": {
       "type": "object",
+      "description": "Command execution metadata for this report.",
       "required": ["run_id", "command", "analyzer_version", "result_digest"],
       "properties": {
-        "run_id": { "type": "string" },
-        "command": { "type": "string" },
-        "analyzer_version": { "type": "string" },
-        "duration_ms": { "type": "integer", "minimum": 0 },
-        "result_digest": { "type": "string" }
+        "run_id": { "type": "string", "description": "Deterministic run identifier derived from command and snapshot." },
+        "command": { "type": "string", "description": "Engine subcommand that produced this report (baseline, diff, impact, verify)." },
+        "analyzer_version": { "type": "string", "description": "Engine version that computed the result; part of snapshot identity." },
+        "duration_ms": { "type": "integer", "minimum": 0, "description": "Wall-clock duration in milliseconds. Telemetry only, never hashed into digests." },
+        "result_digest": { "type": "string", "description": "BLAKE3 digest of the canonical report; mirrors the root result_digest." }
       }
     },
     "snapshots": {
       "type": "array",
+      "description": "Repository states compared or analyzed, in before-then-after order.",
       "items": {
         "type": "object",
         "required": ["snapshot_id", "revision", "config_hash", "file_set_digest"],
         "properties": {
-          "snapshot_id": { "type": "string" },
-          "revision": { "type": "string" },
-          "config_hash": { "type": "string" },
-          "file_set_digest": { "type": "string" }
+          "snapshot_id": { "type": "string", "description": "BLAKE3 identity over file set, config hash, and analyzer version. No timestamps." },
+          "revision": { "type": "string", "description": "Revision label supplied at scan time (informational only)." },
+          "config_hash": { "type": "string", "description": "BLAKE3 hash of the normalized engine configuration." },
+          "file_set_digest": { "type": "string", "description": "BLAKE3 digest over the sorted file manifest (path, content hash, language)." }
         }
       }
     },
     "change_set": {
       "type": ["object", "null"],
+      "description": "Semantic delta between before and after snapshots (present for diff).",
       "properties": {
-        "before_snapshot_id": { "type": "string" },
-        "after_snapshot_id": { "type": "string" },
-        "file_deltas": { "type": "array" },
-        "symbol_deltas": { "type": "array" },
-        "contract_deltas": { "type": "array" },
-        "edge_deltas": { "type": "array" }
+        "before_snapshot_id": { "type": "string", "description": "Snapshot the comparison starts from." },
+        "after_snapshot_id": { "type": "string", "description": "Snapshot the comparison ends at." },
+        "file_deltas": { "type": "array", "description": "Added, deleted, modified, and unambiguous rename file deltas." },
+        "symbol_deltas": { "type": "array", "description": "Symbol Added/Removed/Moved/Renamed/Body/Signature/Visibility/Kind deltas." },
+        "contract_deltas": { "type": "array", "description": "Contract Added/Removed/Modified deltas with is_breaking flags." },
+        "edge_deltas": { "type": "array", "description": "Dependency-edge Added/Removed deltas." }
       }
     },
     "impact": {
       "type": ["object", "null"],
+      "description": "Bounded transitive impact closure for the query seeds (present for impact).",
       "properties": {
-        "query": { "type": "object" },
-        "impacted_entities": { "type": "array", "items": { "type": "string" } },
-        "paths": { "type": "array" },
-        "traversal_profile": { "type": "string" },
-        "truncated": { "type": "boolean" }
+        "query": { "type": "object", "description": "Seed symbols, direction, and traversal profile as executed." },
+        "impacted_entities": { "type": "array", "items": { "type": "string" }, "description": "Complete impacted identity set in lexical order (evidence completeness)." },
+        "ranked_top": { "type": "array", "items": { "type": "string" }, "description": "Reviewer shortlist: top-k entities by shortest-path distance. Presentation only." },
+        "total_impacted": { "type": "integer", "minimum": 0, "description": "Full impacted count; equals impacted_entities length." },
+        "paths": { "type": "array", "description": "Ranked shortest paths (length, then lexical) from seeds to impacted entities." },
+        "traversal_profile": { "type": "string", "description": "Profile name that governed traversal (e.g. cli-impact, cli-impact-callers)." },
+        "truncated": { "type": "boolean", "description": "True when depth or budget caps cut the traversal; the frontier is partial." }
       }
     },
     "findings": {
       "type": "array",
+      "description": "Invariant and contract verdicts. Unknown is reported explicitly and never renders as pass.",
       "items": {
         "type": "object",
         "required": ["id", "rule_id", "status", "severity", "message", "entities"],
         "properties": {
-          "id": { "type": "string" },
-          "rule_id": { "type": "string" },
+          "id": { "type": "string", "description": "Stable finding identifier (rule id plus finding suffix)." },
+          "rule_id": { "type": "string", "description": "Invariant rule that produced this finding." },
           "status": {
             "type": "string",
-            "enum": ["pass", "fail", "unknown"]
+            "enum": ["pass", "fail", "unknown"],
+            "description": "Verdict. Unknown means undecidable under current coverage, never approval."
           },
           "severity": {
             "type": "string",
-            "enum": ["info", "warning", "error"]
+            "enum": ["info", "warning", "error"],
+            "description": "Rule severity from policy configuration."
           },
-          "message": { "type": "string" },
+          "message": { "type": "string", "description": "Human-readable verdict explanation." },
           "entities": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "type": "string" },
+            "description": "Implicated symbol or file identities (empty when none)."
           },
-          "coverage": { "type": "string" }
+          "coverage": { "type": "string", "description": "Coverage state under which the verdict was reached." }
         }
       }
     },
     "evidence": {
       "type": "array",
+      "description": "Verifiable receipts linking each finding to locations, paths, and digests.",
       "items": {
         "type": "object",
         "required": ["finding_id", "rule_id", "locations", "evidence_digest"],
         "properties": {
-          "finding_id": { "type": "string" },
-          "rule_id": { "type": "string" },
+          "finding_id": { "type": "string", "description": "Finding this receipt supports." },
+          "rule_id": { "type": "string", "description": "Invariant rule that produced the finding." },
           "locations": {
             "type": "array",
+            "description": "Exact source locations backing the finding.",
             "items": {
               "type": "object",
               "required": ["path"],
               "properties": {
-                "path": { "type": "string" },
-                "start_line": { "type": "integer" },
-                "end_line": { "type": "integer" },
-                "symbol_id": { "type": "string" }
+                "path": { "type": "string", "description": "Repository-relative POSIX path." },
+                "start_line": { "type": "integer", "description": "1-based start line." },
+                "end_line": { "type": "integer", "description": "1-based end line." },
+                "symbol_id": { "type": "string", "description": "Owning stable symbol identity, when known." }
               }
             }
           },
-          "paths": { "type": "array" },
-          "deltas": { "type": "array" },
-          "evidence_digest": { "type": "string" }
+          "paths": { "type": "array", "description": "Dependency paths supporting the verdict." },
+          "deltas": { "type": "array", "description": "Change descriptions supporting the verdict." },
+          "evidence_digest": { "type": "string", "description": "BLAKE3 digest over the canonical receipt; verify via integrity check." }
         }
       }
     },
     "coverage": {
       "type": "object",
+      "description": "Honest semantic coverage for this run (FR-014, FR-030).",
       "required": ["state", "unsupported_constructs"],
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["verified", "partial", "unsupported", "unknown"]
+          "enum": ["verified", "partial", "unsupported", "unknown"],
+          "description": "Overall coverage: verified (fully resolved), partial (reflection/proxy/generated), unsupported, or unknown (dynamic constructs present)."
         },
         "unsupported_constructs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string" },
+          "description": "Dynamic construct kinds encountered (e.g. Eval, DynamicImport)."
         },
-        "files_scanned": { "type": "integer", "minimum": 0 }
+        "files_scanned": { "type": "integer", "minimum": 0, "description": "Number of files included in the snapshot." }
       }
     },
     "result_digest": {
-      "type": "string"
+      "type": "string",
+      "description": "BLAKE3 digest over the canonical report JSON. Byte-identical across reruns on identical inputs."
     }
   }
 }

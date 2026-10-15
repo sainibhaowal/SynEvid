@@ -18,11 +18,17 @@ Official Model Context Protocol (MCP) Server implementing the **2026-07-28 MCP s
 
 | Tool | Parameters | Description | Output Structure |
 |---|---|---|---|
-| `autopsy_status` | `path?: string` | Inspects workspace indexing state, adapter capabilities, and BLAKE3 snapshot identity. | Index status, snapshot ID, discovered language files. |
-| `autopsy_impact` | `symbol: string`, `path?: string`, `direction?: "forward"\|"backward"\|"bidirectional"`, `depth?: number` | Performs deterministic BFS blast radius traversal over the symbol dependency multigraph. | Reachable entities, edge counts, truncation flags, coverage state. |
-| `autopsy_diff` | `base?: string`, `head?: string`, `path?: string` | Computes semantic delta between two snapshot revisions or git references. | Symbol deltas (added, removed, modified), signature breaks. |
-| `autopsy_verify` | `path?: string`, `profile?: string`, `base?: string` | Evaluates architectural and contract invariants against the target codebase. | Findings (`pass`/`fail`/`unknown`), cryptographic receipt, exit code telemetry. |
-| `autopsy_explain` | `finding_id: string`, `path?: string` | Derives the full causal path and evidence receipt for a specific finding. | Exact source locations, multigraph edges, evidence bundle. |
+| `autopsy_status` | `repo_root?: string` | Inspects workspace indexing state, adapter capabilities, and BLAKE3 snapshot identity. Runs `baseline` (writes only to the engine store, never to source). | Index status, snapshot ID, discovered language files. |
+| `autopsy_impact` | `symbol: string`, `repo_root?: string`, `direction?: "forward"\|"backward"\|"bidirectional"`, `max_depth?: number`, `budget?: number`, `profile?: "full"\|"callers"`, `edge_kinds?: string`, `top_k?: number` | Performs deterministic BFS blast radius traversal over the symbol dependency multigraph. `profile: "callers"` is the recommended precision-first preset (backward invocation closure + top-10 shortlist). | Reachable entities, ranked shortlist, edge counts, truncation flags, coverage state. |
+| `autopsy_diff` | `repo_root?: string`, `base?/before?/base_snapshot?: string`, `head?/after?: string` | Computes semantic delta between a stored baseline snapshot and the worktree (or two stored snapshots). IDs are engine snapshot IDs, not git revisions. | Symbol deltas (added, removed, modified), signature breaks. |
+| `autopsy_verify` | `repo_root?: string`, `base?/baseline_id?: string`, `invariants_file?: string`, `strict?: boolean` | Evaluates architectural and contract invariants against the target codebase, optionally two-state via `base`. | Findings (`pass`/`fail`/`unknown`), cryptographic receipt, exit code telemetry. |
+| `autopsy_explain` | `target?/finding_id?: string`, `repo_root?: string` | Derives the full causal path and evidence receipt for a specific finding. | Exact source locations, multigraph edges, evidence bundle. |
+
+Paginated graph resources (never full dumps): `autopsy://graph` (index
+summary), `autopsy://graph/symbols{?limit,offset,kind}` (stable-id-ordered
+symbol pages), `autopsy://graph/edges{?source,direction,kind,limit,offset}`
+(1-hop neighborhood pages). CLI equivalents: `autopsy symbols --limit 50`
+and `autopsy edges --source <id>`.
 
 ---
 
@@ -61,11 +67,36 @@ $$\text{Baseline } A \longrightarrow \text{Pre-Edit Impact} \longrightarrow \tex
   "mcpServers": {
     "synevid": {
       "command": "node",
-      "args": ["/absolute/path/to/SynEvid/apps/mcp-server/dist/index.js"]
+      "args": ["/absolute/path/to/SynEvid/apps/mcp-server/dist/index.js"],
+      "env": { "AUTOPSY_BIN": "/absolute/path/to/SynEvid/target/release/autopsy" }
     }
   }
 }
 ```
+
+### Binary resolution (`AUTOPSY_BIN`)
+`AUTOPSY_BIN` is optional. Resolution order: `AUTOPSY_BIN` env →
+`~/.cargo/bin/autopsy` → workspace `target/release/autopsy` →
+workspace `target/debug/autopsy` → `PATH`. Tests pin the workspace
+debug build so they validate current code, not stale installs.
+
+### Prove the bridge works (no agent needed)
+Always use absolute repository paths: the CLI resolves `--repo-root`
+against its own working directory, so a relative path from another
+directory silently analyzes the wrong tree.
+```bash
+export AUTOPSY_BIN=/absolute/path/to/SynEvid/target/debug/autopsy
+export REPO=/absolute/path/to/SynEvid/benchmarks/corpus/repo-api
+node -e "
+import('./dist/cli.js').then(async ({ runAutopsy }) => {
+  const repo = process.env.REPO;
+  const v = await runAutopsy('version', [], { repoRoot: repo });
+  console.log('version ok:', v.exitCode === 0);
+  const imp = await runAutopsy('impact', ['-s', 'UserService', '--profile', 'callers', '--top-k', '5'], { repoRoot: repo });
+  console.log('impact ok:', imp.exitCode === 0, '| digest:', imp.data.result_digest.slice(0, 16));
+});"
+# Both lines must print ok:true. The digest must match a direct CLI rerun:
+# $AUTOPSY_BIN --repo-root $REPO impact -s UserService --profile callers --top-k 5 --format json
 
 ---
 

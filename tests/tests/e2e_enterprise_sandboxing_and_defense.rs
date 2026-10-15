@@ -322,3 +322,56 @@ fn test_e2e_zero_network_socket_isolation() {
         assert_eq!(code, EXIT_PASS);
     }
 }
+
+#[test]
+fn test_e2e_oversize_file_cap_never_reads_huge_files() {
+    let temp = TempDirGuard::new("file_cap");
+    let src = temp.path.join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("ok.ts"), "export const ok = 1;").unwrap();
+
+    // Sparse 32 MiB adversarial file with a 1 KiB cap: the scanner must
+    // exclude it via metadata size without reading its bytes.
+    let big = src.join("huge.ts");
+    let f = fs::File::create(&big).unwrap();
+    f.set_len(32 * 1024 * 1024).unwrap();
+    drop(f);
+
+    let autopsy_toml = r#"
+        config_version = "0.0.1"
+        [repository]
+        roots = ["src"]
+        exclude = []
+        [analysis]
+        default_profile = "pr"
+        max_traversal_nodes = 50000
+        max_file_bytes = 1024
+        [cache]
+        directory = ".autopsy/cache"
+    "#;
+    fs::write(temp.path.join("autopsy.toml"), autopsy_toml).unwrap();
+
+    let args = vec![
+        "autopsy".to_string(),
+        "--repo-root".to_string(),
+        temp.path.display().to_string(),
+        "baseline".to_string(),
+    ];
+    assert_eq!(run_cli(&args), EXIT_PASS);
+
+    let storage = autopsy_storage::StorageEngine::open(
+        temp.path.join(".autopsy").join("storage.db"),
+        autopsy_storage::StorageOptions {
+            use_wal: false,
+            cache_dir: Some(temp.path.join(".autopsy").join("cache")),
+        },
+    )
+    .unwrap();
+    let snapshot = storage.get_latest_snapshot().unwrap().unwrap();
+    assert!(snapshot.files.contains_key("src/ok.ts"));
+    assert!(!snapshot.files.contains_key("src/huge.ts"));
+    assert_eq!(
+        snapshot.skipped_oversize_files,
+        vec!["src/huge.ts".to_string()]
+    );
+}

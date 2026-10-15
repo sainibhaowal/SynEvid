@@ -43,11 +43,15 @@ jobs:
 
       - name: Execute Full Benchmark Harness (Baselines A, B, C)
         run: |
-          python3 benchmarks/run_benchmarks.py
+          python3 benchmarks/run_benchmarks.py --autopsy-bin target/release/autopsy
 
       - name: Verify Chapter 12 Pre-Registered Gate
         run: |
           cargo test -p autopsy-tests --test e2e_phase6_benchmarks -- test_benchmark_harness_execution_and_pre_registered_gate --nocapture
+
+      - name: Performance Tier Regression Tripwire
+        run: |
+          ./scripts/verify-perf-tiers.sh
 
       - name: Generate Rich Benchmark Telemetry Summary
         run: |

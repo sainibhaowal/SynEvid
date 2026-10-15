@@ -72,7 +72,7 @@ jobs:
         with:
           key: ${{ matrix.os.name }}-${{ matrix.arch }}
 
-      - name: Run Workspace Unit & Integration Tests (100 Tests)
+      - name: Run Workspace Unit & Integration Tests
         run: cargo test --workspace --all-targets -- --nocapture
 
       - name: Run Documentation Tests
@@ -112,8 +112,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install PyYAML
-        run: pip install pyyaml
+      - name: Install PyYAML, Ruff and Pytest
+        run: pip install pyyaml ruff pytest
+
+      - name: Ruff Lint & Format Check (benchmarks)
+        run: |
+          ruff check benchmarks/
+          ruff format --check benchmarks/
+
+      - name: Pytest Harness Smoke Tests
+        run: |
+          python3 -m pytest benchmarks/tests/ -q
 
       - name: Validate All Public JSON Schemas
         run: |
@@ -158,7 +167,23 @@ jobs:
         run: cd apps/mcp-server && npm ci || npm install
 
       - name: Build and Test MCP Server
-        run: cd apps/mcp-server && npm run typecheck && npm test
+        run: cd apps/mcp-server && npm run typecheck && npm run lint && npm test
+
+  supply-chain-audit:
+    name: Cargo Deny (advisories, licenses, bans)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run cargo-deny against deny.toml policy
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warning
+          command: check
 
   pre-merge-verification-gate:
     name: Pre-Merge Verification Gate
@@ -169,6 +194,7 @@ jobs:
       - determinism-and-boundary-gate
       - schemas-and-configs
       - mcp-server-check
+      - supply-chain-audit
     if: always()
     steps:
       - name: Assess All Prerequisite Gates & Generate Summary
@@ -181,12 +207,14 @@ jobs:
           echo "| Determinism (100-Run) & Boundary Gate | ${{ needs.determinism-and-boundary-gate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Conformance | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
              [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
              [ "${{ needs.determinism-and-boundary-gate.result }}" != "success" ] || \
              [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
-             [ "${{ needs.mcp-server-check.result }}" != "success" ]; then
+             [ "${{ needs.mcp-server-check.result }}" != "success" ] || \
+             [ "${{ needs.supply-chain-audit.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY
             echo "ERROR: One or more pre-merge verification checks failed!"
             exit 1

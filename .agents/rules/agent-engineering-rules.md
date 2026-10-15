@@ -34,7 +34,7 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
 10. **Enterprise Sandboxing & Defense-in-Depth (INV-SANDBOX-001..004):**
    - Symlinks are NEVER followed (`follow_links(false)`). Symlink entries are rejected to prevent escaping workspace roots.
    - Normalized relative paths cannot contain `..` escape sequences or absolute prefixes.
-   - Resource bounds (`max_traversal_nodes`) are enforced to prevent denial-of-service on adversarial cyclic graphs.
+   - Resource bounds (`max_traversal_nodes` for traversal, `max_file_bytes` per-file read cap with explicit `skipped_oversize_files` record) are enforced to prevent denial-of-service on adversarial cyclic graphs and multi-gigabyte files.
    - Zero code execution (in-memory AST parsing only, zero sub-processes).
    - Zero network socket requests (100% air-gapped, offline analysis).
 
@@ -146,6 +146,11 @@ Before any commit:
     - [`08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
     - [`09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
     - [`10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
+    - [`11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md)
+    - [`12_phase4_1_master_tech_plan_end_to_end_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md)
+    - [`13_forensic_closure_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13_forensic_closure_verification.md)
+    - [`14_precision_incremental_pr_gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14_precision_incremental_pr_gate.md)
+    - [`15_phase4_1_gap_closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15_phase4_1_gap_closure.md)
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.

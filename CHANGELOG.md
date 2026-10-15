@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Forensic closure (2026-10-09)
+
+### Fixed
+- **Real two-state `diff`/`verify` (FR-007, FR-010):** `baseline` now persists
+  canonical per-file bytes to the content-addressed cache; `diff --before`
+  and `verify --baseline-id` rebuild the genuine before-state graph and
+  contracts instead of comparing a state against itself. Unknown baseline
+  ids are hard errors; api-compat without a baseline reports `Unknown`,
+  never a vacuous pass.
+- **Symbol identity/shape split (ADR-0009, FR-005):** `autopsy-symbols`
+  implemented as the identity authority; identities no longer embed
+  signature hashes, so signature edits surface as `SignatureModified` +
+  breaking contract deltas instead of delete+create pairs.
+- **TypeScript call graph (FR-008):** `Calls` edges (local, `this.`,
+  `new`, import-resolved, typed-receiver DI/annotated params), module-scope
+  variable/enum/arrow symbols, overload + interface-member symbols; fixed
+  dangling hierarchy edge sources. New `impact --edge-kinds` operator
+  precision control and bare file-path seeds.
+- **Benchmark honesty (FR-025):** Baseline-C executes the real engine
+  binary per task; prior 100%/100% precision figures withdrawn (simulated).
+  Re-measured gate: recall +31.73pp PASS; cost/failure-class FAILs disclosed
+  (see `docs/evidence/13_forensic_closure_verification.md`).
+- **Web inspector:** zero hardcoded evidence; renders live artifacts only
+  (verified headlessly against real `impact` + `verify` output).
+- **Pillar C resource bound (3.2):** new `analysis.max_file_bytes`
+  (default 10 MiB): the scanner gates on metadata size *before* reading,
+  oversized files are excluded and recorded in
+  `RepoSnapshot.skipped_oversize_files` with a CLI diagnostic (never
+  silent); old snapshot JSON without the field still loads.
+- **Honest stored-state addressing:** `diff --after <snapshot-id>` and
+  `impact --snapshot-id <snapshot-id>` analyze the stored state rebuilt
+  from cache (previously `--after` was a revision label and
+  `--snapshot-id` was ignored); unknown impact snapshots are hard errors.
+  MCP `head`/`after` descriptions corrected to snapshot IDs only.
+- **Landscape parity:** one-line `scripts/install.sh` (prebuilt release →
+  source-build fallback, host wiring opt-in); `scripts/setup-agent-hosts.py`
+  auto-wires 7 agent hosts (Claude Code/Desktop, Cursor, Windsurf, VS Code,
+  opencode, Gemini CLI) backup-first and idempotently, `--hooks` adds an
+  advisory fail-open safe-edit pre-edit prompt; **Python adapter**
+  (`autopsy-adapter-python`): symbols/contracts/calls incl. sibling-import,
+  `self.`/`super()`/typed-receiver resolution + honest coverage; agent skill
+  + settings example; `docs/COMPARISON.md` landscape record with
+  vendor-reported claims labelled.
+- Fixed doubled-colon rendering in normalized signatures
+  (`f(): : T` → `f(): T`).
+- **Precision-first impact (FR-008):** ranked top-k shortlist
+  (`--top-k`, `ranked_top` + `total_impacted` in reports/schema, full set
+  preserved for evidence); `--profile callers|full` presets (caller
+  invocation closure, file-node transit suppression; `full` default
+  unchanged); `ImpactProfile.traverse_file_nodes` engine flag.
+- **Incremental baseline (FR-020, early):** `baseline --incremental
+  --baseline-id` reuses content-hashed per-file artifacts for unchanged
+  files (no parse), with global symbol-set soundness gate and full-analysis
+  fallback; write-through artifact cache on every baseline.
+- **PR forensic gate:** `.github/workflows/autopsy-pr-gate.yml` (verify
+  gates merge, per-file callers impact, SARIF + JSON artifacts, PR
+  comment); `scripts/forensic-case.sh` design-partner case bundles.
+- **4.1 gap closure:** invalid `autopsy.toml` now fails before analysis
+  (was silent fallback); `symbols`/`edges` paginated graph-browsing CLI
+  commands + MCP resource templates (full dumps intentionally
+  unavailable); MCP precision params (`profile`, `top-k`, `edge-kinds`),
+  dead `profile` param removed; every public schema field documented;
+  `cargo-deny` 0.20 policy enforced in CI; ESLint + ruff + pytest smoke
+  enforced; nightly perf-tier tripwire; CycloneDX SBOM in releases.
+
 ## [0.1.0] - 2026-10-08
 
 ### Added
@@ -87,3 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.1] - 2026-09-29
 - Repository architecture and public schema starters.
 - Foundation schema contracts and ADR records.
+- **Measured competitor bake-off:** seven rivals cloned, built and run on
+  identical fixtures (`docs/COMPARISON.md`). Found and fixed a silent Python
+  recall gap — inline construction chains (`Calculator().run(...)`) now
+  resolve as `call_expression:chained-constructor`, with regression test
+  (161 → 162 tests). Only SynEvid blocks a breaking change by default
+  (exit 2); ripwire and blastcode detect but exit 0. Logged the missing
+  test-coverage axis (`radius_untested`) as the top parity gap.

@@ -1,5 +1,7 @@
 # cargo-deny configuration for Synevid (Code Autopsy)
 # Rule: Core correctness has no LLM, no network, no source mutation (CA-TECH-001 Ch.1-3, ADR-001/002/003)
+# Schema: cargo-deny 0.20 (lint levels live in check-specific tables).
+# Enforced by the `supply-chain-audit` job in .github/workflows/ci.yml.
 
 [graph]
 targets = [
@@ -10,16 +12,9 @@ targets = [
 ]
 
 [advisories]
-version = 2
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
 ignore = []
 
 [licenses]
-version = 2
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -30,6 +25,7 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "CC0-1.0",
+    "Zlib",
 ]
 confidence-threshold = 0.8
 

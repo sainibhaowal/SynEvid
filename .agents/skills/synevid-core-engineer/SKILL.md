@@ -38,9 +38,11 @@ This skill encodes the mandatory standards, non-negotiable boundaries, and verif
 All language adapters (starting with TypeScript in `crates/autopsy-adapter-typescript`) must satisfy the following invariants:
 1. **Trait Conformance:** Must implement [`LanguageAdapter`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/lib.rs) and pass the reusable test suite [`verify_adapter_conformance`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/conformance.rs).
 2. **Grammar & Tree-Sitter Bootstrap:** Use tree-sitter 0.24+ with official language grammar parsers (e.g. `tree-sitter-typescript` for `.ts` and `.tsx`).
-3. **Resilient Symbol Identifiers (FR-005):** `SymbolId` must be derived from canonical namespace hierarchy, file path, and symbol kind—**never from transient line numbers**. Line shifts and comment additions must produce identical `SymbolId`s.
-4. **Canonical Path & Specifier Resolution:** Use [`TypeScriptCompilerBridge`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-typescript/src/lib.rs) for canonicalizing relative imports (`./foo`, `../bar`, `.ts`/`.tsx`/index resolution) and package specifiers.
-5. **Honest Semantic Coverage (FR-014, FR-030):**
+3. **Resilient Symbol Identifiers (FR-005, ADR-0009):** `SymbolId` must be derived from canonical namespace hierarchy, file path, and symbol kind—**never from transient line numbers**. Line shifts and comment additions must produce identical `SymbolId`s.
+4. **Identity / Shape Split (ADR-0009, FR-007/FR-009/FR-010):** Identities MUST NOT embed signature hashes or any shape material. Shape lives in `Symbol.normalized_signature` and `Contract.inputs/output`, compared explicitly by diff/compat engines. A signature edit must surface as `SignatureModified` + breaking contract delta, never delete+create. Overload collisions receive deterministic `:overload:N` suffixes ordered by signature bytes. All identity construction goes through `autopsy-symbols`.
+5. **Call-Edge Honesty Tiers (FR-008):** `Calls` targets resolve in tiers — same-file binding, `this.`-method, `new` class, import-resolved (exactly one same-named symbol in the resolved target module via the global index), typed receivers (declared field/parameter/local class types). Ambiguous or untyped callees keep name-level `symbol::{name}` targets with `Partial` coverage and explicit provenance. Never invent cross-file bindings.
+6. **Canonical Path & Specifier Resolution:** Use [`TypeScriptCompilerBridge`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-typescript/src/lib.rs) for canonicalizing relative imports (`./foo`, `../bar`, `.ts`/`.tsx`/index resolution) and package specifiers.
+7. **Honest Semantic Coverage (FR-014, FR-030):**
    - Unresolved dynamic constructs (`eval`, dynamic `import(...)`) MUST emit [`CoverageState::Unknown`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
    - Metaprogramming constructs (`Reflect.*`, `Proxy`, generated files) MUST emit [`CoverageState::Partial`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
    - Fully resolved AST entities emit [`CoverageState::Verified`](file:///home/ravi/Projects/SynEvid/crates/autopsy-domain/src/lib.rs).
@@ -59,6 +61,9 @@ All graph and diff operations must satisfy the following invariants:
 6. **Breaking Contract Detection (FR-007, FR-009):** Contract modifications must explicitly flag `is_breaking: true` when public visibility is narrowed, input parameter types/counts change, or return types change.
 7. **Changed Frontier:** Diff outputs must calculate both the directly changed symbols (`direct_symbols`) and the 1-hop dependent boundary (`impacted_boundary`).
 8. **Golden Diff Fixture Gate:** Diff calculations on frozen fixture repositories must produce exact byte-for-byte JSON matches.
+9. **Two-State Honesty (FR-007, FR-010):** `diff` and `verify --baseline-id` must rebuild the genuine before-state graph/contracts from content-addressed snapshot bytes — never compare a state against itself. Unknown baseline ids are hard errors, never silent fallbacks. Compatibility with an empty before-map reports `Unknown`, never a vacuous `Pass`.
+10. **Precision-First Impact (FR-008):** Default (`full`) traversal preserves maximum recall. The `callers` preset (backward + Calls/References, `traverse_file_nodes=false`, top-k shortlist) is the recommended reviewer workflow. `ranked_top` is presentation only — `impacted_entities` always carries the complete evidence set. Never tune ranking weights against the benchmark corpus.
+11. **Incremental Soundness (FR-020):** Per-file artifacts key by content hash. Edge reuse additionally requires an identical global symbol-id set; otherwise recompute all edges. Any cache miss degrades to full analysis, never to a partial answer.
 
 ---
 
@@ -73,7 +78,7 @@ cargo fmt --all -- --check
 # 2. Strict lints (-D warnings)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. All workspace unit & integration tests (88/88 passing)
+# 3. All workspace unit & integration tests (161/161 passing)
 cargo test --workspace --all-targets -- --nocapture
 
 # 4. Doc tests
@@ -108,5 +113,13 @@ When implementing features:
    - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
    - [`05_phase5_cli_storage_report_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05_phase5_cli_storage_report_verification.md)
    - [`06_phase6_benchmark_harness_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06_phase6_benchmark_harness_verification.md)
-   - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
+    - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
+    - [`08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
+    - [`09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
+    - [`10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
+    - [`11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md)
+    - [`12_phase4_1_master_tech_plan_end_to_end_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md)
+    - [`13_forensic_closure_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13_forensic_closure_verification.md)
+    - [`14_precision_incremental_pr_gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14_precision_incremental_pr_gate.md)
+    - [`15_phase4_1_gap_closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15_phase4_1_gap_closure.md)
 5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).

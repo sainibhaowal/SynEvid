@@ -332,7 +332,7 @@ fn test_phase5_100_runs_determinism() {
     let mut first_snapshot_id: Option<SnapshotId> = None;
 
     for i in 0..100 {
-        let artifacts = autopsy_cli::build_snapshot_and_graph(&temp.path, &config, None)
+        let artifacts = autopsy_cli::build_snapshot_and_graph(&temp.path, &config, None, None)
             .expect("Build snapshot should succeed");
 
         if i == 0 {

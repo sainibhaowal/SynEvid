@@ -46,19 +46,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary_name: synevid
+            binary_name: autopsy
             pkg_type: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary_name: synevid
+            binary_name: autopsy
             pkg_type: tar.gz
           - os: macos-13
             target: x86_64-apple-darwin
-            binary_name: synevid
+            binary_name: autopsy
             pkg_type: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: synevid.exe
+            binary_name: autopsy.exe
             pkg_type: zip
     steps:
       - name: Checkout Source Code
@@ -80,7 +80,7 @@ jobs:
       - name: Package Release Archive (with License & Metadata)
         shell: bash
         run: |
-          DIST_DIR="synevid-${{ matrix.target }}"
+          DIST_DIR="autopsy-${{ matrix.target }}"
           mkdir -p "$DIST_DIR"
           
           if [ -f "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" ]; then
@@ -92,21 +92,21 @@ jobs:
           cp LICENSE NOTICE README.md "$DIST_DIR/"
           
           if [ "${{ matrix.pkg_type }}" == "zip" ]; then
-            7z a "synevid-${{ matrix.target }}.zip" "$DIST_DIR"
-            shasum -a 256 "synevid-${{ matrix.target }}.zip" > "synevid-${{ matrix.target }}.zip.sha256"
+            7z a "autopsy-${{ matrix.target }}.zip" "$DIST_DIR"
+            shasum -a 256 "autopsy-${{ matrix.target }}.zip" > "autopsy-${{ matrix.target }}.zip.sha256"
           else
-            tar -czvf "synevid-${{ matrix.target }}.tar.gz" "$DIST_DIR"
-            shasum -a 256 "synevid-${{ matrix.target }}.tar.gz" > "synevid-${{ matrix.target }}.tar.gz.sha256"
+            tar -czvf "autopsy-${{ matrix.target }}.tar.gz" "$DIST_DIR"
+            shasum -a 256 "autopsy-${{ matrix.target }}.tar.gz" > "autopsy-${{ matrix.target }}.tar.gz.sha256"
           fi
           
           mkdir -p artifacts
-          mv synevid-${{ matrix.target }}.* artifacts/
+          mv autopsy-${{ matrix.target }}.* artifacts/
           ls -lh artifacts/
 
       - name: Upload Platform Package Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: synevid-${{ matrix.target }}
+          name: autopsy-${{ matrix.target }}
           path: artifacts/
 
   release-manifest:
@@ -114,6 +114,18 @@ jobs:
     needs: cross-platform-builds
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate CycloneDX SBOM for Release Binary
+        run: |
+          cargo install cargo-sbom --locked
+          cargo sbom --cargo-package autopsy-cli --output-format cyclone_dx_json_1_5 > sbom-autopsy-cli.cdx.json
+          python3 -c "import json; d=json.load(open('sbom-autopsy-cli.cdx.json')); print('SBOM components:', len(d.get('components', [])))"
+
       - name: Download All Platform Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -123,10 +135,10 @@ jobs:
         run: |
           mkdir -p release-bundle
           find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-bundle/ \;
+          cp sbom-autopsy-cli.cdx.json release-bundle/
           cd release-bundle
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          
           echo "## Synevid Multi-Platform Release Manifest" >> $GITHUB_STEP_SUMMARY
           echo "| Filename | SHA256 Checksum |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
@@ -137,5 +149,5 @@ jobs:
       - name: Upload Final Release Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: synevid-release-bundle
+          name: autopsy-release-bundle
           path: release-bundle/

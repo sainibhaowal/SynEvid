@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Code Autopsy Invariant",
+  "description": "Single architecture/contract policy rule evaluated deterministically by the invariant engine. Validated before evaluation; invalid rules fail with location diagnostics.",
   "type": "object",
   "required": [
     "id",
@@ -11,26 +12,32 @@
   "properties": {
     "id": {
       "type": "string",
-      "pattern": "^[A-Z][A-Z0-9_-]+$"
+      "pattern": "^[A-Z][A-Z0-9_-]+$",
+      "description": "Stable rule identifier (uppercase alphanumeric, dash, underscore). Referenced by findings, evidence, and baseline waivers."
     },
     "description": {
-      "type": "string"
+      "type": "string",
+      "description": "Human-readable rule intent, surfaced in reports and PR comments."
     },
     "kind": {
-      "type": "string"
+      "type": "string",
+      "description": "Evaluator kind: forbidden_dependency (alias forbidden-dep), layers, no_new_cycle (alias no-new-cycle), or api_compatibility (alias api-compat). Unknown kinds fail evaluation explicitly."
     },
     "severity": {
       "enum": [
         "info",
         "warning",
         "error"
-      ]
+      ],
+      "description": "Failure severity attached to findings from this rule."
     },
     "scope": {
-      "type": "object"
+      "type": "object",
+      "description": "Optional glob scope constraining the rule (source/target path patterns)."
     },
     "rule": {
-      "type": "object"
+      "type": "object",
+      "description": "Optional kind-specific rule parameters (thresholds, layer maps, dependency pairs)."
     }
   }
 }

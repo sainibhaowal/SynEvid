@@ -27,7 +27,7 @@ All implementations strictly adhere to the non-negotiable boundaries defined in 
 ### 2.2 `autopsy-adapter-typescript` ([`crates/autopsy-adapter-typescript/src/lib.rs`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-typescript/src/lib.rs))
 - **Tree-sitter Bootstrap (FR-004):** Offline parser utilizing `tree-sitter` and `tree-sitter-typescript` (both TS and TSX grammars).
 - **TypeScript Compiler Bridge:** Implements [`TypeScriptCompilerBridge`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-typescript/src/lib.rs#L21) for canonical path and module specifier resolution (`./foo`, `../bar`, `@scope/pkg`, `pkg`).
-- **Stable Symbol Identifiers (FR-005):** Derives stable identities independent of line shifts using normalized parameter signatures and BLAKE3 hashes: `file::scope#kind:name:sig_hash`.
+- **Stable Symbol Identifiers (FR-005, ADR-0009):** Identities carry file + kind + scope + name only (`path#fn:name`, `path#method:C.m`); signature material lives on the record and is compared, never embedded. Supersedes the earlier `sig_hash`-embedded format, under which signature edits masqueraded as delete+create.
 - **Typed Edge Extraction:** Emits typed multigraph edges (`Contains`, `Imports`, `Calls`, `Inherits`, `Implements`).
 - **Normalized Contract Extraction (FR-009):** Extracts callable and interface contracts including parameter types, return types, and visibility (`Public`, `Protected`, `Private`, `Internal`).
 - **Coverage Honesty (FR-014, FR-030):**

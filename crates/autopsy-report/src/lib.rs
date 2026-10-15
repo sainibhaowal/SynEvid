@@ -69,7 +69,16 @@ pub struct ChangeSetSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImpactSummary {
     pub query: serde_json::Value,
+    /// Complete impacted set (evidence completeness; lexical order).
     pub impacted_entities: Vec<String>,
+    /// Ranked shortlist: entities ordered by shortest-path distance
+    /// (then lexical), sliced to the requested top-k. Empty when no
+    /// top-k was requested.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranked_top: Vec<String>,
+    /// Full impacted count (equals `impacted_entities.len()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_impacted: Option<usize>,
     pub paths: Vec<serde_json::Value>,
     pub traversal_profile: String,
     pub truncated: bool,
@@ -267,13 +276,27 @@ impl AutopsyReport {
                 imp.impacted_entities.len(),
                 imp.truncated
             ));
-            for entity in imp.impacted_entities.iter().take(10) {
+            // Ranked shortlist when requested; otherwise legacy head slice.
+            let shown: &[String] = if imp.ranked_top.is_empty() {
+                &imp.impacted_entities
+            } else {
+                &imp.ranked_top
+            };
+            for entity in shown.iter().take(10) {
                 out.push_str(&format!("       -> {}\n", entity));
             }
-            if imp.impacted_entities.len() > 10 {
+            if shown.len() > 10 {
                 out.push_str(&format!(
                     "       ... and {} more entities\n",
-                    imp.impacted_entities.len() - 10
+                    shown.len() - 10
+                ));
+            }
+            if !imp.ranked_top.is_empty() && imp.total_impacted.unwrap_or(0) > imp.ranked_top.len()
+            {
+                out.push_str(&format!(
+                    "       ... and {} more beyond top-{}\n",
+                    imp.total_impacted.unwrap_or(0) - imp.ranked_top.len(),
+                    imp.ranked_top.len()
                 ));
             }
             out.push_str("--------------------------------------------------------------------------------\n");
@@ -508,6 +531,49 @@ pub fn convert_semantic_diff(diff: &SemanticDiff) -> ChangeSetSummary {
 
 /// Helper to convert impact result into ImpactSummary
 pub fn convert_impact_result(impact: &ImpactResult) -> ImpactSummary {
+    convert_impact_result_top_k(impact, None)
+}
+
+/// Converts with a ranked top-k shortlist.
+///
+/// Ranking key per entity: shortest ranked-path length containing it
+/// (seed paths sort first), then the path itself lexically, then the
+/// entity id. Entities on no path sort last. The full
+/// `impacted_entities` set is always preserved for evidence; `top_k`
+/// only shapes the `ranked_top` presentation slice.
+pub fn convert_impact_result_top_k(impact: &ImpactResult, top_k: Option<usize>) -> ImpactSummary {
+    let total = impact.impacted_entities.len();
+    let ranked_top = match top_k {
+        Some(k) => {
+            let mut scored: Vec<(&autopsy_domain::SymbolId, usize, Vec<String>)> = impact
+                .impacted_entities
+                .iter()
+                .map(|e| {
+                    let mut best: Option<(usize, Vec<String>)> = None;
+                    for p in &impact.paths {
+                        if p.contains(e) {
+                            let path_strs: Vec<String> = p.iter().map(|s| s.to_string()).collect();
+                            let cand = (p.len(), path_strs);
+                            if best.as_ref().is_none_or(|b| cand < *b) {
+                                best = Some(cand);
+                            }
+                        }
+                    }
+                    match best {
+                        Some((len, path)) => (e, len, path),
+                        None => (e, usize::MAX, vec![e.to_string()]),
+                    }
+                })
+                .collect();
+            scored.sort_by(|a, b| (a.1, &a.2, a.0).cmp(&(b.1, &b.2, b.0)));
+            scored
+                .into_iter()
+                .take(k)
+                .map(|(e, _, _)| e.to_string())
+                .collect()
+        }
+        None => Vec::new(),
+    };
     ImpactSummary {
         query: serde_json::json!({
             "seed_symbols": impact.query.seed_symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -518,6 +584,8 @@ pub fn convert_impact_result(impact: &ImpactResult) -> ImpactSummary {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        ranked_top,
+        total_impacted: Some(total),
         paths: impact
             .paths
             .iter()
@@ -549,6 +617,8 @@ fn sort_json_value(val: &serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use autopsy_domain::SymbolId;
+    use autopsy_impact::{ImpactDirection, ImpactProfile, ImpactQuery};
 
     #[test]
     fn test_report_canonical_json_and_digest_determinism() {
@@ -679,5 +749,52 @@ mod tests {
                 ["uri"],
             "src/ui.ts"
         );
+    }
+
+    fn test_impact_result(seed: &str, entities: &[&str], paths: &[Vec<&str>]) -> ImpactResult {
+        ImpactResult {
+            query: ImpactQuery {
+                seed_symbols: vec![SymbolId::new(seed)],
+                direction: ImpactDirection::Backward,
+                profile: ImpactProfile::default(),
+            },
+            impacted_entities: entities.iter().map(|e| SymbolId::new(*e)).collect(),
+            paths: paths
+                .iter()
+                .map(|p| p.iter().map(|s| SymbolId::new(*s)).collect())
+                .collect(),
+            traversal_profile: "default".to_string(),
+            truncated: false,
+            impact_digest: "digest".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_top_k_ranking_by_shortest_path() {
+        // seed <- mid (len 2) <- far (len 3); orphan on no path.
+        let impact = test_impact_result(
+            "seed",
+            &["seed", "mid", "far", "orphan"],
+            &[
+                vec!["seed"],
+                vec!["seed", "mid"],
+                vec!["seed", "mid", "far"],
+            ],
+        );
+
+        let full = convert_impact_result(&impact);
+        assert!(full.ranked_top.is_empty(), "no shortlist without top-k");
+        assert_eq!(full.total_impacted, Some(4));
+        assert_eq!(full.impacted_entities.len(), 4);
+
+        let top2 = convert_impact_result_top_k(&impact, Some(2));
+        assert_eq!(top2.ranked_top, vec!["seed".to_string(), "mid".to_string()]);
+        assert_eq!(top2.total_impacted, Some(4));
+        // Full evidence set preserved alongside the shortlist.
+        assert_eq!(top2.impacted_entities.len(), 4);
+
+        // Deterministic across repeated conversion.
+        let again = convert_impact_result_top_k(&impact, Some(2));
+        assert_eq!(top2.ranked_top, again.ranked_top);
     }
 }
