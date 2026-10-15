@@ -1,0 +1,17 @@
+[package]
+name = "autopsy-temporal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+blake3 = { workspace = true }
+flate2 = { workspace = true }
+sha1 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }

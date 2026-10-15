@@ -16,6 +16,7 @@ members = [
     "crates/autopsy-storage",
     "crates/autopsy-report",
     "crates/autopsy-cli",
+    "crates/autopsy-temporal",
     "tests"
 ]
 
@@ -37,3 +38,7 @@ ignore = "0.4"
 glob = "0.3"
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Pure-Rust, C-free zlib for read-only git object decompression.
+# rust_backend (miniz_oxide) keeps cross-platform bytes identical (NFR-001).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+sha1 = { version = "0.10", default-features = false }

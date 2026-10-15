@@ -156,7 +156,92 @@ impl StorageEngine {
             )?;
         }
 
+        // --- Migration 002: Phase 4.2 temporal & extended tables ---
+        //
+        // `created_at` / `window_start` / `window_end` are bookkeeping columns.
+        // They are never read into canonical result structures, so wall-clock
+        // time cannot leak into BLAKE3 digests (NFR-001, FR-028).
+        if current_version < 2 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS temporal_facts (
+                    fact_id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    valid_from TEXT NOT NULL,
+                    valid_to TEXT,
+                    evidence_digest TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_temporal_facts_subject
+                    ON temporal_facts (subject, valid_from);
+                CREATE INDEX IF NOT EXISTS idx_temporal_facts_span
+                    ON temporal_facts (valid_from, valid_to);
+                CREATE INDEX IF NOT EXISTS idx_temporal_facts_predicate
+                    ON temporal_facts (predicate);
+
+                CREATE TABLE IF NOT EXISTS test_mappings (
+                    test_suite_id TEXT NOT NULL,
+                    target_symbol_id TEXT NOT NULL,
+                    mapping_source TEXT NOT NULL,
+                    evidence_digest TEXT NOT NULL,
+                    PRIMARY KEY (test_suite_id, target_symbol_id, mapping_source)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_test_mappings_target
+                    ON test_mappings (target_symbol_id, mapping_source);
+
+                CREATE TABLE IF NOT EXISTS distributed_contracts (
+                    contract_id TEXT PRIMARY KEY,
+                    protocol TEXT NOT NULL,
+                    service_id TEXT NOT NULL,
+                    endpoint_or_channel TEXT NOT NULL,
+                    spec_digest TEXT NOT NULL,
+                    parsed_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_distributed_contracts_service
+                    ON distributed_contracts (service_id, protocol);
+                CREATE INDEX IF NOT EXISTS idx_distributed_contracts_endpoint
+                    ON distributed_contracts (endpoint_or_channel);
+
+                CREATE TABLE IF NOT EXISTS co_change_matrix (
+                    entity_a TEXT NOT NULL,
+                    entity_b TEXT NOT NULL,
+                    commit_count INTEGER NOT NULL,
+                    lift REAL NOT NULL,
+                    window_start TEXT NOT NULL,
+                    window_end TEXT NOT NULL,
+                    PRIMARY KEY (entity_a, entity_b)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_co_change_matrix_a
+                    ON co_change_matrix (entity_a, lift);
+                CREATE INDEX IF NOT EXISTS idx_co_change_matrix_b
+                    ON co_change_matrix (entity_b, lift);
+
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (2, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
         Ok(())
+    }
+
+    /// Highest applied schema migration version.
+    ///
+    /// Used by the CLI `doctor` command and by migration tests.
+    pub fn schema_version(&self) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let version = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(version)
     }
 
     /// Persists an immutable repository snapshot into storage.
@@ -588,5 +673,267 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// Creates a database containing *only* the v1 schema, to prove that
+    /// migration 002 upgrades a pre-existing v1 database in place.
+    fn create_v1_only_database(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                revision TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                file_set_digest TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations (version, applied_at)
+            VALUES (1, datetime('now'));",
+        )
+        .unwrap();
+    }
+
+    fn table_names(engine: &StorageEngine) -> Vec<String> {
+        let conn = engine.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn index_names(engine: &StorageEngine) -> Vec<String> {
+        let conn = engine.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name;")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_migration_002_creates_pillar_tables() {
+        let engine = StorageEngine::in_memory().unwrap();
+        assert_eq!(engine.schema_version().unwrap(), 2);
+
+        let tables = table_names(&engine);
+        for expected in [
+            "temporal_facts",
+            "test_mappings",
+            "distributed_contracts",
+            "co_change_matrix",
+        ] {
+            assert!(
+                tables.contains(&expected.to_string()),
+                "missing table {expected}; found {tables:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_migration_002_creates_indexes() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let indexes = index_names(&engine);
+        for expected in [
+            "idx_temporal_facts_subject",
+            "idx_temporal_facts_span",
+            "idx_temporal_facts_predicate",
+            "idx_test_mappings_target",
+            "idx_distributed_contracts_service",
+            "idx_distributed_contracts_endpoint",
+            "idx_co_change_matrix_a",
+            "idx_co_change_matrix_b",
+        ] {
+            assert!(
+                indexes.contains(&expected.to_string()),
+                "missing index {expected}; found {indexes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_migration_002_applies_cleanly_on_v1_database() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("autopsy-test-mig-v1-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("autopsy.db");
+
+        create_v1_only_database(&db_path);
+
+        // Sanity: the fixture really is v1-only.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            let v: i64 = conn
+                .query_row("SELECT MAX(version) FROM schema_migrations;", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(v, 1);
+        }
+
+        // Opening through the engine must upgrade in place.
+        let engine = StorageEngine::open(
+            &db_path,
+            StorageOptions {
+                use_wal: false,
+                cache_dir: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(engine.schema_version().unwrap(), 2);
+
+        let tables = table_names(&engine);
+        assert!(tables.contains(&"temporal_facts".to_string()));
+        assert!(tables.contains(&"test_mappings".to_string()));
+        assert!(tables.contains(&"distributed_contracts".to_string()));
+        assert!(tables.contains(&"co_change_matrix".to_string()));
+
+        // v1 data survives the upgrade.
+        assert!(tables.contains(&"snapshots".to_string()));
+
+        drop(engine);
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_migration_is_idempotent_across_reopens() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("autopsy-test-mig-idem-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("autopsy.db");
+        let opts = || StorageOptions {
+            use_wal: false,
+            cache_dir: None,
+        };
+
+        for _ in 0..3 {
+            let engine = StorageEngine::open(&db_path, opts()).unwrap();
+            assert_eq!(engine.schema_version().unwrap(), 2);
+            // Re-running migrations explicitly must be a no-op.
+            let mut engine = engine;
+            engine.run_migrations().unwrap();
+            assert_eq!(engine.schema_version().unwrap(), 2);
+        }
+
+        // Exactly one row per migration version: no duplicate application.
+        let conn = Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "expected versions 1 and 2 exactly once each");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_temporal_facts_accepts_valid_row_and_allows_open_interval() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+
+        // valid_to NULL means "currently active".
+        conn.execute(
+            "INSERT INTO temporal_facts
+             (fact_id, subject, predicate, object, valid_from, valid_to, evidence_digest, created_at)
+             VALUES ('fact-1', 'urn:a', 'calls', 'urn:b', 'abc123', NULL, 'digest-1', 0);",
+            [],
+        )
+        .unwrap();
+
+        let open_interval: Option<String> = conn
+            .query_row(
+                "SELECT valid_to FROM temporal_facts WHERE fact_id = 'fact-1';",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(open_interval, None);
+
+        // fact_id is the primary key: duplicates are rejected.
+        let dup = conn.execute(
+            "INSERT INTO temporal_facts
+             (fact_id, subject, predicate, object, valid_from, valid_to, evidence_digest, created_at)
+             VALUES ('fact-1', 'urn:x', 'calls', 'urn:y', 'def456', NULL, 'digest-2', 0);",
+            [],
+        );
+        assert!(dup.is_err(), "fact_id must be unique");
+    }
+
+    #[test]
+    fn test_test_mappings_composite_primary_key() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+        let insert = |source: &str| {
+            conn.execute(
+                "INSERT INTO test_mappings
+                 (test_suite_id, target_symbol_id, mapping_source, evidence_digest)
+                 VALUES ('suite-1', 'sym-1', ?1, 'd');",
+                params![source],
+            )
+        };
+
+        insert("ast_reference").unwrap();
+        // Same (suite, symbol) but a different provenance is a distinct row.
+        insert("observed_coverage").unwrap();
+        // Exact duplicate of the composite key is rejected.
+        assert!(insert("ast_reference").is_err());
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM test_mappings;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_distributed_contracts_protocol_roundtrip() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO distributed_contracts
+             (contract_id, protocol, service_id, endpoint_or_channel, spec_digest, parsed_json)
+             VALUES ('c-1', 'openapi_3_2_1', 'svc-a', 'GET /invoices', 'sd', '{}');",
+            [],
+        )
+        .unwrap();
+
+        let protocol: String = conn
+            .query_row(
+                "SELECT protocol FROM distributed_contracts WHERE contract_id = 'c-1';",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(protocol, "openapi_3_2_1");
+    }
+
+    #[test]
+    fn test_co_change_matrix_composite_key_and_lift_storage() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO co_change_matrix
+             (entity_a, entity_b, commit_count, lift, window_start, window_end)
+             VALUES ('a.ts', 'b.ts', 7, 3.25, 'w0', 'w1');",
+            [],
+        )
+        .unwrap();
+
+        let (count, lift): (i64, f64) = conn
+            .query_row(
+                "SELECT commit_count, lift FROM co_change_matrix
+                 WHERE entity_a = 'a.ts' AND entity_b = 'b.ts';",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 7);
+        assert!((lift - 3.25).abs() < f64::EPSILON);
     }
 }

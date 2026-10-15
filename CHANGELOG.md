@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Phase 4.2 Pillar 1 (2026-10-16)
+
+Steps 28–32 of the 4.2 implementation sequence. Pillars 2–6 (Steps 33–45)
+are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`.
+
+### Added
+- **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
+  `urn:autopsy:repo:<provider>:<org>:<repo>[#<path>[:<symbol-path>]]` as a total,
+  canonicalizing parser. Provider host lowercased; org/repo case-preserved.
+  Paths POSIX-normalized (leading `./` and trailing `/` stripped, `//`
+  collapsed, `..` rejected). Round-trip is total: `parse(display(id)) == id`.
+  Backslashes are **rejected rather than rewritten**, so one entity cannot hold
+  two identities across platforms.
+- **SQLite migration v2 (`autopsy-storage`, Step 29):** tables
+  `temporal_facts`, `test_mappings`, `distributed_contracts`, `co_change_matrix`
+  plus 8 indexes. Verified to upgrade a hand-built v1 database in place and to
+  be idempotent across reopens. `schema_version()` accessor added.
+  `created_at`/`window_*` are bookkeeping only and never reach a digest.
+- **Read-only pure-Rust git object store (`autopsy-temporal::git`):** refs
+  (`HEAD`, loose, `packed-refs`, symbolic chains, tag deref), loose objects with
+  a 256 MiB inflate cap and declared-length cross-check, and packfile v2 with
+  fanout-bounded index search plus `ofs-delta` **and** `ref-delta` resolution.
+  This exists because `INV-SANDBOX-001..004` forbid sub-process execution: the
+  engine cannot shell out to `git log`. Unsupported features (`.idx` v1,
+  SHA-256 object format, alternates, linked worktrees) are explicit
+  `GitError::Unsupported`, never silently misread.
+- **Temporal fact journal (`autopsy-temporal::fact`, `::timeline`, Step 30):**
+  append-only `TemporalFact` records with half-open `[valid_from, valid_to)`
+  intervals. `fact_id = BLAKE3(subject ‖ predicate ‖ object ‖ valid_from)`,
+  NUL-separated and deliberately independent of `valid_to`. Commit ordering is
+  topological with object-id tie-breaking, never chronological.
+- **Symbol lineage (`autopsy-temporal::lineage`, Step 31):** content-digest
+  equality with a unique counterpart is the *only* path to a `Verified`
+  rename/move; identical-multiplicity and similarity matches are
+  `CoverageState::Partial` with the full candidate set disclosed. Similarity
+  alone can never reach `Verified`, which is what makes the
+  zero-false-positive-rename gate hold.
+- **Point-in-time reconstruction (`autopsy-temporal::timeline`, Step 32):**
+  `TemporalJournal::reconstruct(revision)` returns a `GraphSnapshot` whose
+  digest is byte-identical to a fresh parse at that revision, at every revision.
+  `SourceExtractor` is the extension point for adapter-supplied symbol facts.
+
+### Fixed
+- Temporal replay no longer mints a duplicate fact on re-observation. Because
+  `valid_from` is part of the digest while a continuing assertion keeps its
+  original `valid_from`, the first implementation created a new fact at every
+  subsequent commit; the fixture exposed 9 facts where 5 were correct.
+- Removed an item-invariant filter in the lineage similarity pass that could
+  only ever match all candidates or none.
+
+### Notes
+- New dependencies `flate2` (rust_backend, for cross-platform-identical
+  decompression) and `sha1`; both MIT/Apache-2.0 and within the existing
+  `deny.toml` allow-list.
+- The git hash implementation is anchored to published git constants (empty
+  tree `4b825dc6...`, `"hello world\n"` blob `3b18e512...`) and was validated
+  end-to-end against a real `git gc --aggressive` repository.
+- Symbol-level temporal extraction is **not yet wired to the language
+  adapters**; only the built-in `TreeExtractor` (file presence) runs in
+  production paths today.
+- `schemas/temporal.schema.json` and CLI surfacing of the journal are not yet
+  provided; the journal is a library API only.
+- `Cargo.toml` version remains `0.0.1`.
+
 ## [Unreleased] - Forensic closure (2026-10-09)
 
 ### Fixed

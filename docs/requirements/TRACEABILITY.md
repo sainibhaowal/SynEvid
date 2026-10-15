@@ -50,3 +50,18 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 | **CARGO-DENY-001** | License, Advisory & Banned LLM Crate Policy | `deny.toml` | `cargo-deny` configuration, permitted OSS licenses, banned crates | **VERIFIED** |
 | **FUZZ-RESILIENCE-001** | Parser, Config & Cyclic Multigraph Fuzz Suite | `tests/tests/e2e_fuzz_parsers_and_schemas.rs` | Adversarial corpus, zero panics, Tarjan SCC cycle termination | **VERIFIED** |
 
+## Phase 4.2 — Temporal & Multi-Source Evolution
+
+Steps 28–32 of `04_4.2_IMPLEMENTATION_SEQUENCE.md` are implemented. Steps 33–45 remain **NOT STARTED**.
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **Step 28 / RFC-GLOBAL-001** | Global Entity ID parser & grammar | `autopsy-domain` (`global_id`) | `test_parse_spec_example`, `test_roundtrip_is_total`, `test_rejects_path_traversal`, `test_rejects_backslash_path`, `test_btreeset_dedupes_equivalent_spellings`, `test_serde_rejects_invalid_on_deserialize`, +17 more | **VERIFIED** |
+| **Step 29** | SQLite storage migration v2 | `autopsy-storage` | `test_migration_002_applies_cleanly_on_v1_database`, `test_migration_002_creates_pillar_tables`, `test_migration_002_creates_indexes`, `test_migration_is_idempotent_across_reopens`, `test_test_mappings_composite_primary_key`, `test_co_change_matrix_composite_key_and_lift_storage` | **VERIFIED** |
+| **Step 30** | Temporal fact extraction & journal (Pillar 1) | `autopsy-temporal` (`fact`, `timeline`) | `test_step30_journal_records_and_retires_facts`, `test_step30_journal_is_byte_identical_across_100_runs`, `test_step30_timeline_is_topologically_ordered`, `test_step30_repeated_commit_ids_produce_identical_journals` | **VERIFIED** |
+| **Step 31** | Symbol lineage across moves & renames (Pillar 1) | `autopsy-temporal` (`lineage`) | `test_step31_rename_preserves_identity_with_zero_false_positives`, `test_step31_same_digest_rename_is_the_only_verified_identity_claim`, `test_step31_ambiguous_renames_are_partial_never_verified`, `test_zero_false_positive_renames_on_unrelated_files`, `test_similarity_match_is_partial_not_verified` | **VERIFIED** |
+| **Step 32** | Point-in-time graph reconstruction (Pillar 1) | `autopsy-temporal` (`timeline`) | `test_step32_reconstruction_matches_fresh_parse_at_every_revision`, `test_step32_reconstruction_reflects_file_additions_over_time`, `test_step32_reconstruction_is_deterministic_across_100_runs`, `test_step32_unknown_revision_is_an_explicit_error`, `test_step32_timeline_bound_is_enforced` | **VERIFIED** |
+| **Pillar 1 infrastructure** | Read-only pure-Rust git object store (zero sub-process) | `autopsy-temporal` (`git`) | 32 tests in `tests/git_store.rs`: loose objects, refs, `packed-refs`, packfile v2, `ref-delta` & `ofs-delta` resolution, tags, submodules, truncated/corrupt/unsupported negatives, published git hash constants | **VERIFIED** |
+| **Steps 33–45** | Pillars 2–6, CLI subcommands, MCP & Web Inspector evolution | *(none)* | — | **NOT STARTED** |
+
+
