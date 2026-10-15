@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Code Autopsy Conservative Test Selection",
+  "description": "Schema for the deterministic test-selection plan produced by `autopsy test-select` (Phase 4.2 Pillars 2, Steps 33-35). Every field is derived from a reproducible evidence chain: test inventory discovery, observed LCOV coverage, and reverse reachability over the program graph. No probabilistic score appears in this document; the advisory ranking of Step 36 is a separate artifact precisely so that it cannot gate a merge.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selected_tests",
+    "selected_suites",
+    "affected_sources",
+    "unrulable_out_suites",
+    "fallback",
+    "coverage",
+    "reasons",
+    "total_suites",
+    "total_tests",
+    "digest"
+  ],
+  "properties": {
+    "selected_tests": {
+      "type": "array",
+      "description": "Concrete test case identifiers to run, sorted. Format `<suite-path>::<kind>::<name>`, or `<suite-path>::<kind>::@line<N>` when the name is computed, or `<suite-path>::@suite` when no cases could be parsed but the suite cannot be ruled out.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "selected_suites": {
+      "type": "array",
+      "description": "Repository-relative POSIX paths of the suites to run, sorted.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "affected_sources": {
+      "type": "array",
+      "description": "Repository-relative POSIX paths of the source files judged affected, sorted. Computed as the reverse-reachability closure of the change set intersected with the repository file set.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "unrulable_out_suites": {
+      "type": "array",
+      "description": "Suites whose mapping is not `verified`, and which were therefore included rather than excluded. This is the load-bearing asymmetry behind the 0%-false-negative gate: a suite the engine could not map is not evidence that it is unaffected. Empty is required for `coverage: verified` to be honest.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "fallback": {
+      "description": "What could not be narrowed, and why. A plan with `coverage: unknown` MUST NOT be read as an approval.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "none",
+              "description": "Selection was possible."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "packages", "reason"],
+          "properties": {
+            "kind": {
+              "const": "run_package_tests"
+            },
+            "packages": {
+              "type": "array",
+              "description": "Top-level directories whose tests must run.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason"],
+          "properties": {
+            "kind": {
+              "const": "run_all_tests"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "string",
+      "description": "Honesty of the plan as a whole. `verified` requires every selected mapping to be `verified` AND every unselected suite to have been positively ruled out. `unknown` means the plan is not a decision and the fallback governs.",
+      "enum": ["verified", "partial", "unsupported", "unknown"]
+    },
+    "reasons": {
+      "type": "array",
+      "description": "Machine-readable justifications, sorted by code then detail. Always contains a `plan_summary` entry so the narrowing ratio is stated rather than inferred from array lengths.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "detail"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable code. Known values: `static_import_mapping`, `observed_coverage`, `unmapped_suite_cannot_be_excluded`, `unknown_changed_symbol_semantics`, `change_set_coverage_unknown`, `plan_summary`.",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "total_suites": {
+      "type": "integer",
+      "description": "Total suites in the inventory, for the \"we narrowed X of Y\" report.",
+      "minimum": 0
+    },
+    "total_tests": {
+      "type": "integer",
+      "description": "Total declared test cases in the inventory.",
+      "minimum": 0
+    },
+    "digest": {
+      "type": "string",
+      "description": "BLAKE3 over the canonical plan body (affected sources, selected tests, fallback kind, coverage state). Wall-clock time and reason prose are deliberately excluded, so the digest is stable across re-runs. 64 lowercase hex characters.",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

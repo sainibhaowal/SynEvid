@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillar 1 (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–2 (2026-10-16)
 
-Steps 28–32 of the 4.2 implementation sequence. Pillars 2–6 (Steps 33–45)
-are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`.
+Steps 28–36 of the 4.2 implementation sequence. Pillars 3–6 (Steps 37–45)
+are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`
+and `docs/evidence/18_phase4_2_pillar2_test_impact.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -46,6 +47,39 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`.
   `TemporalJournal::reconstruct(revision)` returns a `GraphSnapshot` whose
   digest is byte-identical to a fresh parse at that revision, at every revision.
   `SourceExtractor` is the extension point for adapter-supplied symbol facts.
+- **Test inventory discovery (`autopsy-test-impact::inventory`, Step 33):**
+  discovers Vitest, Jest, and Mocha suites from `*.test.*`, `*.spec.*`, and
+  `test`/`tests`/`__tests__` directories, extracts declared test cases, and
+  resolves relative imports to repository paths with extension probing and
+  `index.<ext>` fallback. Test-file detection is **segment-based**, so
+  `src/latest.ts` is not mistaken for a test. Dynamic `import(...)`,
+  `require(...)`, and template-literal specifiers are deliberately not guessed
+  at. A computed test name is addressable by position (`@line<N>`) rather than
+  an invented name.
+- **Observed coverage ingestion (`autopsy-test-impact::lcov`, Step 34):**
+  parses LCOV tracefiles and keeps **zero hits** strictly distinct from **no
+  record** — a file absent from every tracefile is evidence that nothing was
+  recorded, not that it is untested. Unrecognised records (`FN`, `FNDA`,
+  `BRDA`, `LF`, `LH`, `TN`) are skipped; anything uninterpretable is an error,
+  never a silent drop. Merging takes the worst coverage across inputs.
+- **Conservative test selection (`autopsy-test-impact::selection`, Step 35):**
+  `AffectedTests = ⋃ ReverseReachability(changed symbols) ∩ inventory`. The
+  0%-false-negative gate holds by construction: (a) any changed symbol with
+  `Unknown` semantics forces `RunAllTests`; (b) a suite whose mapping is not
+  `Verified` **cannot be ruled out**, so it is included rather than excluded;
+  (c) a change set with no positively-mapped suite forces `RunAllTests`, because
+  "no test covers this" and "we failed to map this" are indistinguishable from
+  inside the engine. When coverage data is missing but static imports still
+  narrow, the plan falls back to `RunPackageTests` instead.
+- **Advisory predictive ranking (`PredictiveRanking`, Step 36):**
+  ranks selected tests by `observed_affected_sources / total_affected_sources`.
+  The plan is a *separate* artifact and `select_affected_tests` takes no ranking
+  input, so no probabilistic score can reach a merge gate — the types enforce
+  this rather than a comment. Per the pillar plan, the sidecar is simulation and
+  presentation only and must never block a merge.
+- **`schemas/test-selection.schema.json`:** closed (`additionalProperties:
+  false`) schema for the selection plan, plus a conformance test suite that
+  cross-checks the schema against real serialised plans.
 
 ### Fixed
 - Temporal replay no longer mints a duplicate fact on re-observation. Because
@@ -54,6 +88,10 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`.
   subsequent commit; the fixture exposed 9 facts where 5 were correct.
 - Removed an item-invariant filter in the lineage similarity pass that could
   only ever match all candidates or none.
+- A forced full run now emits the mandatory `plan_summary` reason. Previously
+  only the narrowed path emitted it, so a consumer reporting the narrowing ratio
+  got nothing on exactly the runs where "we narrowed nothing" matters most. The
+  schema-conformance suite caught this.
 
 ### Notes
 - New dependencies `flate2` (rust_backend, for cross-platform-identical
@@ -67,6 +105,16 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`.
   production paths today.
 - `schemas/temporal.schema.json` and CLI surfacing of the journal are not yet
   provided; the journal is a library API only.
+- `autopsy-test-impact` performs a **lexical** scan of test files rather than an
+  AST parse, because it sits below the language adapters in the dependency DAG.
+  The consequence is stated rather than hidden behind a confidence score:
+  constructs the scanner cannot interpret degrade the suite's coverage and force
+  a fallback. A helper file that contains neither a framework import nor any
+  test declaration is classified `Unknown` and therefore always runs; this is
+  deliberately noisy in exchange for never silently excluding a suite we did not
+  understand.
+- `autopsy-test-impact` is a **library API only**. No CLI subcommand, storage
+  write-back to `test_mappings`, or MCP surface is wired yet.
 - `Cargo.toml` version remains `0.0.1`.
 
 ## [Unreleased] - Forensic closure (2026-10-09)
