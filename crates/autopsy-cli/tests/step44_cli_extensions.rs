@@ -90,7 +90,7 @@ fn gate_the_history_engines_work_against_a_real_repository() {
     };
     let cli = cli_for(&root).expect("the fixture arguments parse");
 
-    let journal = extensions::temporal(&cli, None, 50, false).expect("the journal builds");
+    let journal = extensions::temporal(&cli, None, 10_000, false).expect("the journal builds");
     assert_eq!(journal.exit_code, PASS, "{}", journal.text);
     assert!(journal.text.contains("TreeExtractor"), "{}", journal.text);
     assert!(
@@ -194,8 +194,8 @@ fn gate_the_journal_coverage_comes_from_the_facts_that_did_not_resolve() {
         return;
     };
     let cli = cli_for(&root).expect("parses");
-    let lenient = extensions::temporal(&cli, None, 50, false).expect("builds");
-    let strict = extensions::temporal(&cli, None, 50, true).expect("builds");
+    let lenient = extensions::temporal(&cli, None, 10_000, false).expect("builds");
+    let strict = extensions::temporal(&cli, None, 10_000, true).expect("builds");
     let report: serde_json::Value = serde_json::from_str(&lenient.json).expect("valid JSON");
     let unresolved = report["stats"]["partial"].as_u64().unwrap_or(0)
         + report["stats"]["unknown"].as_u64().unwrap_or(0);

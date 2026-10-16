@@ -2,6 +2,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { createAutopsyMcpServer } from './server.js';
 
+// SynEvid PR forensic gate verification
 async function main() {
   const server = createAutopsyMcpServer();
   const transport = new StdioServerTransport();
