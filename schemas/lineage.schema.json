@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/lineage.schema.json",
+  "title": "Synevid lineage comparison envelope (Pillar 1)",
+  "description": "The output document of `autopsy lineage`: the identity transitions between two revisions as `autopsy-temporal::detect_lineage` asserts them, plus the revision accounting and the CLI's caveats. Closed: every field the command can emit is declared and nothing else validates. The load-bearing property is that `coverage` is `verified` only when the file enumeration was complete AND every event was proven by a byte-identical content digest; a skipped blob or a truncated file list makes the event set a stated *lower bound* (`partial`), and two empty revisions are `unsupported` rather than an empty pass. Only a confident rename or move preserves identity; a similarity-based match never does.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["from", "to", "events", "summary", "coverage", "notes"],
+  "properties": {
+    "from": {
+      "$ref": "#/$defs/revision",
+      "description": "The earlier revision. Its `resolved` is `null` only in the one synthesized case: `to` is a root commit, so the comparison is against the empty tree."
+    },
+    "to": {
+      "$ref": "#/$defs/revision"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      },
+      "description": "The identity transitions, in the engine's canonical order (`from`, then `to`, then kind, with `null` sorting first). Empty is a statement — no path identity changed — and is not the same statement as \"there was nothing to compare\", which is `coverage: unsupported`."
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "coverage": {
+      "$ref": "catalog-report.schema.json#/$defs/coverageState",
+      "description": "`verified` only when both revisions were enumerated completely and every event is confident. `partial` when any event is not confident, any entry was skipped (gitlink or over the byte bound), or the file list hit its bound — in each of those cases the event set is a lower bound, and the `notes` say which bound was hit and with what counts. `unsupported` when both revisions contain no files: there is no identity transition to report, which is not the same answer as \"none happened\". `unknown` is never emitted here: a revision that cannot be read is an analysis error, not a silence."
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The CLI's own statements about the document, in prose — always including the engine's similarity caveat (a token signature, not a parse: only byte-identical content with a unique counterpart reaches `verified`), plus any skip, truncation or root-commit accounting that applies."
+    }
+  },
+  "$defs": {
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "resolved",
+        "files",
+        "gitlinks_skipped",
+        "oversize_skipped",
+        "truncated"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "description": "The expression the user wrote, or the derived one for a defaulted argument (`HEAD~1 (first parent)`, or the empty-tree notice for a root `to`)."
+        },
+        "resolved": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The commit id the expression resolved to. `null` only for the synthesized empty revision."
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Files that reached the engine — not files present in the tree, unless the two skip counters and `truncated` are all zero."
+        },
+        "gitlinks_skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Submodule entries (mode 160000): their contents live in another repository, so they can be neither compared nor reported."
+        },
+        "oversize_skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when the file list stopped at the bound. A skipped path could have been a rename, which is why any of these three conditions forces `partial`."
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "from", "to", "similarity", "coverage", "ambiguity"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["renamed", "moved", "modified", "added", "removed"],
+          "description": "The engine's `LineageEventKind` vocabulary, exhaustively: a schema that rejects the engine's own output is worse than no schema, and a variant this enum misses would be exactly that."
+        },
+        "from": {
+          "type": ["string", "null"],
+          "description": "Canonical path before the transition; `null` for additions."
+        },
+        "to": {
+          "type": ["string", "null"],
+          "description": "Canonical path after the transition; `null` for removals."
+        },
+        "similarity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "`1.0` exactly when content digests are equal; otherwise the token-signature score. A score never makes an event `verified`."
+        },
+        "coverage": {
+          "type": "string",
+          "enum": ["verified", "partial"],
+          "description": "Narrower than the document-level states on purpose: the engine emits `verified` (byte-identical, unique counterpart) or `partial` (similarity or ambiguity). `unsupported` and `unknown` cannot occur on an event, and saying so in the schema is what makes a future occurrence a schema failure instead of a silent one."
+        },
+        "ambiguity": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["candidates", "reason"],
+          "description": "Present exactly when `coverage` is not `verified`: the engine's contract, asserted in both directions by the conformance test.",
+          "properties": {
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Sorted candidate counterparts, excluding the chosen one when one exists. Legitimately empty when the best match beat the runner-up by the required margin — the `reason` still says why the match could not verify."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Human-readable explanation, stable across runs."
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "renamed",
+        "moved",
+        "modified",
+        "added",
+        "removed",
+        "identity_preserved",
+        "partial"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "renamed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "moved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modified": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "added": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "identity_preserved": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Confident renames and moves: the only events that assert identity survives. Zero is the correct answer on an ambiguous history, not a failure."
+        },
+        "partial": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Events whose coverage is not `verified`."
+        }
+      }
+    }
+  }
+}

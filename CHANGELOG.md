@@ -357,6 +357,25 @@ Web Inspector. See
   is worse than no schema. The conformance test checks **every** fact of a real journal, not a
   sample.
 
+- **Step 31's lineage engine now has a user: `autopsy lineage --from <rev> --to <rev>`
+  (Pillar 1).** `detect_lineage` had zero callers outside its own tests — the Pillar 1 promise
+  "symbol lineage across moves and renames" was true of a library and false of the product.
+  The command replays two revisions from the pure-Rust object store (default: first parent of
+  `HEAD` → `HEAD`), feeds `FileEntry`s to the engine, and carries the engine's decision out
+  intact: a byte-identical pair with a unique counterpart is `verified`; every similarity
+  match is `partial` with its candidate list or its reason; a skipped or truncated entry
+  (gitlink, oversize blob, `--max-files` bound) makes the event set a **stated lower bound**
+  rather than a smaller exact answer; two empty revisions are `unsupported`, never an empty
+  pass. `--strict` turns every partial into exit `4`; a revision that cannot be resolved is
+  exit `3`, and `^N`/abbreviated ids are refused rather than guessed. MCP gained
+  `autopsy_temporal` `view: "lineage"` (same evidence envelope, exit `4` stays evidence). The
+  gate tests build their repository by **writing loose git objects by hand** (zlib + SHA-1,
+  test-only dev-dependencies) instead of spawning `git init`/`git mv`: the analyzer's sandbox
+  invariant is zero sub-process execution, and a fixture that spawns git trains the suite to
+  depend on exactly what the engine must never do. 14 new tests in
+  `crates/autopsy-cli/tests/step31_lineage_cli.rs`; see
+  `docs/evidence/29_lineage_user_facing_path.md`.
+
 ### Fixed
 
 - The `temporal` subcommand's default commit bound was `500`, which `TemporalJournal::build`

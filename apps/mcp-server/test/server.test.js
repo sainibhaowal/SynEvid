@@ -243,6 +243,43 @@ test('runAutopsy temporal replays the history of this workspace', async () => {
   );
 });
 
+test('runAutopsy lineage traces file identity between two revisions', async () => {
+  const repoRoot = path.resolve(__dirname, '../../..');
+  const result = await runAutopsy('lineage', ['--from', 'HEAD~2', '--to', 'HEAD'], { repoRoot });
+  assert.equal(result.exitCode, 0, result.rawStderr);
+  assert.ok(
+    ['verified', 'partial'].includes(result.data.coverage),
+    'coverage is stated, never guessed'
+  );
+  assert.match(result.data.from.resolved, /^[0-9a-f]{40}$/);
+  assert.match(result.data.to.resolved, /^[0-9a-f]{40}$/);
+  assert.ok(Array.isArray(result.data.events), 'events are the answer');
+  assert.equal(typeof result.data.summary.total, 'number');
+  assert.equal(result.data.summary.total, result.data.events.length);
+  for (const event of result.data.events) {
+    if (event.coverage === 'partial') {
+      assert.ok(event.ambiguity, 'a partial event must say why it could not verify');
+    }
+  }
+});
+
+test('the lineage bound is a stated lower bound, and strict refuses it', async () => {
+  const repoRoot = path.resolve(__dirname, '../../..');
+  const result = await runAutopsy(
+    'lineage',
+    ['--from', 'HEAD~2', '--to', 'HEAD', '--max-files', '1', '--strict'],
+    { repoRoot }
+  );
+  assert.equal(result.exitCode, 4, 'a bounded identity answer is not actionable under strict');
+  assert.equal(result.success, true, 'a refusal is still successful transport');
+  assert.equal(evidenceEnvelope('lineage', result).actionable, false);
+  assert.equal(result.data.coverage, 'partial');
+  assert.ok(
+    result.data.notes.some((note) => note.includes('lower bound')),
+    'the machine-readable output must say the event set is a lower bound'
+  );
+});
+
 test('runAutopsy test-select reports a partial selection rather than a guess', async () => {
   const result = await runAutopsy('test-select', ['--changed', 'src/user.ts'], {
     repoRoot: REPO_API_ROOT,

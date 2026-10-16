@@ -35,3 +35,11 @@ autopsy-contracts-distributed = { path = "../autopsy-contracts-distributed" }
 autopsy-telemetry = { path = "../autopsy-telemetry" }
 autopsy-mining = { path = "../autopsy-mining" }
 autopsy-catalog = { path = "../autopsy-catalog" }
+
+[dev-dependencies]
+# The lineage fixture builds real git objects without a git subprocess: a loose object is
+# `zlib("<kind> <len>\0<payload>")` named by its SHA-1 over the *uncompressed* form. Writing
+# them with these two crates keeps the gate hermetic (no git binary, no global config, no
+# clock) and keeps the engine's zero-subprocess invariant untouchable even from tests.
+flate2 = { workspace = true }
+sha1 = { workspace = true }

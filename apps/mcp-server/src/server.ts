@@ -317,19 +317,22 @@ export function createAutopsyMcpServer(): McpServer {
     {
       description:
         'Replay repository history: the revision journal of facts that were added and removed, ' +
-        'optionally reconstructed at one revision, or the mined pairs of paths that change ' +
-        'together. Co-change is temporal co-occurrence and never causation (read-only).',
+        'optionally reconstructed at one revision; the mined pairs of paths that change ' +
+        'together; or the identity transitions (renames, moves, modifications) between two ' +
+        'revisions. Co-change is temporal co-occurrence and never causation (read-only).',
       inputSchema: z.object({
         repo_root: z
           .string()
           .optional()
           .describe('Target repository root directory (must contain .git)'),
         view: z
-          .enum(['timeline', 'co_change'])
+          .enum(['timeline', 'co_change', 'lineage'])
           .optional()
           .describe(
             'Which temporal engine to run. `timeline` is the revision journal of facts ' +
-              '(Pillar 1); `co_change` is the mined historical co-change edges (Pillar 5). ' +
+              '(Pillar 1); `co_change` is the mined historical co-change edges (Pillar 5); ' +
+              '`lineage` is file identity across a revision pair, where only a byte-identical ' +
+              'rename reaches `verified` and every similarity match is `partial`. ' +
               'They are different engines with different reports and different digests. ' +
               'Default: timeline.'
           ),
@@ -337,6 +340,23 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Reconstruct the graph at this revision instead of emitting the whole journal (timeline only)'),
+        from: z
+          .string()
+          .optional()
+          .describe('The earlier revision for `lineage` (default: the first parent of `to`)'),
+        to: z
+          .string()
+          .optional()
+          .describe('The later revision for `lineage` (default: HEAD)'),
+        max_files: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Bound on files read from one revision (lineage only). A bound that is hit makes ' +
+              'the event set a stated lower bound instead of a silent truncation.'
+          ),
         max_commits: z
           .number()
           .int()
@@ -373,13 +393,17 @@ export function createAutopsyMcpServer(): McpServer {
         if (args.max_commits) cliArgs.push('--max-commits', String(args.max_commits));
         if (args.window_seconds) cliArgs.push('--window-seconds', String(args.window_seconds));
         if (args.min_pair_commits) cliArgs.push('--min-pair-commits', String(args.min_pair_commits));
+      } else if (view === 'lineage') {
+        if (args.from) cliArgs.push('--from', args.from);
+        if (args.to) cliArgs.push('--to', args.to);
+        if (args.max_files) cliArgs.push('--max-files', String(args.max_files));
       } else {
         if (args.at) cliArgs.push('--at', args.at);
         if (args.max_commits) cliArgs.push('--max-commits', String(args.max_commits));
       }
       if (args.strict) cliArgs.push('--strict');
 
-      const command = view === 'co_change' ? 'cochange' : 'temporal';
+      const command = view === 'co_change' ? 'cochange' : view === 'lineage' ? 'lineage' : 'temporal';
       const result = await runAutopsy(command, cliArgs, { repoRoot });
 
       return {

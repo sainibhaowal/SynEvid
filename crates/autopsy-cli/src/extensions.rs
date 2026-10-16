@@ -1,8 +1,8 @@
 //! Step 44 — CLI subcommands for the Phase 4.2 engines (`autopsy-cli`).
 //!
 //! Every Phase 4.2 pillar is a library engine with its own crate, its own digest and its own
-//! coverage state. This module is the surface that reaches them: `temporal`, `test-select`,
-//! `contract-dist`, `telemetry`, `cochange` and `catalog`.
+//! coverage state. This module is the surface that reaches them: `temporal`, `lineage`,
+//! `test-select`, `contract-dist`, `telemetry`, `cochange`, `catalog` and `blast-radius`.
 //!
 //! # Exit codes, decided in one place
 //!
@@ -396,6 +396,456 @@ fn journal_to_json(journal: &autopsy_temporal::TemporalJournal) -> serde_json::V
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(serde_json::Value::Null)
+}
+
+// ---------------------------------------------------------------------------
+// lineage
+// ---------------------------------------------------------------------------
+
+/// Everything `lineage` can be asked for, as one value.
+///
+/// A struct rather than seven positional parameters, for the reason `TelemetryArgs` gives:
+/// two adjacent numbers at a call site are a transposition waiting to happen, and
+/// `threshold` and `margin` are exactly such a pair.
+#[derive(Debug, Clone)]
+pub struct LineageArgs {
+    /// The earlier revision. `None` means the first parent of `to`.
+    pub from: Option<String>,
+    /// The later revision. `None` means `HEAD`.
+    pub to: Option<String>,
+    /// Token-similarity floor for proposing a candidate rename. `None` uses the engine default.
+    pub threshold: Option<f64>,
+    /// Minimum margin by which the best candidate must beat the runner-up.
+    pub margin: Option<f64>,
+    /// Bound on files read from one revision.
+    pub max_files: usize,
+    /// Skip blobs larger than this many bytes.
+    pub max_file_bytes: u64,
+    /// Exit 4 when coverage is partial as well as when it is unknown.
+    pub strict: bool,
+}
+
+impl Default for LineageArgs {
+    fn default() -> Self {
+        Self {
+            from: None,
+            to: None,
+            threshold: None,
+            margin: None,
+            max_files: 20_000,
+            max_file_bytes: 1_048_576,
+            strict: false,
+        }
+    }
+}
+
+/// One revision as the lineage comparison saw it.
+#[derive(Debug, serde::Serialize)]
+struct RevisionView {
+    /// The expression the user wrote, or the derived one for a defaulted argument.
+    revision: String,
+    /// The commit id it resolved to; `None` only for the synthesized empty revision.
+    resolved: Option<String>,
+    files: usize,
+    gitlinks_skipped: usize,
+    oversize_skipped: usize,
+    /// True when the file list stopped at the bound; the event set is then a lower bound.
+    truncated: bool,
+}
+
+/// Event counts by kind, plus the two numbers a reviewer checks first.
+#[derive(Debug, serde::Serialize)]
+struct LineageSummary {
+    total: usize,
+    renamed: usize,
+    moved: usize,
+    modified: usize,
+    added: usize,
+    removed: usize,
+    /// Confident renames and moves: the only events that assert identity survives.
+    identity_preserved: usize,
+    /// Events whose coverage is not `verified`.
+    partial: usize,
+}
+
+/// The CLI's lineage document.
+#[derive(Debug, serde::Serialize)]
+struct LineageOutput {
+    from: RevisionView,
+    to: RevisionView,
+    events: Vec<autopsy_temporal::LineageEvent>,
+    summary: LineageSummary,
+    coverage: CoverageState,
+    notes: Vec<String>,
+}
+
+/// One revision's file entries, with the accounting of what was left out.
+struct RevisionFiles {
+    files: Vec<autopsy_temporal::FileEntry>,
+    gitlinks_skipped: usize,
+    oversize_skipped: usize,
+    truncated: bool,
+}
+
+impl RevisionFiles {
+    fn empty() -> Self {
+        Self {
+            files: Vec::new(),
+            gitlinks_skipped: 0,
+            oversize_skipped: 0,
+            truncated: false,
+        }
+    }
+}
+
+/// Traces file identity across a revision pair: renames, moves, modifications.
+///
+/// # What this command is
+///
+/// `detect_lineage` asserts identity from two things only: a byte-identical content digest
+/// with a unique counterpart (`verified`), or a token-similarity score that beats both the
+/// floor and the runner-up (`partial`, with the candidate list disclosed). This command
+/// feeds it the two revisions and carries that coverage through: `verified` coverage means
+/// every event was proven, `partial` means at least one was not *or* the file enumeration
+/// was bounded — a skipped blob could have been a rename, so its absence is stated rather
+/// than silently assumed harmless.
+///
+/// The event set can therefore be read as a lower bound whenever coverage is `partial`.
+/// That sentence is in the output's `notes` too, because a number that leaves the process
+/// must carry its own caveat (FR-014).
+///
+/// # Revision expressions
+///
+/// `--from` and `--to` accept a fully-qualified ref (`refs/heads/main`), `HEAD`, a bare
+/// branch or tag name, a full 40-character commit id, and any of those followed by `~N`
+/// (first-parent walk). Abbreviated ids and `^N` selectors are refused rather than guessed.
+/// `--from` defaults to the first parent of `--to`, and a root `--to` compares against the
+/// empty tree — every file is then an addition, which the notes say.
+pub fn lineage(cli: &Cli, args: &LineageArgs) -> Result<Outcome, CliError> {
+    let threshold = args
+        .threshold
+        .unwrap_or(autopsy_temporal::lineage::DEFAULT_SIMILARITY_THRESHOLD);
+    let margin = args
+        .margin
+        .unwrap_or(autopsy_temporal::lineage::DEFAULT_SIMILARITY_MARGIN);
+    for (name, value) in [("threshold", threshold), ("margin", margin)] {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(CliError::Analysis(format!(
+                "--{name} must be a finite number in 0..=1, got {value}"
+            )));
+        }
+    }
+    if args.max_files == 0 {
+        return Err(CliError::Analysis(
+            "--max-files must be at least 1".to_string(),
+        ));
+    }
+    if args.max_file_bytes == 0 {
+        return Err(CliError::Analysis(
+            "--max-file-bytes must be at least 1".to_string(),
+        ));
+    }
+
+    let directory = git_dir(&cli.repo_root)?;
+    let mut store = autopsy_temporal::git::GitObjectStore::open(&directory)
+        .map_err(|error| CliError::Analysis(format!("{}: {error}", directory.display())))?;
+
+    let to_name = args.to.as_deref().unwrap_or("HEAD");
+    let to_oid = resolve_revision(&mut store, to_name)?.ok_or_else(|| {
+        CliError::Analysis(format!("revision `{to_name}` does not resolve to a commit"))
+    })?;
+    let to_commit = store.commit(to_oid).map_err(|error| {
+        CliError::Analysis(format!(
+            "`{to_name}` could not be read as a commit: {error}"
+        ))
+    })?;
+
+    let (from_label, from_commit) = match args.from.as_deref() {
+        Some(name) => {
+            let oid = resolve_revision(&mut store, name)?.ok_or_else(|| {
+                CliError::Analysis(format!("revision `{name}` does not resolve to a commit"))
+            })?;
+            let commit = store.commit(oid).map_err(|error| {
+                CliError::Analysis(format!("`{name}` could not be read as a commit: {error}"))
+            })?;
+            (name.to_string(), Some(commit))
+        }
+        None => match to_commit.parents.first() {
+            Some(parent) => {
+                let commit = store.commit(*parent).map_err(|error| {
+                    CliError::Analysis(format!(
+                        "the first parent of `{to_name}` could not be read: {error}"
+                    ))
+                })?;
+                (format!("{to_name}~1 (first parent)"), Some(commit))
+            }
+            None => ("(empty tree: `to` is a root commit)".to_string(), None),
+        },
+    };
+
+    let before = match &from_commit {
+        Some(commit) => revision_files(&store, commit, args.max_files, args.max_file_bytes)?,
+        None => RevisionFiles::empty(),
+    };
+    let after = revision_files(&store, &to_commit, args.max_files, args.max_file_bytes)?;
+
+    let config = autopsy_temporal::LineageConfig {
+        similarity_threshold: threshold,
+        similarity_margin: margin,
+    };
+    let events = autopsy_temporal::detect_lineage(&before.files, &after.files, &config);
+
+    let count = |kind: autopsy_temporal::LineageEventKind| {
+        events.iter().filter(|event| event.kind == kind).count()
+    };
+    let summary = LineageSummary {
+        total: events.len(),
+        renamed: count(autopsy_temporal::LineageEventKind::Renamed),
+        moved: count(autopsy_temporal::LineageEventKind::Moved),
+        modified: count(autopsy_temporal::LineageEventKind::Modified),
+        added: count(autopsy_temporal::LineageEventKind::Added),
+        removed: count(autopsy_temporal::LineageEventKind::Removed),
+        identity_preserved: events
+            .iter()
+            .filter(|event| event.preserves_identity())
+            .count(),
+        partial: events.iter().filter(|event| !event.is_confident()).count(),
+    };
+
+    let gaps = before.gitlinks_skipped
+        + after.gitlinks_skipped
+        + before.oversize_skipped
+        + after.oversize_skipped;
+    let bounded = before.truncated || after.truncated;
+    let empty_answer = before.files.is_empty() && after.files.is_empty();
+    let coverage = if empty_answer {
+        CoverageState::Unsupported
+    } else if gaps > 0 || bounded || summary.partial > 0 {
+        CoverageState::Partial
+    } else {
+        CoverageState::Verified
+    };
+
+    let mut notes = vec![
+        "similarity is a token signature, not a parse: only a byte-identical pair with a \
+         unique counterpart reaches `verified`; every similarity-based match is `partial` and \
+         carries its candidate list"
+            .to_string(),
+    ];
+    if gaps > 0 {
+        notes.push(format!(
+            "{gaps} entr{} were skipped ({} gitlink/submodule, {} over {}-byte bound, both \
+             revisions combined): a rename involving one of them cannot be reported",
+            if gaps == 1 { "y" } else { "ies" },
+            before.gitlinks_skipped + after.gitlinks_skipped,
+            before.oversize_skipped + after.oversize_skipped,
+            args.max_file_bytes
+        ));
+    }
+    if bounded {
+        notes.push(format!(
+            "the file list was truncated at {} paths per revision (sorted order): the event \
+             set is a lower bound",
+            args.max_files
+        ));
+    }
+    if from_commit.is_none() {
+        notes.push(
+            "`from` is a root commit: the earlier revision is the empty tree, so every file \
+             is an addition"
+                .to_string(),
+        );
+    }
+    if empty_answer {
+        notes.push(
+            "both revisions contain no files: there is no identity transition to report"
+                .to_string(),
+        );
+    }
+
+    let from_view = RevisionView {
+        revision: from_label,
+        resolved: from_commit.as_ref().map(|commit| commit.oid.to_hex()),
+        files: before.files.len(),
+        gitlinks_skipped: before.gitlinks_skipped,
+        oversize_skipped: before.oversize_skipped,
+        truncated: before.truncated,
+    };
+    let to_view = RevisionView {
+        revision: to_name.to_string(),
+        resolved: Some(to_oid.to_hex()),
+        files: after.files.len(),
+        gitlinks_skipped: after.gitlinks_skipped,
+        oversize_skipped: after.oversize_skipped,
+        truncated: after.truncated,
+    };
+
+    let exit_code = coverage_exit(args.strict, coverage);
+    let mut text = format!(
+        "lineage: {} events ({} renamed, {} moved, {} modified, {} added, {} removed; \
+         {} identity-preserving, {} partial)\ncoverage: {}\n",
+        summary.total,
+        summary.renamed,
+        summary.moved,
+        summary.modified,
+        summary.added,
+        summary.removed,
+        summary.identity_preserved,
+        summary.partial,
+        coverage_word(coverage)
+    );
+    for note in &notes {
+        text.push_str(&format!("note: {note}\n"));
+    }
+
+    let output = LineageOutput {
+        from: from_view,
+        to: to_view,
+        events,
+        summary,
+        coverage,
+        notes,
+    };
+    Outcome::new(exit_code, &output, text)
+}
+
+/// The coverage state as a word, for text output.
+fn coverage_word(coverage: CoverageState) -> &'static str {
+    match coverage {
+        CoverageState::Verified => "verified",
+        CoverageState::Partial => "partial",
+        CoverageState::Unsupported => "unsupported",
+        CoverageState::Unknown => "unknown",
+    }
+}
+
+/// Resolves a revision expression to a commit id.
+///
+/// Supported: a fully-qualified ref, `HEAD`, a bare branch or tag name, a full
+/// 40-character object id, and any of those followed by `~N` (first-parent walk).
+/// `Ok(None)` means the expression parsed but nothing in the repository has that name;
+/// an `Err` means it could be read and was not valid (a ref pointing at a non-commit, a
+/// hex id whose object is missing or not a commit). The distinction matters: "no such
+/// branch" is a user typo, "your main branch is not a commit" is a broken repository.
+fn resolve_revision(
+    store: &mut autopsy_temporal::git::GitObjectStore,
+    expression: &str,
+) -> Result<Option<autopsy_temporal::git::ObjectId>, CliError> {
+    let (base, steps) = match expression.rsplit_once('~') {
+        Some((base, digits))
+            if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            let steps = digits
+                .parse::<usize>()
+                .map_err(|error| CliError::Analysis(format!("`{expression}`: {error}")))?;
+            (base, steps)
+        }
+        Some((_, _)) => {
+            return Err(CliError::Analysis(format!(
+                "`{expression}` is not a supported revision expression: `~N` walks first \
+                 parents, and `^` selectors are refused rather than guessed"
+            )));
+        }
+        None => (expression, 0),
+    };
+    if base.is_empty() {
+        return Err(CliError::Analysis(format!(
+            "`{expression}` has no revision name before its `~`"
+        )));
+    }
+
+    let mut oid = resolve_revision_base(store, base)?;
+    for _ in 0..steps {
+        let Some(current) = oid else {
+            // Walking past the root commit: the expression parsed, there is simply no
+            // such parent.
+            return Ok(None);
+        };
+        let commit = store
+            .commit(current)
+            .map_err(|error| CliError::Analysis(format!("`{expression}`: {error}")))?;
+        oid = commit.parents.first().copied();
+    }
+    Ok(oid)
+}
+
+/// The base case of [`resolve_revision`]: refs first, then a full object id.
+fn resolve_revision_base(
+    store: &mut autopsy_temporal::git::GitObjectStore,
+    name: &str,
+) -> Result<Option<autopsy_temporal::git::ObjectId>, CliError> {
+    if name.len() == 40 && name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let oid = autopsy_temporal::git::ObjectId::from_hex(name).map_err(|error| {
+            CliError::Analysis(format!("`{name}` is not an object id: {error}"))
+        })?;
+        // Reading the object is the existence check; a missing or non-commit object here
+        // is a broken input, not a typo.
+        store
+            .commit(oid)
+            .map_err(|error| CliError::Analysis(format!("`{name}`: {error}")))?;
+        return Ok(Some(oid));
+    }
+
+    if let Some(oid) = store
+        .resolve_ref(name)
+        .map_err(|error| CliError::Analysis(format!("`{name}`: {error}")))?
+    {
+        return Ok(Some(oid));
+    }
+    if !name.contains('/') {
+        for prefix in ["refs/heads/", "refs/tags/"] {
+            let qualified = format!("{prefix}{name}");
+            if let Some(oid) = store
+                .resolve_ref(&qualified)
+                .map_err(|error| CliError::Analysis(format!("`{name}`: {error}")))?
+            {
+                return Ok(Some(oid));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Reads one revision's blobs into file entries, accounting for everything left out.
+fn revision_files(
+    store: &autopsy_temporal::git::GitObjectStore,
+    commit: &autopsy_temporal::git::Commit,
+    max_files: usize,
+    max_file_bytes: u64,
+) -> Result<RevisionFiles, CliError> {
+    let tree = autopsy_temporal::git::flatten_tree(store, commit.tree).map_err(|error| {
+        CliError::Analysis(format!(
+            "the tree of {} could not be enumerated: {error}",
+            commit.oid.to_hex()
+        ))
+    })?;
+
+    let mut out = RevisionFiles::empty();
+    for (path, (mode, oid)) in tree {
+        // Submodule entries are pointers into another repository; their contents are not
+        // in this object store, so they can be neither compared nor reported.
+        if mode & 0o170_000 == 0o160_000 {
+            out.gitlinks_skipped += 1;
+            continue;
+        }
+        let blob = store.blob(oid).map_err(|error| {
+            CliError::Analysis(format!(
+                "`{path}` at tree {}: {error}",
+                commit.tree.to_hex()
+            ))
+        })?;
+        if blob.len() as u64 > max_file_bytes {
+            out.oversize_skipped += 1;
+            continue;
+        }
+        if out.files.len() >= max_files {
+            out.truncated = true;
+            break;
+        }
+        out.files
+            .push(autopsy_temporal::FileEntry::new(path, &blob));
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

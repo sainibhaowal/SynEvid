@@ -263,6 +263,30 @@ pub enum Commands {
         #[arg(long)]
         strict: bool,
     },
+    /// Trace file identity across a revision pair: renames, moves, modifications (Pillar 1)
+    Lineage {
+        /// The earlier revision (default: the first parent of `--to`)
+        #[arg(long)]
+        from: Option<String>,
+        /// The later revision (default: HEAD)
+        #[arg(long)]
+        to: Option<String>,
+        /// Token-similarity floor in 0..=1 for proposing a candidate rename
+        #[arg(long)]
+        threshold: Option<f64>,
+        /// Minimum margin in 0..=1 by which the best candidate must beat the runner-up
+        #[arg(long)]
+        margin: Option<f64>,
+        /// Bound on files read from one revision
+        #[arg(long, default_value_t = 20_000)]
+        max_files: usize,
+        /// Skip blobs larger than this many bytes
+        #[arg(long, default_value_t = 1_048_576)]
+        max_file_bytes: u64,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
     /// Select the tests that must run for a set of changed files (Pillar 2)
     TestSelect {
         /// A changed source file, POSIX-relative (repeatable)
@@ -458,6 +482,29 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
         } => run_extension(
             cli,
             extensions::temporal(cli, at.as_deref(), *max_commits, *strict),
+        ),
+        Commands::Lineage {
+            from,
+            to,
+            threshold,
+            margin,
+            max_files,
+            max_file_bytes,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::lineage(
+                cli,
+                &extensions::LineageArgs {
+                    from: from.clone(),
+                    to: to.clone(),
+                    threshold: *threshold,
+                    margin: *margin,
+                    max_files: *max_files,
+                    max_file_bytes: *max_file_bytes,
+                    strict: *strict,
+                },
+            ),
         ),
         Commands::TestSelect {
             changed,
