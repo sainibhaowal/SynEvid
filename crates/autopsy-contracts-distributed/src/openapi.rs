@@ -17,6 +17,10 @@
 //! reporting a false approval is not.
 
 use crate::document::{SpecDocument, type_name, worse_of};
+use crate::schema::{SchemaReader, escape};
+// Re-exported because it appears in this module's public API and Step 37's
+// callers reach it as `openapi::SchemaFacts`.
+pub use crate::schema::SchemaFacts;
 use autopsy_domain::CoverageState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,33 +29,6 @@ use thiserror::Error;
 
 /// Version of OpenAPI this engine reads natively.
 pub const TARGET_OPENAPI_MINOR: &str = "3.2";
-
-/// Maximum `$ref` chain length before the chain is treated as under-specified.
-pub const MAX_REF_DEPTH: usize = 24;
-
-/// Maximum schema nesting depth. Deeper trees are truncated with a coverage
-/// penalty rather than walked without bound (`INV-SANDBOX-004`).
-pub const MAX_SCHEMA_DEPTH: usize = 64;
-
-/// JSON Schema keywords this engine records but does not interpret.
-pub const UNMODELED_KEYWORDS: &[&str] = &[
-    "allOf",
-    "oneOf",
-    "anyOf",
-    "not",
-    "if",
-    "then",
-    "else",
-    "patternProperties",
-    "dependentSchemas",
-    "dependentRequired",
-    "unevaluatedProperties",
-    "unevaluatedItems",
-    "discriminator",
-    "prefixItems",
-    "contains",
-    "propertyNames",
-];
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum OpenApiError {
@@ -336,364 +313,6 @@ impl OpenApiSpec {
     }
 }
 
-/// Resolved, recursively-described schema facts.
-///
-/// Fields mirror only what compatibility classification needs. Everything else
-/// lives in [`SchemaFacts::unmodeled`] as a disclosure rather than a guess.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SchemaFacts {
-    pub pointer: String,
-    /// Full declared type set. Empty means unconstrained *or* unresolved; the
-    /// two are distinguished by [`SchemaFacts::coverage`], never conflated.
-    pub types: BTreeSet<String>,
-    /// `None` means no `enum` constraint was declared, which is different from
-    /// an empty enum.
-    pub enum_values: Option<BTreeSet<String>>,
-    pub properties: BTreeMap<String, SchemaFacts>,
-    pub required: BTreeSet<String>,
-    /// `None` means unspecified (JSON Schema default: allowed).
-    pub additional_properties: Option<bool>,
-    pub coverage: CoverageState,
-    /// JSON pointers of keywords that were recorded but not interpreted.
-    pub unmodeled: BTreeSet<String>,
-}
-
-impl Default for SchemaFacts {
-    /// An unpopulated schema is `Unknown`, not `Verified`. There is no state in
-    /// which "nothing was read" may be read as "verified to constrain nothing".
-    fn default() -> Self {
-        Self {
-            pointer: String::new(),
-            types: BTreeSet::new(),
-            enum_values: None,
-            properties: BTreeMap::new(),
-            required: BTreeSet::new(),
-            additional_properties: None,
-            coverage: CoverageState::Unknown,
-            unmodeled: BTreeSet::new(),
-        }
-    }
-}
-
-impl SchemaFacts {
-    /// A schema that constrains nothing. Coverage is `Unknown` so it can never
-    /// be read as "verified to constrain nothing".
-    pub fn unknown(pointer: &str) -> Self {
-        Self {
-            pointer: pointer.to_string(),
-            coverage: CoverageState::Unknown,
-            ..Default::default()
-        }
-    }
-
-    /// Canonical fingerprint of the modelled facts. Used inside digests.
-    pub fn fingerprint(&self) -> String {
-        let mut out = String::new();
-        out.push_str("t[");
-        for t in &self.types {
-            out.push_str(t);
-            out.push(',');
-        }
-        out.push_str("]e[");
-        if let Some(values) = &self.enum_values {
-            for v in values {
-                out.push_str(v);
-                out.push(',');
-            }
-        }
-        out.push_str("]r[");
-        for r in &self.required {
-            out.push_str(r);
-            out.push(',');
-        }
-        out.push_str("]p{");
-        for (k, v) in &self.properties {
-            out.push_str(k);
-            out.push('=');
-            out.push_str(&v.fingerprint());
-            out.push(';');
-        }
-        out.push('}');
-        match self.additional_properties {
-            Some(true) => out.push_str("ap=1"),
-            Some(false) => out.push_str("ap=0"),
-            None => out.push_str("ap=?"),
-        }
-        out
-    }
-
-    /// True when the modelled facts are complete enough to compare safely.
-    pub fn is_comparable(&self) -> bool {
-        self.coverage == CoverageState::Verified
-    }
-
-    /// Recursively collects every unmodelled pointer in this subtree.
-    pub fn unmodeled_into<'a>(&'a self, out: &mut BTreeSet<&'a str>) {
-        for p in &self.unmodeled {
-            out.insert(p.as_str());
-        }
-        for child in self.properties.values() {
-            child.unmodeled_into(out);
-        }
-    }
-}
-
-/// Reads a schema, resolving local references and disclosing what it cannot model.
-struct SchemaReader<'a> {
-    doc: &'a SpecDocument,
-    unmodeled: BTreeSet<String>,
-    unresolved: BTreeSet<String>,
-    coverage: CoverageState,
-    notes: Vec<String>,
-}
-
-impl<'a> SchemaReader<'a> {
-    fn new(doc: &'a SpecDocument) -> Self {
-        Self {
-            doc,
-            unmodeled: BTreeSet::new(),
-            unresolved: BTreeSet::new(),
-            coverage: CoverageState::Verified,
-            notes: Vec::new(),
-        }
-    }
-
-    /// Reads the schema at `pointer`, returning facts.
-    fn read(&mut self, pointer: &str, depth: usize, seen: &BTreeSet<String>) -> SchemaFacts {
-        if depth > MAX_SCHEMA_DEPTH {
-            self.coverage = worse_of(self.coverage, CoverageState::Partial);
-            self.unmodeled.insert(pointer.to_string());
-            self.notes.push(format!(
-                "schema at `{pointer}` exceeds the nesting bound of {MAX_SCHEMA_DEPTH}; not descended"
-            ));
-            return SchemaFacts::unknown(pointer);
-        }
-
-        let Some(value) = self.doc.pointer(pointer) else {
-            // A pointer that does not exist is a broken document, not an absent
-            // constraint.
-            self.coverage = worse_of(self.coverage, CoverageState::Unknown);
-            self.unresolved.insert(pointer.to_string());
-            return SchemaFacts::unknown(pointer);
-        };
-
-        let value = self.deref(value, pointer, seen, depth);
-        self.read_value(value, pointer, depth, seen)
-    }
-
-    /// Follows a `$ref` chain, detecting cycles.
-    fn deref(
-        &mut self,
-        value: &'a Value,
-        pointer: &str,
-        seen: &BTreeSet<String>,
-        depth: usize,
-    ) -> &'a Value {
-        let mut current = value;
-        let mut current_pointer = pointer.to_string();
-        let mut chain = seen.clone();
-        let mut hops = 0usize;
-
-        while let Some(reference) = current.get("$ref").and_then(Value::as_str) {
-            hops += 1;
-            if hops > MAX_REF_DEPTH || chain.contains(reference) {
-                self.coverage = worse_of(self.coverage, CoverageState::Partial);
-                self.unresolved.insert(reference.to_string());
-                self.notes.push(format!(
-                    "reference `{reference}` at `{current_pointer}` is cyclic or exceeds the depth bound of {MAX_REF_DEPTH}"
-                ));
-                return &Value::Null;
-            }
-            chain.insert(reference.to_string());
-            match self.doc.resolve(reference) {
-                Ok(target) => {
-                    current_pointer = reference.trim_start_matches('#').to_string();
-                    current = target;
-                }
-                Err(e) => {
-                    self.coverage = worse_of(self.coverage, CoverageState::Unknown);
-                    self.unresolved.insert(reference.to_string());
-                    self.notes.push(format!("at `{current_pointer}`: {e}"));
-                    return &Value::Null;
-                }
-            }
-        }
-        let _ = depth;
-        current
-    }
-
-    fn read_value(
-        &mut self,
-        value: &Value,
-        pointer: &str,
-        depth: usize,
-        seen: &BTreeSet<String>,
-    ) -> SchemaFacts {
-        let Some(object) = value.as_object() else {
-            // `schema: true` / `schema: false` are valid JSON Schema. `true`
-            // constrains nothing; either way there is nothing to compare.
-            self.coverage = worse_of(self.coverage, CoverageState::Partial);
-            self.unmodeled.insert(pointer.to_string());
-            return SchemaFacts::unknown(pointer);
-        };
-
-        let mut facts = SchemaFacts {
-            pointer: pointer.to_string(),
-            coverage: CoverageState::Verified,
-            ..Default::default()
-        };
-
-        // --- types -------------------------------------------------------
-        match object.get("type") {
-            Some(Value::String(t)) => {
-                facts.types.insert(t.clone());
-            }
-            Some(Value::Array(items)) => {
-                for item in items {
-                    match item.as_str() {
-                        Some(t) => {
-                            facts.types.insert(t.to_string());
-                        }
-                        None => {
-                            facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                            facts.unmodeled.insert(format!("{pointer}/type"));
-                        }
-                    }
-                }
-            }
-            Some(other) => {
-                let _ = other;
-                facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                facts.unmodeled.insert(format!("{pointer}/type"));
-            }
-            None => {}
-        }
-
-        // OpenAPI 3.0 expresses nullability as `nullable: true`. Reading a 3.0
-        // document without this produces a wrong narrowing verdict, because
-        // `["string","null"] -> "string"` is breaking and `"string" -> "string"`
-        // is not.
-        if object.get("nullable").and_then(Value::as_bool) == Some(true) {
-            facts.types.insert("null".to_string());
-        }
-
-        // --- enum --------------------------------------------------------
-        if let Some(enum_value) = object.get("enum") {
-            match enum_value.as_array() {
-                Some(items) => {
-                    let mut values = BTreeSet::new();
-                    for item in items {
-                        match canonical_scalar(item) {
-                            Some(s) => {
-                                values.insert(s);
-                            }
-                            None => {
-                                facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                                facts.unmodeled.insert(format!("{pointer}/enum"));
-                            }
-                        }
-                    }
-                    facts.enum_values = Some(values);
-                }
-                None => {
-                    facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                    facts.unmodeled.insert(format!("{pointer}/enum"));
-                }
-            }
-        }
-
-        // --- required ----------------------------------------------------
-        if let Some(Value::Array(items)) = object.get("required") {
-            for item in items {
-                match item.as_str() {
-                    Some(name) => {
-                        facts.required.insert(name.to_string());
-                    }
-                    None => {
-                        facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                        facts.unmodeled.insert(format!("{pointer}/required"));
-                    }
-                }
-            }
-        }
-
-        // --- additionalProperties ---------------------------------------
-        match object.get("additionalProperties") {
-            Some(Value::Bool(b)) => facts.additional_properties = Some(*b),
-            Some(_) => {
-                // Schema-valued `additionalProperties` is a constraint, not a
-                // toggle. Treating it as `true` would hide a real narrowing.
-                facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                facts
-                    .unmodeled
-                    .insert(format!("{pointer}/additionalProperties"));
-            }
-            None => {}
-        }
-
-        // --- properties --------------------------------------------------
-        if let Some(Value::Object(props)) = object.get("properties") {
-            for (name, _) in props {
-                let child_pointer = format!("{pointer}/properties/{}", escape(name));
-                let child = self.read(&child_pointer, depth + 1, seen);
-                facts.coverage = worse_of(facts.coverage, child.coverage);
-                facts.properties.insert(name.clone(), child);
-            }
-        }
-
-        // --- items (arrays) ---------------------------------------------
-        if let Some(items) = object.get("items") {
-            match items {
-                Value::Object(_) | Value::Bool(_) => {
-                    let child_pointer = format!("{pointer}/items");
-                    let child = self.read(&child_pointer, depth + 1, seen);
-                    facts.coverage = worse_of(facts.coverage, child.coverage);
-                    // Modelled as a synthetic property so array element
-                    // narrowing participates in comparison.
-                    facts.properties.insert("[]".to_string(), child);
-                }
-                _ => {
-                    facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                    facts.unmodeled.insert(format!("{pointer}/items"));
-                }
-            }
-        }
-
-        // --- keywords this engine does not interpret ---------------------
-        for keyword in UNMODELED_KEYWORDS {
-            if object.contains_key(*keyword) {
-                facts.coverage = worse_of(facts.coverage, CoverageState::Partial);
-                let p = format!("{pointer}/{keyword}");
-                facts.unmodeled.insert(p.clone());
-                self.unmodeled.insert(p);
-            }
-        }
-        for p in &facts.unmodeled {
-            self.unmodeled.insert(p.clone());
-        }
-        self.coverage = worse_of(self.coverage, facts.coverage);
-        facts
-    }
-}
-
-/// Canonical string form of a scalar, or `None` if it is not a scalar.
-fn canonical_scalar(value: &Value) -> Option<String> {
-    match value {
-        Value::String(s) => Some(s.clone()),
-        Value::Bool(_) | Value::Number(_) => Some(canonical_string_scalar(value)),
-        _ => None,
-    }
-}
-
-fn canonical_string_scalar(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-}
-
-/// Escapes a JSON Pointer path segment per RFC 6901 §3.
-pub fn escape(segment: &str) -> String {
-    segment.replace('~', "~0").replace('/', "~1")
-}
-
 /// Parses an OpenAPI document into a canonical contract.
 pub fn parse_openapi(doc: &SpecDocument) -> Result<OpenApiSpec, OpenApiError> {
     let path = doc.path.clone();
@@ -761,23 +380,23 @@ pub fn parse_openapi(doc: &SpecDocument) -> Result<OpenApiSpec, OpenApiError> {
         }
     }
 
-    for note in &reader.notes {
+    for note in reader.notes() {
         notes.push(note.clone());
     }
-    if !reader.unmodeled.is_empty() {
+    if !reader.unmodeled().is_empty() {
         notes.push(format!(
             "{} JSON pointer(s) use constructs this engine records but does not interpret; a \
              change inside them could not be detected",
-            reader.unmodeled.len()
+            reader.unmodeled().len()
         ));
     }
-    if !reader.unresolved.is_empty() {
+    if !reader.unresolved().is_empty() {
         notes.push(format!(
             "{} reference(s) or schema pointer(s) could not be resolved",
-            reader.unresolved.len()
+            reader.unresolved().len()
         ));
     }
-    coverage = worse_of(coverage, reader.coverage);
+    coverage = worse_of(coverage, reader.coverage());
 
     let servers = doc
         .pointer("/servers")
@@ -807,8 +426,8 @@ pub fn parse_openapi(doc: &SpecDocument) -> Result<OpenApiSpec, OpenApiError> {
         servers,
         paths,
         coverage,
-        unmodeled_pointers: reader.unmodeled,
-        unresolved_refs: reader.unresolved,
+        unmodeled_pointers: reader.unmodeled().clone(),
+        unresolved_refs: reader.unresolved().clone(),
         notes,
     })
 }
@@ -1021,7 +640,7 @@ fn parse_parameter(
     // and a contract that is permanently `Unknown`.
     let schema_pointer = format!("{base_pointer}/schema");
     let schema = if object.contains_key("schema") {
-        reader.read(&schema_pointer, 0, &BTreeSet::new())
+        reader.read(&schema_pointer)
     } else {
         // `content`-typed parameters carry a media type map instead of a
         // schema. Nothing here can be compared, and saying so is better than an
@@ -1093,10 +712,7 @@ fn read_content_map(
             out.insert(media_type.clone(), facts);
             continue;
         }
-        out.insert(
-            media_type.clone(),
-            reader.read(&schema_pointer, 0, &BTreeSet::new()),
-        );
+        out.insert(media_type.clone(), reader.read(&schema_pointer));
     }
     Ok(out)
 }

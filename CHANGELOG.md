@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Phase 4.2 Pillars 1–3 (2026-10-16)
 
-Steps 28–37 of the 4.2 implementation sequence. Pillars 4–6 (Steps 38–45)
+Steps 28–38 of the 4.2 implementation sequence. Pillars 4–6 (Steps 39–45)
 are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
-`docs/evidence/18_phase4_2_pillar2_test_impact.md`, and
-`docs/evidence/19_phase4_2_pillar3_openapi.md`.
+`docs/evidence/18_phase4_2_pillar2_test_impact.md`,
+`docs/evidence/19_phase4_2_pillar3_openapi.md`, and
+`docs/evidence/20_phase4_2_pillar3_asyncapi.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -94,10 +95,38 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   Direction is respected: request-side narrowing is breaking, and where no
   directional evidence exists (a changed *response* schema) the change is
   reported as unclassified rather than guessed at.
+- **AsyncAPI 3.1.0 contract engine (`autopsy-contracts-distributed`, Step 38):**
+  parses `channels`, `operations`, and `messages` into a canonical model, and answers
+  both event-contract questions — *did this revision change?* (`diff_asyncapi`) and
+  *does this producer satisfy this consumer?* (`verify_flows`).
+
+  The design point is that **an HTTP operation has one arrow and a broker channel has
+  two**. Which side you are looking at is decided by the operation's `action`, not by
+  the schema, so the same edit has opposite severities on each side: a type narrowed on
+  an accepted schema breaks senders, a type narrowed on an emitted schema is safe; a
+  field becoming required breaks a consumer and strengthens a producer. A message that
+  is both sent and received is classified `Both` and must be safe in both readings at
+  once.
+
+  An optional property added to an *emitted* schema is classified `Unknown` rather than
+  non-breaking. "Old consumers ignore unknown fields" is a policy some ecosystems adopt,
+  not a property of the schema — Avro and Protobuf decoders are strict by default — and
+  when the consumer is in the same document `verify_flows` settles the question from
+  evidence instead of assuming it.
+
+  The producer/consumer check is *containment*: everything the producer guarantees must
+  be acceptable to the consumer. A producer with no `type` accepts every JSON type and
+  is reported as over-delivering; a producer that merely *permits* a field does not
+  satisfy a consumer that *requires* it. All of it recurses, so a violation is reported
+  at its own JSON pointer.
+
 - **`schemas/distributed-contract.schema.json`:** closed schema for the delta,
   with a conformance suite that enumerates the Rust enums exhaustively via
-  `ChangeKind::ALL` and compares them against the schema through `serde`, so an
-  added variant or a `#[serde(rename)]` cannot drift unnoticed.
+  `ChangeKind::ALL` (**53 kinds** after Step 38) and compares them against the
+  schema through `serde`, so an added variant or a `#[serde(rename)]` cannot
+  drift unnoticed. The suite also guards the reverse direction: it fails if the
+  fixtures stop producing a verdict, which would otherwise leave the
+  enum-coverage tests passing while checking less than they claim.
 
 ### Fixed
 - Temporal replay no longer mints a duplicate fact on re-observation. Because
@@ -106,6 +135,26 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   subsequent commit; the fixture exposed 9 facts where 5 were correct.
 - Removed an item-invariant filter in the lineage similarity pass that could
   only ever match all candidates or none.
+- Version parsing read the **patch** level as the minor version, so every correct
+  `3.1.0` AsyncAPI document was flagged `partial` with a note saying the minor
+  version could not be read. `version.split('.').nth(1)` returns `1` for `3.1.0`;
+  a shared `major_minor` helper now takes the first two components (and a test
+  pins `3.10.4 -> "3.10"`).
+- A channel or message reference was **unescaped before being split**, so the
+  channel id `user/signedup` produced the message key
+  `user/signedup/messages/M` instead of `user~1signedup/M`. Every flow on a
+  channel id containing `/` — common, because some documents use the raw topic as
+  the id — read as "no common message".
+- Operation `channel` and `messages` references were followed to the **end of the
+  `$ref` chain**. In a document that factors a message body into `components/`,
+  the chain lands on `/components/messages/X` — not under `/channels/` — so the
+  operation's message set came out empty and both the digest and the flow check
+  reported less wrong with the document than was true. References name a
+  *position*; they are now read one hop from the raw `$ref`.
+- A **message-level `schemaFormat`** (the AsyncAPI 2.x layout) was ignored, so an
+  Avro payload was run through the JSON Schema reader, which recorded
+  `type: "record"` and reported the message `Verified`. Both layouts are now
+  honoured and gated on the same readability check.
 - `Document::pointer` refused array-index descent, so every legal JSON Pointer
   addressing a list element — including the extremely common
   `#/paths/.../parameters/0/schema` — failed to resolve, which silently made the
@@ -174,9 +223,40 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   `breaking` and not `non_breaking`. Request-side narrowing rules do not apply to
   responses, and this engine holds no directional evidence for them, so it says
   so instead of guessing.
-- `autopsy-contracts-distributed` is a **library API only**. Steps 38 (AsyncAPI
-  3.1.0) and 39 (Pact) are not implemented; no CLI subcommand, storage
-  write-back to `distributed_contracts`, or MCP surface is wired.
+- `crates/autopsy-contracts-distributed` splits into a shared **schema layer**
+  (`schema.rs`, the JSON Schema reader both protocols use) and a shared **change
+  vocabulary** (`change.rs`: `Severity`, `ChangeKind`, `ContractChange`,
+  `ContractDelta`, `CompatibilityVerdict`). Putting them in the engines would
+  mean two independent opinions about what a `$ref` cycle is and a verdict
+  algebra re-derived, slightly differently, per protocol.
+- `ChangeKind::default_severity()` is deliberately **not** the last word. A kind
+  names a *fact* ("a property was removed"); its severity depends on the
+  direction the message travels, so `ContractChange` stores an explicit severity
+  and the AsyncAPI payload kinds default to `Unknown`. A fixed default there
+  would be a guess, and a wrong guess is a false approval.
+- `verify_flows` reasons about **containment**, not revision. It is not built on
+  `payload_changes`, because "A changed into B" and "A satisfies B" are
+  different relations and deriving one from the other produces confident
+  nonsense in both directions.
+- `diff_asyncapi` folds in **newly introduced** flow findings only. Folding in
+  the absolute flow report made `Compatible` unreachable for every one-sided
+  document and, worse, reported an *unchanged* gap as a regression — the surest
+  way to teach users to ignore a signal. Findings a revision *resolved*, and
+  operations that became uncheckable, are reported separately.
+- **`bindings`, `tags`, `security`, `servers`, and `externalDocs` do not degrade
+  coverage.** They carry no payload facts, so they cannot hide an
+  incompatibility. `traits` and `reply` **do** degrade, because a trait may
+  inject `payload` or `headers`. The rule is: degrade when a keyword could hide
+  a fact, never merely because a keyword is unmodelled.
+- AsyncAPI **2.x is a hard error**. Its `publish`/`subscribe` channel model means
+  a lenient 3.x read yields no operations, and the diff would then report every
+  operation of the other revision as removed.
+- Message identity is **positional** (`channelId/messageId`, both escaped), so
+  factoring a message body into `components/` is a no-op. Renaming a message id
+  still reads as a removal plus an addition.
+- `autopsy-contracts-distributed` is a **library API only**. Step 39 (Pact) is not
+  implemented; no CLI subcommand, storage write-back to `distributed_contracts`,
+  or MCP surface is wired.
 - `autopsy-test-impact` is a **library API only**. No CLI subcommand, storage
   write-back to `test_mappings`, or MCP surface is wired yet.
 - `Cargo.toml` version remains `0.0.1`.

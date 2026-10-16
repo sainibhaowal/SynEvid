@@ -12,8 +12,8 @@
 
 use autopsy_contracts_distributed::openapi::OpenApiSpec;
 use autopsy_contracts_distributed::{
-    ChangeKind, CompatibilityVerdict, ContractDelta, DocFormat, Severity, SpecDocument,
-    diff_openapi, parse_openapi,
+    AsyncApiSpec, ChangeKind, CompatibilityVerdict, ContractDelta, DocFormat, Severity,
+    SpecDocument, diff_asyncapi, diff_openapi, parse_asyncapi, parse_openapi,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -79,11 +79,40 @@ fn deltas() -> Vec<(&'static str, ContractDelta)> {
     let unclassified_delta = diff_openapi(&parse(with_all_of), &parse(with_all_of));
     assert!(!unclassified_delta.unclassified().is_empty());
 
+    // An AsyncAPI delta, so the Step 38 kinds are exercised by every structural
+    // check above rather than only by the exhaustive enum comparison.
+    let async_source = r###"{
+      "asyncapi": "3.1.0",
+      "channels": {
+        "orders": {
+          "address": "orders",
+          "messages": {
+            "M": { "payload": { "type": "object", "properties": { "a": { "type": "string" } } } }
+          }
+        }
+      },
+      "operations": {
+        "p": { "action": "send", "channel": { "$ref": "#/channels/orders" } }
+      }
+    }"###;
+    let async_to = async_source.replace(
+        "\"properties\": { \"a\": { \"type\": \"string\" } }",
+        "\"properties\": { \"a\": { \"type\": \"string\" }, \"b\": { \"type\": \"string\" } }",
+    );
+    assert_ne!(async_to, async_source, "fixture edit was a no-op");
+    let asyncapi_delta = diff_asyncapi(&parse_async(async_source), &parse_async(&async_to));
+
     vec![
         ("compatible", compatible_delta),
         ("breaking", breaking_delta),
         ("unknown", unclassified_delta),
+        ("asyncapi", asyncapi_delta),
     ]
+}
+
+fn parse_async(json: &str) -> AsyncApiSpec {
+    let doc = SpecDocument::parse("a.json", json, DocFormat::Json).unwrap();
+    parse_asyncapi(&doc).unwrap()
 }
 
 fn keys(value: &Value) -> Vec<String> {
@@ -190,7 +219,7 @@ fn the_schema_enumerates_every_change_kind_the_engine_can_emit() {
         extra.is_empty(),
         "the schema declares change kinds the engine cannot emit: {extra:?}"
     );
-    assert_eq!(ChangeKind::ALL.len(), 29, "ALL drifted from the enum");
+    assert_eq!(ChangeKind::ALL.len(), 53, "ALL drifted from the enum");
 }
 
 #[test]
@@ -239,7 +268,9 @@ fn the_fixtures_actually_produce_all_three_verdicts() {
     // Guards the other direction: if the fixtures silently stopped producing a
     // verdict, the enum-coverage tests above would still pass while checking
     // less than they claim to.
-    let produced: BTreeSet<String> = deltas().iter().map(|(_, d)| tag(&d.verdict)).collect();
+    let all = deltas();
+    assert_eq!(all.len(), 4, "a fixture went missing");
+    let produced: BTreeSet<String> = all.iter().map(|(_, d)| tag(&d.verdict)).collect();
     assert_eq!(
         produced,
         ["compatible", "breaking", "unknown"]

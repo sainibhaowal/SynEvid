@@ -52,7 +52,7 @@ Canonical requirement IDs are maintained in the Requirements Engineering Specifi
 
 ## Phase 4.2 — Temporal & Multi-Source Evolution
 
-Steps 28–37 of `04_4.2_IMPLEMENTATION_SEQUENCE.md` are implemented. Steps 38–45 remain **NOT STARTED**.
+Steps 28–38 of `04_4.2_IMPLEMENTATION_SEQUENCE.md` are implemented. Steps 39–45 remain **NOT STARTED**.
 
 | Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
 |---|---|---|---|---|
@@ -68,8 +68,9 @@ Steps 28–37 of `04_4.2_IMPLEMENTATION_SEQUENCE.md` are implemented. Steps 38�
 | **Step 36** | Advisory predictive ranking sidecar (Pillar 2) | `autopsy-test-impact` (`selection::PredictiveRanking`) | `step36_gate_ranking_cannot_change_the_plan`, `step36_gate_ranking_is_always_marked_advisory`, `step36_without_coverage_the_ranking_refuses_to_guess`, `step36_rationale_states_the_measurement_not_a_claim`, `step36_ranking_is_reproducible` | **VERIFIED** |
 | **Pillar 2 schema** | `schemas/test-selection.schema.json` conformance | `crates/autopsy-test-impact/tests/schema_conformance.rs` | `every_serialized_field_is_declared_and_every_required_field_is_emitted`, `the_plans_cover_every_fallback_variant_the_schema_declares`, `the_unrulable_out_field_is_empty_exactly_when_coverage_is_verified`, `reason_objects_match_their_declared_contract_and_codes`, +5 more | **VERIFIED** |
 | **Step 37** | OpenAPI 3.2.1 contract engine, breaking-change classification (Pillar 3) | `autopsy-contracts-distributed` (`document`, `openapi`, `openapi_diff`) | `step37_gate_removed_endpoint_is_breaking`, `step37_gate_added_required_query_parameter_is_breaking`, `step37_gate_removed_method_is_breaking`, `step37_an_unchanged_but_unmodelled_document_is_unknown_never_compatible`, `step37_a_definite_break_is_reported_even_with_incomplete_coverage`, `step37_a_changed_response_schema_is_unknown_not_breaking`, `step37_delta_is_reproducible_across_100_runs`, +33 more in `tests/step37_openapi.rs` | **VERIFIED** |
-| **Pillar 3 schema** | `schemas/distributed-contract.schema.json` conformance | `crates/autopsy-contracts-distributed/tests/schema_conformance.rs` | `the_schema_enumerates_every_change_kind_the_engine_can_emit`, `the_fixtures_actually_produce_all_three_verdicts`, `a_compatible_verdict_implies_verified_coverage_and_no_unclassified_change`, `is_approval_admits_only_the_compatible_verdict`, +8 more | **VERIFIED** |
-| **Steps 38–45** | Pillars 4–6, CLI subcommands, MCP & Web Inspector evolution | *(none)* | — | **NOT STARTED** |
+| **Pillar 3 schema** | `schemas/distributed-contract.schema.json` conformance | `crates/autopsy-contracts-distributed/tests/schema_conformance.rs` (53 kinds) | `the_schema_enumerates_every_change_kind_the_engine_can_emit`, `the_fixtures_actually_produce_all_three_verdicts`, `a_compatible_verdict_implies_verified_coverage_and_no_unclassified_change`, `is_approval_admits_only_the_compatible_verdict`, +8 more | **VERIFIED** |
+| **Step 38** | AsyncAPI 3.1.0 engine: channels/messages, producer-consumer payload compatibility (Pillar 3) | `autopsy-contracts-distributed` (`asyncapi`, `asyncapi_diff`), `src/schema.rs`, `src/change.rs` | `step38_gate_channels_and_messages_are_parsed`, `step38_gate_a_consumer_requiring_an_unproduced_field_is_detected`, `step38_gate_a_producer_emitting_more_types_than_the_consumer_accepts_is_detected`, `step38_the_direction_algebra_is_inverted_where_it_should_be`, `step38_a_definite_break_is_reported_even_with_incomplete_coverage`, `step38_a_one_sided_channel_is_never_an_approval`, `step38_the_delta_is_reproducible_across_100_runs`, `step38_factoring_a_message_into_components_is_not_a_remove_plus_add`, +12 more in `tests/step38_asyncapi.rs` | **VERIFIED** |
+| **Steps 39–45** | Pillars 4–6, CLI subcommands, MCP & Web Inspector evolution | *(none)* | — | **NOT STARTED** |
 | **`schemas/temporal.schema.json`** | Pillar 1 journal JSON schema | *(none — journal is a library API only)* | — | **NOT DELIVERED** |
 
 

@@ -3,8 +3,10 @@
 //!
 //! * **Step 37** — OpenAPI 3.2.1 paths and schemas, breaking-change
 //!   classification ([`openapi`], [`openapi_diff`]).
-//! * **Step 38** — AsyncAPI 3.1.0 channels and messages.
-//! * **Step 39** — Pact consumer/provider verification.
+//! * **Step 38** — AsyncAPI 3.1.0 channels and messages, and
+//!   producer-to-consumer payload compatibility ([`asyncapi`],
+//!   [`asyncapi_diff`]).
+//! * **Step 39** — Pact consumer/provider verification. *(not implemented)*
 //!
 //! # The honesty rule that shapes every module here
 //! A compatibility checker has an unusually dangerous failure mode. For a
@@ -35,15 +37,29 @@
 //!   workspace does not enable `preserve_order`, so no document order can reach
 //!   a digest.
 
+pub mod asyncapi;
+pub mod asyncapi_diff;
+pub mod change;
 pub mod document;
 pub mod openapi;
 pub mod openapi_diff;
+pub mod schema;
 
+pub use asyncapi::{
+    Action, AsyncApiError, AsyncApiSpec, AsyncOperation, Channel, Message, PayloadDirection,
+    parse_asyncapi,
+};
+pub use asyncapi_diff::{
+    FlowCheck, FlowFinding, FlowMismatch, FlowReport, UncheckedFlow, diff_asyncapi,
+    findings_by_channel, severity_for, verify_flows,
+};
+pub use change::{
+    ChangeKind, CompatibilityVerdict, ContractChange, ContractDelta, Severity, VersionChange,
+};
 pub use document::{DocFormat, DocumentError, RefError, SpecDocument};
 pub use openapi::{
     HttpMethod, OpenApiSpec, Operation, ParamLocation, Parameter, PathItem, RequestBody, Response,
-    SchemaFacts, parse_openapi,
+    parse_openapi,
 };
-pub use openapi_diff::{
-    ChangeKind, CompatibilityVerdict, ContractChange, ContractDelta, Severity, diff_openapi,
-};
+pub use openapi_diff::{diff_openapi, parameter_identities};
+pub use schema::{SchemaFacts, SchemaReader};
