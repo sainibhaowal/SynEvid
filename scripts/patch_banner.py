@@ -6,7 +6,8 @@ maintaining the authentic sci-fi cyberpunk aesthetics, blurred glows, and glassm
 """
 
 import math
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 def draw_star_icon(draw, cx, cy, color):
@@ -88,20 +89,50 @@ def patch_banner():
     draw.text((145, 45), "git", font=f_clone_hdr, fill=(0, 230, 180, 230))
 
     # Input Box: [65, 70, 335, 108] (width 270, ends well before crystal hexagon at 358)
-    draw.rounded_rectangle([65, 70, 335, 108], radius=6, fill=(16, 24, 34, 230), outline=(45, 68, 95, 200), width=1)
-    draw.text((75, 83), "git@github.com:sainibhaowal/SynEvid.git", font=f_clone_url, fill=(185, 210, 230, 255))
+    draw.rounded_rectangle(
+        [65, 70, 335, 108],
+        radius=6,
+        fill=(16, 24, 34, 230),
+        outline=(45, 68, 95, 200),
+        width=1,
+    )
+    draw.text(
+        (75, 83),
+        "git@github.com:sainibhaowal/SynEvid.git",
+        font=f_clone_url,
+        fill=(185, 210, 230, 255),
+    )
 
     # Divider & Copy Icon
     draw.line([(302, 75), (302, 103)], fill=(35, 52, 75, 180), width=1)
     icx, icy = 314, 83
-    draw.rounded_rectangle([icx, icy, icx + 11, icy + 11], radius=2, outline=(120, 150, 180, 200), width=1)
-    draw.rounded_rectangle([icx - 3, icy + 3, icx + 8, icy + 14], radius=2, outline=(120, 150, 180, 200), width=1)
+    draw.rounded_rectangle(
+        [icx, icy, icx + 11, icy + 11], radius=2, outline=(120, 150, 180, 200), width=1
+    )
+    draw.rounded_rectangle(
+        [icx - 3, icy + 3, icx + 8, icy + 14],
+        radius=2,
+        outline=(120, 150, 180, 200),
+        width=1,
+    )
 
     # Action Buttons: width 65 and 57 (ends at x=195)
-    draw.rounded_rectangle([65, 120, 130, 150], radius=6, fill=(24, 36, 50, 230), outline=(0, 210, 240, 180), width=1)
+    draw.rounded_rectangle(
+        [65, 120, 130, 150],
+        radius=6,
+        fill=(24, 36, 50, 230),
+        outline=(0, 210, 240, 180),
+        width=1,
+    )
     draw.text((82, 127), "Clone", font=f_btn, fill=(0, 230, 255, 255))
 
-    draw.rounded_rectangle([138, 120, 195, 150], radius=6, fill=(16, 24, 34, 180), outline=(35, 52, 75, 150), width=1)
+    draw.rounded_rectangle(
+        [138, 120, 195, 150],
+        radius=6,
+        fill=(16, 24, 34, 180),
+        outline=(35, 52, 75, 150),
+        width=1,
+    )
     draw.text((155, 127), "SSH", font=f_btn, fill=(150, 175, 200, 200))
 
     # 6. DRAW TOP-RIGHT REAL GITHUB BADGES
@@ -112,20 +143,26 @@ def patch_banner():
     icon_col = (200, 220, 235, 255)
 
     # Badge 1: sainibhaowal (width 150)
-    draw.rounded_rectangle([1010, 56, 1160, 96], radius=6, fill=bg_col, outline=border_col, width=1)
+    draw.rounded_rectangle(
+        [1010, 56, 1160, 96], radius=6, fill=bg_col, outline=border_col, width=1
+    )
     draw_github_icon(draw, 1028, 76, icon_col)
     draw.text((1042, 68), "sainibhaowal", font=f_badge, fill=text_col)
     draw.polygon([(1146, 75), (1152, 75), (1149, 79)], fill=(140, 165, 190, 220))
 
     # Badge 2: Star 1 (width 88)
-    draw.rounded_rectangle([1168, 56, 1256, 96], radius=6, fill=bg_col, outline=border_col, width=1)
+    draw.rounded_rectangle(
+        [1168, 56, 1256, 96], radius=6, fill=bg_col, outline=border_col, width=1
+    )
     draw_star_icon(draw, 1184, 76, icon_col)
     draw.text((1196, 68), "Star", font=f_badge, fill=text_col)
     draw.line([(1232, 63), (1232, 89)], fill=div_col, width=1)
     draw.text((1240, 68), "1", font=f_badge_num, fill=text_col)
 
     # Badge 3: Fork 0 (width 88) - replaces "Fair 0"
-    draw.rounded_rectangle([1264, 56, 1352, 96], radius=6, fill=bg_col, outline=border_col, width=1)
+    draw.rounded_rectangle(
+        [1264, 56, 1352, 96], radius=6, fill=bg_col, outline=border_col, width=1
+    )
     draw_fork_icon(draw, 1280, 76, icon_col)
     draw.text((1292, 68), "Fork", font=f_badge, fill=text_col)
     draw.line([(1328, 63), (1328, 89)], fill=div_col, width=1)
@@ -143,7 +180,12 @@ def patch_banner():
     ht_draw.text((515, 622), digest_str, font=f_hash_val, fill=(75, 125, 165, 190))
 
     # Real bottom GitHub URL
-    ht_draw.text((680, 738), "https://github.com/sainibhaowal/SynEvid", font=f_bot_url, fill=(80, 125, 165, 190))
+    ht_draw.text(
+        (680, 738),
+        "https://github.com/sainibhaowal/SynEvid",
+        font=f_bot_url,
+        fill=(80, 125, 165, 190),
+    )
     ht_draw.line([(680, 754), (940, 754)], fill=(35, 55, 75, 180), width=1)
 
     # Holographic bloom blur effect
