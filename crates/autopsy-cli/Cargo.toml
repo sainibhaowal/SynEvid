@@ -28,3 +28,10 @@ autopsy-invariants = { path = "../autopsy-invariants" }
 autopsy-evidence = { path = "../autopsy-evidence" }
 autopsy-storage = { path = "../autopsy-storage" }
 autopsy-report = { path = "../autopsy-report" }
+# Phase 4.2 engines (Pillar 1–6), reached only through their public APIs.
+autopsy-temporal = { path = "../autopsy-temporal" }
+autopsy-test-impact = { path = "../autopsy-test-impact" }
+autopsy-contracts-distributed = { path = "../autopsy-contracts-distributed" }
+autopsy-telemetry = { path = "../autopsy-telemetry" }
+autopsy-mining = { path = "../autopsy-mining" }
+autopsy-catalog = { path = "../autopsy-catalog" }

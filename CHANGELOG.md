@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–6 (Steps 28–43) (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–6 (Steps 28–44) (2026-10-16)
 
-Steps 28–43 of the 4.2 implementation sequence. Pillars 1–5 are complete and
-Pillar 6 is **in progress** (Step 43 done; the CLI subcommands and the inspector
-layers come next). Steps 44–45 are **not** implemented. See
+Steps 28–44 of the 4.2 implementation sequence. Pillars 1–5 are complete and
+Pillar 6 is **in progress** (Steps 43 and 44 done; the inspector layer comes
+next). Step 45 is **not** implemented. See
 `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
@@ -17,8 +17,9 @@ layers come next). Steps 44–45 are **not** implemented. See
 `docs/evidence/21_phase4_2_pillar3_pact.md`, and
 `docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
 `docs/evidence/23_phase4_2_pillar4_topology.md`,
-`docs/evidence/24_phase4_2_pillar5_mining.md`, and
-`docs/evidence/25_phase4_2_pillar6_catalog.md`.
+`docs/evidence/24_phase4_2_pillar5_mining.md`,
+`docs/evidence/25_phase4_2_pillar6_catalog.md`, and
+`docs/evidence/26_phase4_2_pillar6_cli.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -278,7 +279,55 @@ layers come next). Steps 44–45 are **not** implemented. See
   `all()` lists through serde, requiring the whole discovery accounting, refusing absolute
   paths by pattern, and asserting that no property anywhere names a clock reading.
 
-### Fixed
+- **CLI subcommands for every Phase 4.2 engine (Step 44):** `autopsy temporal`, `test-select`,
+  `contract-dist`, `telemetry`, `cochange` and `catalog` reach the six engines through their
+  public APIs. Six rather than the four the step names: Pillar 5's mining engine and this
+  step's catalog engine had no caller outside their own tests, and a pillar a user cannot run
+  is not finished.
+- **The exit-code rule lives in one function.** `0` pass; `2` a policy gate failed (a
+  `Breaking` contract verdict, or `--fail-if-all-tests-required` when a selection could not
+  narrow); `3` the analysis could not be performed; `4` the answer is not actionable —
+  coverage `unsupported`/`unknown`, or `partial` under `--strict`. `unknown` exits `4`
+  **without** `--strict`: an engine that says "I cannot answer this" must not hand a CI script
+  a zero and let it proceed. Every one of those codes is asserted end-to-end, and two of them
+  are deliberate non-errors: a repository with no commits, and a history that does not fit the
+  walker's bound, are refusals to answer rather than failures of analysis.
+- Handlers return `Outcome { exit_code, json, text }` and never touch the terminal, so an exit
+  code and the exact bytes for it are testable without a pty. `SARIF` is refused rather than
+  approximated — SARIF describes findings, and none of these reports is one. Every command is
+  read-only (`FR-026`): nothing is written, no storage path is touched, and a source guard test
+  asserts that no clock (`SystemTime`, `Instant::now`, `chrono`, `Utc`) appears anywhere in the
+  new layer. Mining anchors its window on the newest commit's timestamp from the repository.
+- **Each command's honesty is the engine's own state.** The temporal journal derives its
+  coverage from the facts that failed to resolve, so `--strict` fails on precisely what the
+  engine flagged rather than passing a blanket `verified`. `test-select` runs with
+  `NoReachability` and a file-level change set, so the plan is `partial` by construction and the
+  note says why. `contract-dist` reports `compatible` only with `verified` coverage and exits
+  `2` on a breaking change without being asked. The salt for `telemetry` is required, never
+  defaulted and never echoed. `cochange` tags every edge `temporal_co_occurrence_only` and says
+  in prose that it is not a dependency graph. `catalog` reports a workspace `path` dependency
+  as a monorepo edge.
+- `.git` is read whether it is a directory, a `gitdir:` file (worktree or submodule) or a
+  gitdir whose `commondir` file points at the shared object store — otherwise both history
+  commands would be unavailable in exactly the setup a reviewer checking out a branch is in.
+- `schemas/` and the engines are unchanged: the new layer is arguments, calls and rendering.
+
+- The `temporal` subcommand's default commit bound was `500`, which `TemporalJournal::build`
+  refuses on any real repository (a truncated timeline is not a timeline). A 31-commit
+  repository failed, and the error looked like an analysis failure rather than a bound that
+  needs raising. The refusal is now exit `4` with a message naming `--max-commits`, and the
+  default is `25_000`. Found by running the command, not only its tests.
+- The journal's canonical projection is a JSON **array**, so the CLI's attempt to insert a
+  `stats` key silently did nothing. The CLI now wraps the engine's projection under a named
+  `journal` field with `stats`, `coverage` and `notes` as declared siblings, so the output is
+  self-describing and the array cannot be mistaken for the whole document.
+- The "compatible contract change" fixture declared OpenAPI `3.1.0`, which the engine parses
+  under 3.2 semantics with a recorded gap, so coverage was `partial` and the verdict `unknown`
+  — correctly. The fixture now declares `3.2.1` and asserts that a `compatible` verdict implies
+  `verified` coverage, which is the rule that makes the fixture meaningful.
+- `telemetry` took eight positional arguments, two of them adjacent booleans with opposite
+  meanings. It now takes `TelemetryArgs`, whose default is conservative except for the salt,
+  which has no default by design.
 - `crate::discover` and `super::discover` are **both a module and a re-exported function**,
   which the `-D warnings` rustdoc gate refuses as an ambiguous intra-doc link. Two occurrences
   disambiguated as `mod@…` — the third consecutive step in which that gate caught a real

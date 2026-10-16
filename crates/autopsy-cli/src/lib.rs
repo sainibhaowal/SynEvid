@@ -10,6 +10,8 @@
 //! - 3: ANALYSIS ERROR (Configuration, parse, or I/O failure)
 //! - 4: UNSUPPORTED / UNKNOWN (Unsupported syntax or unknown coverage in strict mode)
 
+pub mod extensions;
+
 use autopsy_adapter_api::{LanguageAdapter, ParseContext, ParsedFile};
 use autopsy_adapter_python::PythonAdapter;
 use autopsy_adapter_typescript::TypeScriptAdapter;
@@ -248,6 +250,103 @@ pub enum Commands {
         #[arg(long, default_value_t = 0)]
         offset: usize,
     },
+    /// Replay git history into a temporal journal, or reconstruct one revision (Pillar 1)
+    Temporal {
+        /// Reconstruct the graph at this revision instead of emitting the whole journal
+        #[arg(long)]
+        at: Option<String>,
+        /// Bound on commits walked. The walker refuses a history that does not fit rather
+        /// than truncating it, so this must cover the reachable history.
+        #[arg(long, default_value_t = 25_000)]
+        max_commits: usize,
+        /// Exit 4 when coverage is partial
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Select the tests that must run for a set of changed files (Pillar 2)
+    TestSelect {
+        /// A changed source file, POSIX-relative (repeatable)
+        #[arg(long = "changed", value_name = "PATH")]
+        changed: Vec<String>,
+        /// An LCOV coverage report, one per suite (repeatable)
+        #[arg(long = "lcov", value_name = "FILE")]
+        lcov: Vec<PathBuf>,
+        /// Exit 2 when the plan is `run-all-tests` (the CI gate for a selection that did not narrow)
+        #[arg(long)]
+        fail_if_all_tests_required: bool,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Diff two contract documents across repositories (Pillar 3)
+    ContractDist {
+        /// The `from` document (the earlier revision, the Pact, or the flows document)
+        from: PathBuf,
+        /// The `to` document (the later revision, or the provider OpenAPI spec)
+        to: PathBuf,
+        /// Which protocol to compare
+        #[arg(long, value_enum, default_value = "openapi")]
+        protocol: extensions::ContractProtocol,
+        /// Exit 4 when the verdict is `unknown` or coverage is partial
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Ingest an OTLP/JSON trace export, optionally correlating it into a topology report (Pillar 4)
+    Telemetry {
+        /// The OTLP/JSON trace export
+        input: PathBuf,
+        /// The pseudonymisation salt, 64 hex characters. Required: there is no default.
+        #[arg(long)]
+        salt: Option<String>,
+        /// A file containing the salt as 64 hex characters
+        #[arg(long)]
+        salt_file: Option<PathBuf>,
+        /// A declared-surface JSON document; when given, the topology report is produced instead
+        #[arg(long)]
+        surface: Option<PathBuf>,
+        /// Minimum observation windows a dead-code claim needs
+        #[arg(long, default_value_t = 3)]
+        windows: u32,
+        /// Assert that the observation is complete (required for a `verified` dead-code claim)
+        #[arg(long)]
+        complete_observation: bool,
+        /// Assert a static dispatch model (required for a `verified` dead-code claim)
+        #[arg(long)]
+        dispatch_static: bool,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Mine git history for paths that change together (Pillar 5)
+    Cochange {
+        /// Window width in seconds (default: 183 days, the design's "e.g. 6 months")
+        #[arg(long, default_value_t = 183 * 86_400)]
+        window_seconds: i64,
+        /// Bound on commits walked
+        #[arg(long, default_value_t = 5_000)]
+        max_commits: usize,
+        /// A commit changing more paths than this is not one change set
+        #[arg(long, default_value_t = 30)]
+        max_files_per_commit: usize,
+        /// Fewest joint commits before a pair is reported at all
+        #[arg(long, default_value_t = 2)]
+        min_pair_commits: u32,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Ingest Backstage catalog entities and dependency manifests (Pillar 6)
+    Catalog {
+        /// The tree to scan (defaults to the repository root)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Bound on a single file's size, in bytes
+        #[arg(long)]
+        max_file_bytes: Option<u64>,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
     /// Verify repository configuration, storage integrity, and analyzer health
     Doctor,
     /// Display engine version and adapter capabilities
@@ -337,9 +436,97 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             limit,
             offset,
         } => handle_edges(cli, source, *direction, kind.as_deref(), *limit, *offset),
+        Commands::Temporal {
+            at,
+            max_commits,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::temporal(cli, at.as_deref(), *max_commits, *strict),
+        ),
+        Commands::TestSelect {
+            changed,
+            lcov,
+            fail_if_all_tests_required,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::test_select(cli, changed, lcov, *fail_if_all_tests_required, *strict),
+        ),
+        Commands::ContractDist {
+            from,
+            to,
+            protocol,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::contract_dist(from, to, *protocol, None, *strict),
+        ),
+        Commands::Telemetry {
+            input,
+            salt,
+            salt_file,
+            surface,
+            windows,
+            complete_observation,
+            dispatch_static,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::telemetry(
+                input,
+                &extensions::TelemetryArgs {
+                    salt_hex: salt.clone(),
+                    salt_file: salt_file.clone(),
+                    surface: surface.clone(),
+                    windows: *windows,
+                    complete_observation: *complete_observation,
+                    dispatch_static: *dispatch_static,
+                    strict: *strict,
+                },
+            ),
+        ),
+        Commands::Cochange {
+            window_seconds,
+            max_commits,
+            max_files_per_commit,
+            min_pair_commits,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::cochange(
+                &cli.repo_root,
+                *window_seconds,
+                *max_commits,
+                *max_files_per_commit,
+                *min_pair_commits,
+                *strict,
+            ),
+        ),
+        Commands::Catalog {
+            root,
+            max_file_bytes,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::catalog(cli, root.as_deref(), *max_file_bytes, *strict),
+        ),
         Commands::Doctor => handle_doctor(cli),
         Commands::Version => handle_version(cli),
     }
+}
+
+/// Prints an extension outcome and returns its exit code.
+///
+/// The handlers themselves never touch the terminal, which is what lets the Step 44 tests
+/// assert an exit code and the exact output for it without a pty.
+fn run_extension(
+    cli: &Cli,
+    outcome: Result<extensions::Outcome, CliError>,
+) -> Result<i32, CliError> {
+    let outcome = outcome?;
+    outcome.print(cli.format)?;
+    Ok(outcome.exit_code)
 }
 
 /// Storage resolution helper.
