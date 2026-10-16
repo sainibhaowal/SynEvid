@@ -1,0 +1,475 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/topology-report.schema.json",
+  "title": "Synevid topology report (Step 41)",
+  "description": "The runtime-to-static topology diff over a set of observation windows: which spans were placed against the declared surface, which declared code was never observed running, and which observed routes no contract declares. Closed: every field the engine can emit is declared here, and nothing else validates. Every finding carries the coverage it was reached under, so a reader can see how much of the claim is evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "observation",
+    "correlations",
+    "dead_code",
+    "uninvoked_routes",
+    "insufficient_evidence",
+    "undocumented_routes",
+    "coverage",
+    "notes",
+    "digest"
+  ],
+  "properties": {
+    "observation": {
+      "$ref": "#/$defs/observationSummary"
+    },
+    "correlations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/spanCorrelation"
+      }
+    },
+    "dead_code": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/deadCodeFinding"
+      }
+    },
+    "uninvoked_routes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/uninvokedRoute"
+      }
+    },
+    "insufficient_evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/insufficientEvidence"
+      }
+    },
+    "undocumented_routes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/undocumentedRoute"
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverageState"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "digest": {
+      "$ref": "#/$defs/blake3Hex"
+    }
+  },
+  "$defs": {
+    "blake3Hex": {
+      "description": "Lowercase BLAKE3 hex. Uppercase would make two spellings of one digest, so it is excluded by pattern rather than normalised at read time.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coverageState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "partial",
+        "unsupported",
+        "unknown"
+      ]
+    },
+    "occupancySubject": {
+      "description": "What a span represents, independent of when it ran. The timestamp is deliberately absent. Declared here as well as in telemetry-fusion.schema.json; both copies are checked against the Rust enum.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "route"
+          ],
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "function"
+          ],
+          "properties": {
+            "function": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rpc"
+          ],
+          "properties": {
+            "rpc": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "const": "uncorrelated"
+        }
+      ]
+    },
+    "occupancyKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "subject",
+        "http_method"
+      ],
+      "properties": {
+        "service": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/occupancySubject"
+        },
+        "http_method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "declaredRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "template",
+        "operation_id"
+      ],
+      "properties": {
+        "method": {
+          "description": "Upper-cased when built by `DeclaredRoute::new`. `null` means the contract does not distinguish methods, which makes the route a match for any observation and degrades coverage.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "description": "As the contract wrote it, placeholder names included. Matching is on the placeholder-erased shape.",
+          "type": "string",
+          "minLength": 1
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "dispatchModel": {
+      "description": "Whether a call can reach a symbol without naming it. The engine cannot detect this from a payload, so it is a caller assertion, and only `static` lets a dead-code finding reach `verified` coverage.",
+      "type": "string",
+      "enum": [
+        "static",
+        "dynamic"
+      ]
+    },
+    "correlationBasis": {
+      "description": "How a span was placed. `ambiguous_symbol` is split from `unmatched` deliberately: the two read identically as \"not placed\" and are fixed in different places \u2014 a missing binding versus two symbols the symbol table should have distinguished.",
+      "type": "string",
+      "enum": [
+        "route_template",
+        "observed_path_subsumption",
+        "code_function",
+        "ambiguous_symbol",
+        "unmatched"
+      ]
+    },
+    "insufficientReason": {
+      "description": "Why a finding was withheld. Held back rather than reported weakly, so a reader counting findings cannot see a code path called dead when the engine said only that it did not look long enough.",
+      "type": "string",
+      "enum": [
+        "too_few_windows",
+        "observation_may_be_sampled"
+      ]
+    },
+    "observationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows_observed",
+        "required_windows",
+        "span_count",
+        "complete_observation",
+        "dispatch"
+      ],
+      "properties": {
+        "windows_observed": {
+          "description": "One `TraceRecord` is one observation window.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_windows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "span_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "complete_observation": {
+          "description": "Whether the caller asserted the exports are unsampled. The conservative default is `false`, and the report states it either way.",
+          "type": "boolean"
+        },
+        "dispatch": {
+          "$ref": "#/$defs/dispatchModel"
+        }
+      }
+    },
+    "spanCorrelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "span_id_hash",
+        "occupancy",
+        "symbol",
+        "route",
+        "basis",
+        "coverage"
+      ],
+      "properties": {
+        "span_id_hash": {
+          "$ref": "#/$defs/blake3Hex"
+        },
+        "occupancy": {
+          "$ref": "#/$defs/occupancyKey"
+        },
+        "symbol": {
+          "description": "The declared symbol this span was placed against, or null. A span that named a symbol may still be null here when the name was ambiguous.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/declaredRoute"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "basis": {
+          "$ref": "#/$defs/correlationBasis"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      }
+    },
+    "deadCodeFinding": {
+      "description": "A code path with zero observed invocations over enough windows to say so. `observed_invocations` is `const: 0` because the finding exists precisely because it is zero: encoding it as a field means the claim is carried rather than inferred from an absence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "path",
+        "observed_invocations",
+        "windows_observed",
+        "coverage"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_invocations": {
+          "const": 0
+        },
+        "windows_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      }
+    },
+    "uninvokedRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "template",
+        "operation_id",
+        "observed_invocations",
+        "windows_observed",
+        "coverage"
+      ],
+      "properties": {
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "$ref": "#/$defs/declaredRouteTemplate"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_invocations": {
+          "const": 0
+        },
+        "windows_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      }
+    },
+    "declaredRouteTemplate": {
+      "description": "The placeholder-name-erased shape, so `/users/{id}` and `/users/{userId}` are one route.",
+      "type": "string",
+      "minLength": 1
+    },
+    "evidenceSubject": {
+      "description": "What a withheld finding is about. An entry that did not name its subject would be unusable \u2014 a count of withheld findings with no way to ask which.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "symbol"
+          ],
+          "properties": {
+            "symbol": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "route"
+          ],
+          "properties": {
+            "route": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "template"
+              ],
+              "properties": {
+                "method": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "template": {
+                  "$ref": "#/$defs/declaredRouteTemplate"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "insufficientEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "windows_observed",
+        "required_windows",
+        "reason"
+      ],
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/evidenceSubject"
+        },
+        "windows_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_windows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "$ref": "#/$defs/insufficientReason"
+        }
+      }
+    },
+    "undocumentedRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "template",
+        "example_path",
+        "services",
+        "invocations",
+        "coverage"
+      ],
+      "properties": {
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "$ref": "#/$defs/declaredRouteTemplate"
+        },
+        "example_path": {
+          "description": "One concrete observed path, so a reader has something to grep for.",
+          "type": "string",
+          "minLength": 1
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "invocations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      }
+    }
+  }
+}

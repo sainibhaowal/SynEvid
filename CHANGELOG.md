@@ -5,16 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–4 (Steps 28–40) (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–4 (Steps 28–41) (2026-10-16)
 
-Steps 28–40 of the 4.2 implementation sequence. Pillars 1–3 are complete;
-Pillar 4 is **in progress** (Step 40 done, Step 41 not started). Steps 41–45
-are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
+Steps 28–41 of the 4.2 implementation sequence. Pillars 1–3 are complete;
+Pillar 4 is **in progress** (Steps 40–41 done; the mining pillar and the CLI
+come next). Steps 42–45 are **not** implemented. See
+`docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
 `docs/evidence/20_phase4_2_pillar3_asyncapi.md`,
 `docs/evidence/21_phase4_2_pillar3_pact.md`, and
-`docs/evidence/22_phase4_2_pillar4_otel_ingest.md`.
+`docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
+`docs/evidence/23_phase4_2_pillar4_topology.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -164,7 +166,47 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   data, an uncorrelatable span and an empty export all degrade coverage. No new
   dependencies; no regex engine, URL parser or telemetry SDK.
 
+- **Runtime-to-static topology diff (`autopsy-telemetry`, Step 41):** correlates observed
+  spans with the declared static surface — mapping `code.function`/`code.filepath` spans to
+  `autopsy_domain::SymbolId` and `http.route` spans to declared route templates — and diffs
+  the topology in both directions: **uninvoked** declared routes, and **undocumented**
+  observed routes no contract declares, plus dead-code findings for declared symbols with no
+  observed invocation. Route templates are compared on their placeholder-name-erased shape,
+  so `/orders/{id}` and `/orders/{orderId}` are one route, and a placeholder is erased only
+  as a whole segment (under-matching rather than over-matching).
+- The two claims this step makes are *negative claims about absent evidence*, so each is
+  gated on inputs the engine cannot derive from a payload and will not default:
+  `complete_observation` (may the export be sampled?) and `dispatch` (`Static`/`Dynamic`),
+  both conservative, with `required_windows` a `NonZeroU32`. A finding reaches `verified`
+  coverage only when the caller has asserted both. Findings the evidence base cannot
+  support are **withheld into a separate list** (`insufficient_evidence`) naming their
+  subject and reason, never reported as weak findings — so a count of findings cannot
+  include a code path the engine said only that it had not looked at long enough. Zero
+  observation windows yields `unknown` coverage and no findings at all.
+- Skipped when they cannot be justified: an **empty** declared route set makes no route
+  undocumented (an empty contract and an absent contract are indistinguishable); an
+  **ambiguous** symbol is `ambiguous_symbol`, not a coin-flip match, and marks neither
+  candidate alive; two equally specific but structurally different templates are reported
+  rather than chosen; a **method-agnostic** declaration matches but degrades coverage
+  because the method was not checked.
+- `schemas/topology-report.schema.json` — closed and draft 2020-12, with
+  `observed_invocations` pinned to `const: 0` on both finding types so the claim is carried
+  as a field rather than inferred from an absence.
+
 ### Fixed
+- A declared-but-**uninvoked** route left no trace in the topology report at all, so the
+  report digest did not cover the contract's surface and two genuinely different contracts
+  produced the same report. Found by a control assertion (a changed contract must move the
+  digest) — the digest was right and a whole finding type was missing. Added
+  `UninvokedRoute`, and `InsufficientEvidence` gained an `EvidenceSubject` so a withheld
+  finding can name a route as well as a symbol.
+- `CorrelationBasis::Rpc` named a capability no code path produced: nothing in the crate
+  maps `rpc.service`/`rpc.method` to a symbol, because no adapter emits `SymbolId`s for gRPC
+  handlers. The variant was removed and RPC spans are now disclosed in the notes as
+  uncorrelated, so the gap is visible instead of implied to be handled.
+- `[R24]`/`[R27]` and two `[CoverageState::…]` intra-doc links in Steps 39–40 output were
+  broken; rustdoc warnings are not errors, so nothing had failed. Fixed, and a new
+  pre-commit hook (`Rustdoc Intra-Doc Link Check (-D warnings)`) now enforces it.
 - The telemetry span `pointer` — *where in the export* a span sat — reached the span and
   record digests. A collector is free to export spans in any order, so reversing two spans
   upstream changed the record digest and a **reformatting would have been reported as a

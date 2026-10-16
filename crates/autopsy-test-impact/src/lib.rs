@@ -11,7 +11,8 @@
 //! * **Zero LLM**: selection is reverse reachability over the call graph.
 //! * **Honest coverage** (`FR-014`, `FR-030`): an unresolvable import, an
 //!   undetectable framework, or missing coverage data yields
-//!   [`CoverageState::Unknown`] or [`CoverageState::Partial`] and forces a
+//!   [`autopsy_domain::CoverageState::Unknown`] or
+//!   [`autopsy_domain::CoverageState::Partial`] and forces a
 //!   documented fallback — never a silent narrow selection.
 //! * **Determinism** (`NFR-001`): every collection is a `BTreeMap`/`BTreeSet`.
 

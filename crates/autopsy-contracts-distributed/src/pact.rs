@@ -1,6 +1,6 @@
 //! Pact consumer-driven contract model (Step 39).
 //!
-//! Parses Pact JSON artifacts [R27] into a canonical `BTreeMap`-ordered model.
+//! Parses Pact JSON artifacts `R27` into a canonical `BTreeMap`-ordered model.
 //!
 //! # A Pact is not a schema, and this matters
 //!

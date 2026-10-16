@@ -36,6 +36,14 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: cargo-rustdoc-links
+        name: Rustdoc Intra-Doc Link Check (-D warnings)
+        entry: bash -c 'export TMPDIR="${TMPDIR:-/home/ravi/.cache/tmp}"; mkdir -p "$TMPDIR"; RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        always_run: true
+
       - id: golden-determinism
         name: Golden 100-Run Determinism Invariant
         entry: ./scripts/verify-determinism.sh

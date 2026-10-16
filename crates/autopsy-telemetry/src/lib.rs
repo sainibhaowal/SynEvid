@@ -14,7 +14,14 @@
 //!        │  span::sanitize_traces         redact, then hash
 //!        ▼
 //!   span::TraceRecord                      SpanRecord + OccupancyKey
+//!        │  topology::correlate_topology  matches against a supplied surface
+//!        ▼
+//!   topology::TopologyReport               placed spans, dead code, uninvoked and
+//!                                          undocumented routes, withheld findings
 //! ```
+//!
+//! The static side is an **input** ([`topology::DeclaredSurface`]), never parsed here:
+//! two definitions of "what routes exist" in two places is how they come to disagree.
 //!
 //! ## The three rules this crate exists to enforce
 //!
@@ -40,6 +47,7 @@
 pub mod otlp;
 pub mod redact;
 pub mod span;
+pub mod topology;
 
 pub use otlp::{
     AnyValue, KeyValue, MODELLED_KEYS, OtlpError, Resource, ResourceSpans, SEMCONV_VERSION, Scope,
@@ -52,4 +60,10 @@ pub use redact::{
 pub use span::{
     EventRecord, IngestError, IngestOptions, LinkRecord, OccupancyKey, OccupancySubject,
     SpanRecord, StatusRecord, TraceRecord, sanitize_traces,
+};
+pub use topology::{
+    CorrelationBasis, DeadCodeFinding, DeclaredRoute, DeclaredSurface, DeclaredSymbol,
+    DispatchModel, EvidenceSubject, InsufficientEvidence, InsufficientReason, ObservationSummary,
+    SpanCorrelation, TopologyOptions, TopologyReport, UndocumentedRoute, UninvokedRoute,
+    canonical_route_template, correlate_topology,
 };

@@ -39,7 +39,7 @@ use thiserror::Error;
 
 /// Semantic Conventions version this engine reads attribute keys against.
 ///
-/// [R24]. Note that OTLP/JSON carries **no** version of its own: the version in
+/// `R24`. Note that OTLP/JSON carries **no** version of its own: the version in
 /// play is a property of the exporter, not of the payload. The engine therefore
 /// cannot verify it and says so, rather than claiming a version it did not see.
 pub const SEMCONV_VERSION: &str = "1.44.0";
