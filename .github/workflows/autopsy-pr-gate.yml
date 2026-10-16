@@ -43,7 +43,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Autopsy CLI
-        run: cargo build --locked -p autopsy-cli
+        run: cargo build -p autopsy-cli
 
       - name: Baseline PR Head
         id: baseline
