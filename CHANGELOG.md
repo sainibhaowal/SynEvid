@@ -313,6 +313,52 @@ Web Inspector. See
   commands would be unavailable in exactly the setup a reviewer checking out a branch is in.
 - `schemas/` and the engines are unchanged: the new layer is arguments, calls and rendering.
 
+- **Four new MCP read-only tools (Step 45).** `autopsy_temporal` (Pillar 1 journal and `at`
+  reconstruction, plus Pillar 5's mined co-change under an explicit `view` selector),
+  `autopsy_test_selection` (Pillar 2), `autopsy_contract_diff` (Pillar 3, all four
+  protocols) and `autopsy_distributed_blast_radius` (Pillar 6 ownership composed with
+  Pillar 4 observed topology — the design's cross-repo blast radius *is* that composition).
+  Every tool returns an envelope carrying the engine's exit code, because the code is part
+  of the answer: `0` actionable, `2` a policy gate failed, `4` **not actionable** (coverage
+  unknown/unsupported, or partial under `--strict`). The MCP layer previously understood only
+  `0` and `2`, so every Step 44 refusal would have surfaced as a failed call with the refusal
+  buried in stderr; `cli.ts` now treats `4` as evidence.
+- **`autopsy blast-radius <component-ref>`** so the organisational traversal has one
+  implementation rather than one in Rust and a second one in the viewer. Its output document
+  is `{catalog, blast_radius}` on every path, including "not found": the radius is a view of
+  the entities it walked, and a reader has to be able to see them. Closed schema in
+  `schemas/blast-radius.schema.json`, asserted as set equality in both directions against
+  what the engine emits.
+- **Two Web Inspector views.** *Temporal Evolution Timeline*: a slider over the journal's
+  revisions with active/added/retired facts and a badge on anything that did not fully
+  resolve. Revision order is first appearance of `valid_from` and the caption says so — the
+  journal carries commit ids, not timestamps, and the viewer will not put a clock on a history
+  the engine deliberately does not date. A bare fact array is accepted, and then the page says
+  the envelope's coverage and granularity notes are not in the document rather than inventing
+  them. *Distributed Blast Radius*: a radial multigraph of the stated references, with
+  unresolved references drawn dashed and named **and never as edges**, the catalog's
+  "what the scan did not read" beside the graph, and the observation summary when a trace
+  export was correlated. A component the catalog does not contain renders no graph and says
+  the omission is a refusal to answer, not an empty answer.
+- The page refuses any other document with a message naming the three artifact kinds it
+  renders. It stays one static file: zero build, zero backend, no network API, no storage
+  write, no clock — asserted by a source guard, not by convention.
+- Wiring kept in step with the new layer (AGENTS.md §4): a `web-inspector-check` pre-commit
+  hook, the same check in `Makefile`'s `check`, a CI step in `mcp-server-check` (now
+  "TypeScript MCP Server & Web Inspector Checks"), and the language rules text corrected —
+  the tests are `node:test`, not Vitest, and the inspector has no compilation step.
+- **`schemas/temporal.schema.json`: Pillar 1's missing schema.** `docs/requirements/TRACEABILITY.md`
+  recorded it as NOT DELIVERED ("journal is a library API only") because the journal had no CLI
+  caller when Pillar 1 shipped; Step 44 gave it one, so the envelope's shape is now a closed
+  public schema. `coverage` is documented as *derived* from the fact counts (`unknown` facts ⇒
+  `unknown`, `partial` ⇒ `partial`, all resolved ⇒ `verified`), so `--strict` cannot pass over
+  what the engine flagged, and `predicate` is an enum of the engine's own ten variants —
+  asserted against `FactPredicate::all()`, because a schema that rejects the engine's own output
+  is worse than no schema. The conformance test checks **every** fact of a real journal, not a
+  sample.
+
+### Fixed
+
 - The `temporal` subcommand's default commit bound was `500`, which `TemporalJournal::build`
   refuses on any real repository (a truncated timeline is not a timeline). A 31-commit
   repository failed, and the error looked like an analysis failure rather than a bound that
@@ -442,6 +488,37 @@ Web Inspector. See
   got nothing on exactly the runs where "we narrowed nothing" matters most. The
   schema-conformance suite caught this.
 
+- **The implied kind of a bare Backstage reference was always `component`.** `owner: team-x`
+  became `component:default/team-x`, `system: checkout-system` became
+  `component:default/checkout-system`, an entry of `providesApis` became a component — each a
+  well-formed reference that resolves to nothing. Nothing failed: the entities parsed, the
+  owner was present, the catalog reported `verified` coverage, and every join *across*
+  entities silently did not happen, so co-ownership was empty and siblings were keyed on a
+  fabricated reference. The implied kind is a property of the field, not of the string, and is
+  now threaded per field (`owner` → group, `system` → system, `domain` → domain,
+  `providesApis`/`consumesApis` → api, `dependsOn`/`subcomponentOf` → component, the CLI entry
+  point → component). Found by building the blast-radius view on a catalog that used bare
+  names — the spelling real catalogs use, and the one the Step 43 fixtures did not.
+- **A modelled kind that is not a component** (system, domain, API, resource) reported an
+  all-empty blast radius, which reads as "this system touches nothing". It now reports
+  coverage `unsupported` with a note saying an organisational blast radius is defined for
+  components.
+- **`apps/mcp-server`'s tests imported a `dist/` that nothing built.** `dist/` is gitignored
+  and the hook ran `typecheck && lint && test` with no build step, so the hook passed only on
+  machines with a stale build from an earlier manual run and would have failed on a fresh
+  checkout for reasons unrelated to the change. `pretest` now builds.
+- The inspector's helpers would have been `export`ed inside the MCP server factory; caught by
+  `tsc` and moved to `apps/mcp-server/src/evidence.ts`, which also made the exit-code rule
+  directly testable.
+- **The declared MSRV was not true.** `Cargo.toml` said `rust-version = "1.85"` (and
+  `AGENTS.md`, `CONTRIBUTING.md` and the agent rules repeated it) while the engines and adapters
+  use `let`-chains, which stabilised in **1.88** — so a 1.85 toolchain was told this workspace is
+  buildable at its floor and would then have failed inside an engine. The number is corrected in
+  all four places, with the reason written where the number lives, and a new `msrv-check` CI job
+  installs the declared toolchain and runs `cargo check --workspace --all-targets`, wired into
+  the pre-merge gate's needs, summary and failure condition. The floor is measured from now on
+  instead of asserted.
+
 ### Notes
 - New dependencies `flate2` (rust_backend, for cross-platform-identical
   decompression) and `sha1`; both MIT/Apache-2.0 and within the existing
@@ -452,8 +529,9 @@ Web Inspector. See
 - Symbol-level temporal extraction is **not yet wired to the language
   adapters**; only the built-in `TreeExtractor` (file presence) runs in
   production paths today.
-- `schemas/temporal.schema.json` and CLI surfacing of the journal are not yet
-  provided; the journal is a library API only.
+- Shell-visible artifacts (this section's CLI) and `schemas/temporal.schema.json` were
+  added after these notes were first written (Steps 44–45); the journal itself remains a
+  library API plus the `temporal` subcommand.
 - `autopsy-test-impact` performs a **lexical** scan of test files rather than an
   AST parse, because it sits below the language adapters in the dependency DAG.
   The consequence is stated rather than hidden behind a confidence score:
@@ -522,63 +600,8 @@ Web Inspector. See
 
 ## [Unreleased] - Forensic closure (2026-10-09)
 
-- **Four new MCP read-only tools (Step 45).** `autopsy_temporal` (Pillar 1 journal and `at`
-  reconstruction, plus Pillar 5's mined co-change under an explicit `view` selector),
-  `autopsy_test_selection` (Pillar 2), `autopsy_contract_diff` (Pillar 3, all four
-  protocols) and `autopsy_distributed_blast_radius` (Pillar 6 ownership composed with
-  Pillar 4 observed topology — the design's cross-repo blast radius *is* that composition).
-  Every tool returns an envelope carrying the engine's exit code, because the code is part
-  of the answer: `0` actionable, `2` a policy gate failed, `4` **not actionable** (coverage
-  unknown/unsupported, or partial under `--strict`). The MCP layer previously understood only
-  `0` and `2`, so every Step 44 refusal would have surfaced as a failed call with the refusal
-  buried in stderr; `cli.ts` now treats `4` as evidence.
-- **`autopsy blast-radius <component-ref>`** so the organisational traversal has one
-  implementation rather than one in Rust and a second one in the viewer. Its output document
-  is `{catalog, blast_radius}` on every path, including "not found": the radius is a view of
-  the entities it walked, and a reader has to be able to see them. Closed schema in
-  `schemas/blast-radius.schema.json`, asserted as set equality in both directions against
-  what the engine emits.
-- **Two Web Inspector views.** *Temporal Evolution Timeline*: a slider over the journal's
-  revisions with active/added/retired facts and a badge on anything that did not fully
-  resolve. Revision order is first appearance of `valid_from` and the caption says so — the
-  journal carries commit ids, not timestamps, and the viewer will not put a clock on a history
-  the engine deliberately does not date. A bare fact array is accepted, and then the page says
-  the envelope's coverage and granularity notes are not in the document rather than inventing
-  them. *Distributed Blast Radius*: a radial multigraph of the stated references, with
-  unresolved references drawn dashed and named **and never as edges**, the catalog's
-  "what the scan did not read" beside the graph, and the observation summary when a trace
-  export was correlated. A component the catalog does not contain renders no graph and says
-  the omission is a refusal to answer, not an empty answer.
-- The page refuses any other document with a message naming the three artifact kinds it
-  renders. It stays one static file: zero build, zero backend, no network API, no storage
-  write, no clock — asserted by a source guard, not by convention.
-- Wiring kept in step with the new layer (AGENTS.md §4): a `web-inspector-check` pre-commit
-  hook, the same check in `Makefile`'s `check`, a CI step in `mcp-server-check` (now
-  "TypeScript MCP Server & Web Inspector Checks"), and the language rules text corrected —
-  the tests are `node:test`, not Vitest, and the inspector has no compilation step.
+### Fixed
 
-- **The implied kind of a bare Backstage reference was always `component`.** `owner: team-x`
-  became `component:default/team-x`, `system: checkout-system` became
-  `component:default/checkout-system`, an entry of `providesApis` became a component — each a
-  well-formed reference that resolves to nothing. Nothing failed: the entities parsed, the
-  owner was present, the catalog reported `verified` coverage, and every join *across*
-  entities silently did not happen, so co-ownership was empty and siblings were keyed on a
-  fabricated reference. The implied kind is a property of the field, not of the string, and is
-  now threaded per field (`owner` → group, `system` → system, `domain` → domain,
-  `providesApis`/`consumesApis` → api, `dependsOn`/`subcomponentOf` → component, the CLI entry
-  point → component). Found by building the blast-radius view on a catalog that used bare
-  names — the spelling real catalogs use, and the one the Step 43 fixtures did not.
-- **A modelled kind that is not a component** (system, domain, API, resource) reported an
-  all-empty blast radius, which reads as "this system touches nothing". It now reports
-  coverage `unsupported` with a note saying an organisational blast radius is defined for
-  components.
-- **`apps/mcp-server`'s tests imported a `dist/` that nothing built.** `dist/` is gitignored
-  and the hook ran `typecheck && lint && test` with no build step, so the hook passed only on
-  machines with a stale build from an earlier manual run and would have failed on a fresh
-  checkout for reasons unrelated to the change. `pretest` now builds.
-- The inspector's helpers would have been `export`ed inside the MCP server factory; caught by
-  `tsc` and moved to `apps/mcp-server/src/evidence.ts`, which also made the exit-code rule
-  directly testable.
 - **Real two-state `diff`/`verify` (FR-007, FR-010):** `baseline` now persists
   canonical per-file bytes to the content-addressed cache; `diff --before`
   and `verify --baseline-id` rebuild the genuine before-state graph and

@@ -875,3 +875,94 @@ fn gate_coverage_state_never_becomes_a_pass_through_the_cli() {
         "the CLI's table is keyed on the wire spelling of the coverage state"
     );
 }
+
+#[test]
+fn gate_the_temporal_schema_declares_exactly_what_the_envelope_carries() {
+    // Pillar 1's schema was missing until now: the journal's output shape was pinned only by
+    // tests, and a schema that lags a struct validates a shape the engine no longer emits.
+    // Set equality in both directions, over **every** fact in a real journal — one sample
+    // would miss a field that only some facts carry.
+    let Some(root) = repository_under_test() else {
+        return;
+    };
+    let cli = cli_for(&root).expect("parses");
+    let outcome = extensions::temporal(&cli, None, 100_000, false).expect("builds");
+    let document: serde_json::Value =
+        serde_json::from_str(&outcome.json).expect("the envelope is canonical JSON");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/temporal.schema.json");
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("schema")).expect("valid JSON");
+
+    fn keys(value: &serde_json::Value) -> Vec<String> {
+        let mut keys: Vec<String> = value.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    assert_eq!(
+        keys(&document),
+        keys(&schema["properties"]),
+        "envelope fields"
+    );
+    assert_eq!(
+        schema["required"],
+        serde_json::json!(["journal", "stats", "coverage", "notes"]),
+        "all four fields are always present"
+    );
+    assert_eq!(
+        schema["additionalProperties"],
+        serde_json::json!(false),
+        "the envelope is closed"
+    );
+
+    let mut stats: Vec<String> = schema["$defs"]["journalStats"]["properties"]
+        .as_object()
+        .expect("journal stats properties")
+        .keys()
+        .cloned()
+        .collect();
+    stats.sort();
+    assert_eq!(keys(&document["stats"]), stats, "journal stats fields");
+    let mut required: Vec<String> = schema["$defs"]["journalStats"]["required"]
+        .as_array()
+        .expect("required")
+        .iter()
+        .map(|value| value.as_str().expect("string").to_string())
+        .collect();
+    required.sort();
+    assert_eq!(required, stats, "every counter is always emitted");
+
+    let mut declared: Vec<String> = schema["$defs"]["fact"]["properties"]
+        .as_object()
+        .expect("fact properties")
+        .keys()
+        .cloned()
+        .collect();
+    declared.sort();
+    let predicates: Vec<String> = schema["$defs"]["fact"]["properties"]["predicate"]["enum"]
+        .as_array()
+        .expect("the predicate vocabulary")
+        .iter()
+        .map(|value| value.as_str().expect("string").to_string())
+        .collect();
+    assert_eq!(
+        predicates.len(),
+        autopsy_temporal::FactPredicate::all().len(),
+        "the schema's predicate vocabulary must be the engine's, or it rejects the engine's own output"
+    );
+
+    let facts = document["journal"].as_array().expect("facts");
+    assert!(!facts.is_empty(), "the repository under test has history");
+    for fact in facts {
+        assert_eq!(
+            keys(fact),
+            declared,
+            "a fact carries exactly the declared fields"
+        );
+        let predicate = fact["predicate"].as_str().expect("a predicate");
+        assert!(
+            predicates.iter().any(|allowed| allowed == predicate),
+            "`{predicate}` is not in the declared vocabulary"
+        );
+    }
+}

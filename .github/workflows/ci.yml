@@ -37,6 +37,23 @@ jobs:
       - name: Strict Clippy Linter (-D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  msrv-check:
+    name: MSRV 1.88 Build (the declared rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install the declared MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Check the workspace at its declared floor
+        # The floor is measured here, not asserted in a comment: `let`-chains (used
+        # throughout the engines and adapters) stabilised in 1.88, and a declared
+        # rust-version that is lower than what the code needs tells a 1.88 toolchain it can
+        # build this workspace and then fails it inside an engine.
+        run: cargo check --workspace --all-targets
+
   cross-platform-matrix:
     name: Workspace Tests (${{ matrix.os.name }} - ${{ matrix.arch }})
     runs-on: ${{ matrix.os.runner }}
@@ -196,6 +213,7 @@ jobs:
       - cross-platform-matrix
       - determinism-and-boundary-gate
       - schemas-and-configs
+      - msrv-check
       - mcp-server-check
       - supply-chain-audit
     if: always()
@@ -209,6 +227,7 @@ jobs:
           echo "| Multi-Platform Matrix (Linux, macOS, Windows) | ${{ needs.cross-platform-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Determinism (100-Run) & Boundary Gate | ${{ needs.determinism-and-boundary-gate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MSRV 1.88 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Web Inspector | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
 
@@ -216,6 +235,7 @@ jobs:
              [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
              [ "${{ needs.determinism-and-boundary-gate.result }}" != "success" ] || \
              [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
+             [ "${{ needs.msrv-check.result }}" != "success" ] || \
              [ "${{ needs.mcp-server-check.result }}" != "success" ] || \
              [ "${{ needs.supply-chain-audit.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY

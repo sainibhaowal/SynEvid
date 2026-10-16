@@ -26,7 +26,7 @@ Before contributing, ensure you are familiar with the architectural boundaries d
 ## 2. Development Environment Setup
 
 ### Prerequisites
-* **Rust:** MSRV `1.85+` (Rust 2024 edition). Install via [rustup](https://rustup.rs/).
+* **Rust:** MSRV `1.88+` (Rust 2024 edition — `let`-chains require 1.88). Install via [rustup](https://rustup.rs/).
 * **Python:** `3.11+` with `tomllib` and `pyyaml` (used by schema validation hooks).
 * **Pre-commit:** Install via `pip install pre-commit` or your system package manager.
 * **Make:** Standard POSIX `make`.

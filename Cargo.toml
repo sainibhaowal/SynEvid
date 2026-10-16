@@ -29,7 +29,11 @@ members = [
 version = "0.0.1"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.85"
+# The floor is set by the language, not by preference: `let`-chains (`if let Some(x) = y
+# && let Some(z) = w`) are used throughout the adapters and the engines, and they were
+# stabilised in Rust 1.88. A lower number would tell a 1.85 toolchain it can build this
+# workspace and then fail it inside the engine. Verified by the `msrv-check` CI job.
+rust-version = "1.88"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

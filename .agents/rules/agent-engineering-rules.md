@@ -79,7 +79,7 @@ Every coding session or agent task must follow this exact loop:
 ### Step 2: Implement Smallest Coherent Changes
 - Write idiomatic, memory-safe, deterministic code.
 - Avoid unnecessary external dependencies.
-- Adhere to Rust edition 2024 and MSRV 1.85+.
+- Adhere to Rust edition 2024 and MSRV 1.88+ (`let`-chains, used throughout the engines and adapters, stabilised in 1.88).
 
 ### Step 3: Implement Real Tests (100% Verification Coverage)
 - **Zero Untested Changes:** Every feature, fix, or module MUST have accompanying tests.

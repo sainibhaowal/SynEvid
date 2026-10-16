@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/temporal.schema.json",
+  "title": "Syncevid temporal journal envelope (Pillar 1)",
+  "description": "The output document of `autopsy temporal`: the journal's own canonical projection, embedded verbatim under `journal`, plus the three facts the CLI adds about it. Closed: every field the engine can emit is declared and nothing else validates. The CLI wraps the projection in a named field rather than merging into it, so the array cannot be mistaken for the whole document and the engine's projection stays checkable as data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["journal", "stats", "coverage", "notes"],
+  "properties": {
+    "journal": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      },
+      "description": "`TemporalJournal::to_canonical_json`, re-parsed: the facts the journal holds, in the engine's own order. Empty is a statement — the history it replays carries no facts — and is not the same statement as \"the history is empty\"."
+    },
+    "stats": {
+      "$ref": "#/$defs/journalStats"
+    },
+    "coverage": {
+      "$ref": "catalog-report.schema.json#/$defs/coverageState",
+      "description": "Derived from the fact counts: `unknown` facts make it `unknown`, `partial` facts make it `partial`, and only a journal whose facts all resolved is `verified`. Derived rather than asserted, because `--strict` must fail on precisely the facts the engine flagged."
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The CLI's own statements about the document, in prose — including the extractor's granularity (`TreeExtractor` records file presence per revision, not symbols), so the limitation travels with the machine-readable output and not only the text one."
+    }
+  },
+  "$defs": {
+    "journalStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "active", "retired", "partial", "unknown"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Facts not retired at the head revision."
+        },
+        "retired": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partial": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Facts whose extraction could only resolve part of what it asserts."
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "fact": {
+      "description": "One claim about the repository at a revision, valid from the commit that introduced it until the commit that retired it. A fact is a *historical* statement: reviving a retired fact as a live edge is exactly what the temporal engine exists to prevent, so `valid_to` is part of the identity of an active-at-revision answer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "subject",
+        "predicate",
+        "object",
+        "valid_from",
+        "valid_to",
+        "evidence_digest",
+        "coverage",
+        "provenance"
+      ],
+      "properties": {
+        "fact_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "BLAKE3 of `subject ‖ predicate ‖ object ‖ valid_from` joined with NUL separators."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Canonical identity of the asserting entity."
+        },
+        "predicate": {
+          "type": "string",
+          "enum": [
+            "declares",
+            "references",
+            "calls",
+            "implements",
+            "overrides",
+            "contains",
+            "imports",
+            "inherits",
+            "test_covers",
+            "file_present"
+          ]
+        },
+        "object": {
+          "type": "string",
+          "description": "Canonical identity of the asserted target, or an opaque value."
+        },
+        "valid_from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Commit that introduced the assertion. A commit id, not a timestamp: the journal deliberately does not date a history, so nothing can be ordered by a clock that never entered the digest."
+        },
+        "valid_to": {
+          "type": ["string", "null"],
+          "description": "Commit that retired the assertion, or `null` while it is active at the head revision."
+        },
+        "evidence_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "BLAKE3 of the content that proves this fact (AST slice or blob digest)."
+        },
+        "coverage": {
+          "$ref": "catalog-report.schema.json#/$defs/coverageState"
+        },
+        "provenance": {
+          "type": "string",
+          "description": "Provenance label, e.g. `git:tree` or `adapter:typescript`."
+        }
+      }
+    }
+  }
+}

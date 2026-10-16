@@ -28,7 +28,7 @@ $$\text{Baseline } A \longrightarrow \text{Impact Assessment} \longrightarrow \t
 Every code modification must strictly follow this cycle:
 
 1. **Read Requirements & Traceability:** Check [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) and relevant ADRs in [`docs/adr/`](file:///home/ravi/Projects/SynEvid/docs/adr/).
-2. **Implement Minimal Coherent Change:** Keep changes isolated and adhering to strict Rust 2024 / MSRV 1.85+ standards.
+2. **Implement Minimal Coherent Change:** Keep changes isolated and adhering to strict Rust 2024 / MSRV 1.88+ standards (1.88 is the floor because the code uses `let`-chains; see `Cargo.toml` `rust-version`).
 3. **Add Real Tests (100% Verification Coverage):**
    - Unit tests inside crates.
    - End-to-end integration tests in [`tests/tests/`](file:///home/ravi/Projects/SynEvid/tests/tests/).
