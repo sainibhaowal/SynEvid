@@ -9,13 +9,17 @@ A lightweight, zero-backend, read-only visual forensic Evidence Board and Blast 
 | Verification report | `autopsy verify --format json` | Forensic Evidence Board, Blast Radius & Multigraph |
 | Revision journal | `autopsy temporal --format json` | Temporal Evolution Timeline |
 | Organisational blast radius | `autopsy blast-radius <component-ref> --format json` | Distributed Blast Radius |
+| Co-change coupling | `autopsy cochange --format json` | Co-Change Coupling |
 
 Anything else is **refused** with a message naming what the page does render, rather than
 shown as an empty case. The page derives nothing the engine already states: coverage, notes
 and unresolved references are displayed as the engine reported them, an unresolved reference
 is never drawn as an edge, and a component the catalog does not contain is shown as a refusal
-to answer instead of an empty graph. The inspector is offline by construction — it has no
-network API, no storage write and no clock.
+to answer instead of an empty graph. The co-change view carries the engine's own claim —
+`temporal_co_occurrence_only`, association never causation — renders a truncated pair set as
+a stated lower bound, and shows an empty edge list as either a counted below-threshold
+population or a coverage refusal, never as "nothing is coupled". The inspector is offline by
+construction — it has no network API, no storage write and no clock.
 
 ## Usage
 

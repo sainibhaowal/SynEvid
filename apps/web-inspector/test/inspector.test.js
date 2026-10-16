@@ -289,3 +289,102 @@ test('a verification report still renders as it did before', () => {
   });
   assert.match(page.document.getElementById('case-title').textContent, /Forensic Case/);
 });
+
+// ------------------------------------------------ Co-Change Coupling (Pillar 5)
+
+const COCHANGE = {
+  window: {
+    commits_seen: 30,
+    commits_considered: 28,
+    excluded: { merge_commit: 2 },
+    pure_renames_collapsed: 4,
+    walk_truncated: false,
+    window_seconds: 15811200,
+    max_files_per_commit: 30,
+    reference_oid: 'c'.repeat(40),
+    commit_set_digest: 'd'.repeat(64),
+  },
+  edges: [
+    {
+      a: 'src/checkout.ts', b: 'src/cart.ts', kind: 'statistical_co_change',
+      claim: 'temporal_co_occurrence_only',
+      commits_together: 12, commits_with_a: 20, commits_with_b: 15, total_commits: 28,
+      support_ppm: 428571,
+      confidence_a_to_b_ppm: 600000,
+      confidence_a_to_b_lower_ppm: 500000,
+      confidence_a_to_b_upper_ppm: 700000,
+      confidence_b_to_a_ppm: 800000,
+      confidence_b_to_a_lower_ppm: 650000,
+      confidence_b_to_a_upper_ppm: 900000,
+      lift_ppm: 1120000,
+      coverage: 'verified',
+    },
+  ],
+  pairs_below_threshold: 7,
+  pairs_truncated: false,
+  paths_with_changes: 11,
+  paths_never_coupled: 8,
+  coverage: 'partial',
+  notes: ['1 commit(s) changed more than 30 paths and were excluded as mass commits'],
+  digest: 'e'.repeat(64),
+};
+
+test('a co-change report renders its edges, its accounting and its claim', () => {
+  const page = loadPage();
+  assert.equal(page.classifyArtifact(COCHANGE), 'co_change');
+  page.loadArtifact(COCHANGE);
+  const banner = page.document.getElementById('cochange-banner').innerHTML;
+  assert.match(banner, /never causation/i, 'the one sentence this view exists to say');
+  assert.match(banner, /temporal_co_occurrence_only/, "the engine's claim tag is shown, not paraphrased");
+  const edges = page.document.getElementById('cochange-edges').innerHTML;
+  assert.match(edges, /src\/checkout\.ts/);
+  assert.match(edges, /428571 ppm/, 'support renders as the exact integer it is');
+  assert.match(edges, /12<\/strong>/, 'the joint-commit count is the headline');
+  assert.match(edges, /temporal_co_occurrence_only/, 'every edge carries the claim tag');
+  assert.match(page.document.getElementById('meta-coverage').textContent, /PARTIAL/);
+  assert.match(page.document.getElementById('meta-digest').textContent, /e{6}/, 'digest card');
+});
+
+test('a truncated co-change pair set is a stated lower bound, and an empty report is not an empty pass', () => {
+  const page = loadPage();
+  const truncated = JSON.parse(JSON.stringify(COCHANGE));
+  truncated.pairs_truncated = true;
+  page.loadArtifact(truncated);
+  assert.match(
+    page.document.getElementById('cochange-edges').innerHTML,
+    /lower bound/,
+    'truncation must be announced, never silently accepted'
+  );
+
+  const empty = JSON.parse(JSON.stringify(COCHANGE));
+  empty.edges = [];
+  page.loadArtifact(empty);
+  const emptyHtml = page.document.getElementById('cochange-edges').innerHTML;
+  assert.match(emptyHtml, /No pair reached the reporting threshold/);
+  assert.match(emptyHtml, /below the threshold/, 'the below-threshold pairs are counted, not hidden');
+
+  const refused = JSON.parse(JSON.stringify(COCHANGE));
+  refused.edges = [];
+  refused.coverage = 'unknown';
+  refused.pairs_below_threshold = 0;
+  page.loadArtifact(refused);
+  assert.match(
+    page.document.getElementById('cochange-edges').innerHTML,
+    /refusal, not a finding/,
+    'coverage unknown must not read as "nothing is coupled"'
+  );
+});
+
+test('excluded commits are named with their reason', () => {
+  const page = loadPage();
+  page.loadArtifact(COCHANGE);
+  assert.match(
+    page.document.getElementById('cochange-exclusions').innerHTML,
+    /merge_commit \(2\)/
+  );
+});
+
+test('the refusal message now names the co-change artifact too', () => {
+  const page = loadPage();
+  assert.throws(() => page.loadArtifact({ hello: 'world' }), /cochange/);
+});

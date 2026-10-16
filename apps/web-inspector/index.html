@@ -251,6 +251,7 @@
     <button class="tab-btn" onclick="switchTab(event, 'tab-blast')">Blast Radius &amp; Multigraph</button>
     <button class="tab-btn" onclick="switchTab(event, 'tab-timeline')">Temporal Evolution Timeline</button>
     <button class="tab-btn" onclick="switchTab(event, 'tab-distributed')">Distributed Blast Radius</button>
+    <button class="tab-btn" onclick="switchTab(event, 'tab-cochange')">Co-Change Coupling</button>
     <button class="tab-btn" onclick="switchTab(event, 'tab-report')">Autopsy Report JSON</button>
   </nav>
 
@@ -386,6 +387,23 @@
         <div id="distributed-scan"></div>
       </div>
     </div>
+
+    <!-- TAB 6: Co-Change Coupling (Pillar 5) -->
+    <div id="tab-cochange" class="tab-content">
+      <div class="blast-tree">
+        <div style="font-weight: 700; font-size: 1.1rem; margin-bottom: 0.5rem;">Co-Change Coupling</div>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;" id="cochange-sub">
+          No co-change report loaded. Produce one with
+          <code style="font-family: var(--font-mono);">autopsy cochange --format json</code>
+          and load it in the Report tab.
+        </p>
+        <div id="cochange-banner"></div>
+        <div class="meta-grid" style="margin-bottom: 1rem;" id="cochange-stats"></div>
+        <div id="cochange-edges"></div>
+        <div class="graph-caption" id="cochange-caption"></div>
+        <div id="cochange-exclusions"></div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -436,6 +454,7 @@
       }
       if (!parsed || typeof parsed !== 'object') { return 'unknown'; }
       if (Array.isArray(parsed.journal) && parsed.stats) { return 'temporal'; }
+      if (parsed.window && Array.isArray(parsed.edges) && parsed.coverage) { return 'co_change'; }
       if (parsed.blast_radius && parsed.catalog) { return 'blast_radius'; }
       if (parsed.run && parsed.coverage) { return 'verify'; }
       return 'unknown';
@@ -445,8 +464,9 @@
       var kind = classifyArtifact(parsed);
       if (kind === 'unknown') {
         throw new Error('Not an artifact this page renders: expected a verification report ' +
-          '(run/coverage), `autopsy temporal --format json` (journal/stats), or ' +
-          '`autopsy blast-radius <ref> --format json` (catalog/blast_radius).');
+          '(run/coverage), `autopsy temporal --format json` (journal/stats), ' +
+          '`autopsy blast-radius <ref> --format json` (catalog/blast_radius), or ' +
+          '`autopsy cochange --format json` (window/edges).');
       }
       currentArtifact = parsed;
       document.getElementById('json-display').textContent = JSON.stringify(parsed, null, 2);
@@ -459,6 +479,8 @@
       }
       if (kind === 'temporal' || kind === 'journal-bare') {
         renderTemporal(parsed);
+      } else if (kind === 'co_change') {
+        renderCoChange(parsed);
       } else {
         renderBlastRadius(parsed);
       }
@@ -467,7 +489,9 @@
     }
 
     function markVerifyViewsLoaded(kind) {
-      var what = kind === 'blast_radius' ? 'an organisational blast radius' : 'a temporal journal';
+      var what = kind === 'blast_radius' ? 'an organisational blast radius'
+        : kind === 'co_change' ? 'a co-change coupling report'
+        : 'a temporal journal';
       document.getElementById('case-title').textContent = 'Not a verification report';
       document.getElementById('case-sub').textContent =
         'This artifact is ' + what + '. The Evidence Board renders verification findings, so it has ' +
@@ -495,6 +519,16 @@
              ' / partial ' + (stats.partial == null ? '?' : stats.partial) +
              ' / unknown ' + (stats.unknown == null ? '?' : stats.unknown))
           : 'the envelope is not in this document');
+        return;
+      }
+      if (kind === 'co_change') {
+        var reportWindow = doc.window || {};
+        setMeta('meta-snapshot', 'co-change · ' +
+          (reportWindow.commits_considered == null ? '?' : reportWindow.commits_considered) + ' commit(s) considered');
+        setMeta('meta-digest', shortDigest(doc.digest));
+        setMeta('meta-coverage', String(doc.coverage || 'unknown').toUpperCase());
+        setMeta('meta-rules', (doc.edges || []).length + ' edge(s) · every one tagged ' +
+          'temporal_co_occurrence_only');
         return;
       }
       var radius = doc.blast_radius || {};
@@ -725,6 +759,93 @@
           'radius, so nothing here says what was <em>observed</em> at runtime. The catalog says what ' +
           'is declared; only a telemetry correlation can say what is called.</div>';
       }
+    }
+
+    // ------------------------------------------------ Co-Change Coupling (Pillar 5)
+
+    function renderCoChange(doc) {
+      var reportWindow = doc.window || {};
+      var edges = doc.edges || [];
+      var sub = document.getElementById('cochange-sub');
+      var banner = document.getElementById('cochange-banner');
+      var list = document.getElementById('cochange-edges');
+      var caption = document.getElementById('cochange-caption');
+      var stats = document.getElementById('cochange-stats');
+      var exclusions = document.getElementById('cochange-exclusions');
+
+      sub.innerHTML = '<strong>historical co-change</strong> · ' + coveragePill(doc.coverage) +
+        ' · ' + edges.length + ' edge(s) above threshold';
+
+      // The one sentence this view exists to say correctly: association, never causation.
+      banner.innerHTML = '<div class="graph-caption" style="border-left-color: #f59e0b;">' +
+        '<strong>Association, never causation.</strong> These pairs were edited in the same ' +
+        'commits — temporal co-occurrence. Nothing here says one path depends on the other, and ' +
+        'the engine tags every edge <code>temporal_co_occurrence_only</code> so a co-change edge ' +
+        'can never be read as a calls edge.</div>';
+
+      stats.innerHTML =
+        statCard('Commits seen', reportWindow.commits_seen == null ? '?' : String(reportWindow.commits_seen)) +
+        statCard('Commits considered', reportWindow.commits_considered == null ? '?' : String(reportWindow.commits_considered)) +
+        statCard('Edges reported', String(edges.length)) +
+        statCard('Pairs below threshold', doc.pairs_below_threshold == null ? '?' : String(doc.pairs_below_threshold)) +
+        statCard('Paths with changes', doc.paths_with_changes == null ? '?' : String(doc.paths_with_changes)) +
+        statCard('Paths never coupled', doc.paths_never_coupled == null ? '?' : String(doc.paths_never_coupled));
+
+      if (doc.pairs_truncated) {
+        list.innerHTML = '<div class="graph-caption" style="border-left-color: #f59e0b;">' +
+          'The pair set was <strong>truncated</strong>: what follows is a stated lower bound, not ' +
+          'the complete coupling picture. Raising the engine\'s bound is the only way to see the ' +
+          'rest, and this page will not pretend the remainder is empty.</div>';
+      } else {
+        list.innerHTML = '';
+      }
+
+      if (edges.length === 0) {
+        list.innerHTML += '<div class="graph-caption" style="border-left-color: #f59e0b;">' +
+          'No pair reached the reporting threshold. ' +
+          (doc.coverage === 'unknown'
+            ? 'This report says it could not answer (coverage unknown) — an empty list here is a ' +
+              'refusal, not a finding of "nothing is coupled".'
+            : (doc.pairs_below_threshold > 0
+              ? doc.pairs_below_threshold + ' pair(s) were seen and fell below the threshold; ' +
+                'they are counted, not hidden.'
+              : 'With no pairs below the threshold either, there was nothing to couple in this ' +
+                'window.')) +
+          '</div>';
+      } else {
+        list.innerHTML += edges.map(function (edge) {
+          return '<div class="ref-group">' +
+            '<div class="ref-group-title">' + esc(edge.a) + ' &harr; ' + esc(edge.b) + '</div>' +
+            '<div style="font-size: 0.82rem; color: var(--text-secondary);">' +
+            'changed together in <strong>' + edge.commits_together + '</strong> commit(s) · ' +
+            'support ' + edge.support_ppm + ' ppm · confidence a&rarr;b ' +
+            edge.confidence_a_to_b_ppm + ' ppm · lift ' + edge.lift_ppm + ' ppm · ' +
+            coveragePill(edge.coverage) +
+            ' <span class="tag">' + esc(edge.claim) + '</span>' +
+            '</div></div>';
+        }).join('');
+      }
+
+      caption.innerHTML = notesHtml(doc.notes) +
+        '<div style="margin-top: 0.5rem;">Support, confidence and lift are exact integer counts ' +
+        'rendered in parts per million; the commit counts beside them are authoritative. A pure ' +
+        'rename is collapsed before mining, so a directory move does not become a clique of ' +
+        'false pairs.</div>';
+
+      var excluded = reportWindow.excluded || {};
+      var reasons = Object.keys(excluded);
+      exclusions.innerHTML = reasons.length === 0
+        ? '<div class="ref-group-title" style="margin-top: 1rem;">Exclusions</div>' +
+          '<div style="font-size: 0.82rem; color: var(--text-secondary);">none — every commit the ' +
+          'walk reached was considered</div>'
+        : '<div class="ref-group-title" style="margin-top: 1rem;">Excluded from the population, ' +
+          'with the reason</div>' +
+          reasons.map(function (reason) {
+            return '<span class="ref-chip">' + esc(reason) + ' (' + excluded[reason] + ')</span>';
+          }).join('') +
+          '<div class="ref-none" style="margin-top: 0.35rem;">These commits are outside the ' +
+          'population the ratios are computed over, and the counts are reported rather than ' +
+          'dropped.</div>';
     }
 
     function unmodelledHtml(catalog) {

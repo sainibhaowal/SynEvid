@@ -375,6 +375,17 @@ Web Inspector. See
   depend on exactly what the engine must never do. 14 new tests in
   `crates/autopsy-cli/tests/step31_lineage_cli.rs`; see
   `docs/evidence/29_lineage_user_facing_path.md`.
+- **Co-change gets its inspector view (Pillar 5, Step 45 closure).** A sixth tab renders
+  `autopsy cochange --format json` with the engine's own claim carried through: the banner
+  says **association, never causation** and every edge row shows the verbatim
+  `temporal_co_occurrence_only` tag. The view is deliberately a list, not a graph — the
+  catalog *states* references so a radius may draw them; a co-change pair is an association
+  the engine refuses to call an edge, so drawing one would be the exact misreading
+  `EdgeKind::StatisticalCoChange` exists to prevent. A truncated pair set is announced as a
+  stated lower bound; the three "no edges" situations (below-threshold pairs counted,
+  nothing to couple, coverage-unknown refusal) render three different statements; excluded
+  commits are named with their reasons. 4 new tests in `apps/web-inspector/test/inspector.test.js`
+  (15 total); see `docs/evidence/31_cochange_inspector_view.md`.
 
 ### Changed
 
