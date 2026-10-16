@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - Phase 4.2 Pillars 1–3 (2026-10-16)
 
-Steps 28–38 of the 4.2 implementation sequence. Pillars 4–6 (Steps 39–45)
+Steps 28–39 of the 4.2 implementation sequence. Pillars 4–6 (Steps 40–45)
 are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
-`docs/evidence/19_phase4_2_pillar3_openapi.md`, and
-`docs/evidence/20_phase4_2_pillar3_asyncapi.md`.
+`docs/evidence/19_phase4_2_pillar3_openapi.md`,
+`docs/evidence/20_phase4_2_pillar3_asyncapi.md`, and
+`docs/evidence/21_phase4_2_pillar3_pact.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -128,7 +129,33 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   fixtures stop producing a verdict, which would otherwise leave the
   enum-coverage tests passing while checking less than they claim.
 
+- **Pact consumer/provider verification (`autopsy-contracts-distributed::pact`,
+  `::pact_xref`, Step 39):** ingests Pact JSON artifacts [R27] — v1–v4, including the
+  v2 `providerState` string and `query` *string* forms and the `{value, matchers}`
+  wrapper Pact 2 puts on scalar fields — into a canonical, position-identified model,
+  then cross-references each consumer expectation against the provider's declared
+  OpenAPI interface. A concrete path (`/alligators/3`) is matched to a provider
+  template (`/alligators/{id}`) segment by segment. The search filters by method
+  **before** ranking by specificity, so a literal path that does not serve the method
+  cannot mask a template that does. Eleven new `ChangeKind`s; `Compatible` requires
+  verified coverage and no `Unknown`-severity finding. `matchingRules` are recorded by
+  JSON pointer and **never evaluated** — their presence degrades coverage, so a
+  matcher-based interaction can never be reported as checked. An ambiguous provider
+  match (two equally specific templates) is reported rather than resolved by choosing.
+
 ### Fixed
+- A Pact interaction calling an operation the provider **does not offer** produced
+  no finding at all. The provider path search ranked candidate paths *without* regard
+  to the request method, then the caller looked the operation up under the path it had
+  chosen; when the path existed but the method did not, the caller hit a defensive
+  branch that added a note and `continue`d, emitting an empty change list.
+  `ChangeKind::PactMethodNotDeclared` was unreachable dead code. The search is now
+  method-aware and carries the operation it found.
+- A Pact 2 `{value, matchers}` wrapper on `path`/`query` degraded the *record* but not
+  the *coverage*, so an interaction whose path was matched by a pattern reported
+  `Verified` — as if one concrete request had been checked.
+- `HttpMethod` had no `Display`, so reports named the method through `Debug` (`Get`
+  rather than `GET`). Found by the compiler rather than by a test.
 - Temporal replay no longer mints a duplicate fact on re-observation. Because
   `valid_from` is part of the digest while a continuing assertion keeps its
   original `valid_from`, the first implementation created a new fact at every
@@ -254,9 +281,8 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 - Message identity is **positional** (`channelId/messageId`, both escaped), so
   factoring a message body into `components/` is a no-op. Renaming a message id
   still reads as a removal plus an addition.
-- `autopsy-contracts-distributed` is a **library API only**. Step 39 (Pact) is not
-  implemented; no CLI subcommand, storage write-back to `distributed_contracts`,
-  or MCP surface is wired.
+- `autopsy-contracts-distributed` is a **library API only**. No CLI subcommand,
+  storage write-back to `distributed_contracts`, or MCP surface is wired.
 - `autopsy-test-impact` is a **library API only**. No CLI subcommand, storage
   write-back to `test_mappings`, or MCP surface is wired yet.
 - `Cargo.toml` version remains `0.0.1`.

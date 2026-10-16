@@ -95,7 +95,7 @@ composed schema whose constraints moved between branches is genuinely invisible
 to this engine, and claiming otherwise would be the defect the requirement exists
 to prevent.
 
-`TestDocument::parse` also **rejects YAML merge keys (`<<:`)** rather than parsing
+`SpecDocument::parse` also **rejects YAML merge keys (`<<:`)** rather than parsing
 around them. `serde_yaml` does not apply merge keys, so a document using them
 parses with every inherited field silently absent — and a compatibility check
 would then report those fields as *removed*. The detection is a line-based scan

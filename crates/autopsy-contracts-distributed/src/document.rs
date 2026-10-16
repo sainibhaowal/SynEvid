@@ -245,6 +245,51 @@ impl SpecDocument {
     }
 }
 
+/// Serialises a value canonically: object keys sorted, arrays in order.
+///
+/// `serde_json::Value` preserves insertion order, so serialising a value
+/// straight from a parsed document gives a different string for the same
+/// contract written with its keys in a different order. Any digest built on
+/// that would drift with formatting, which is exactly what `NFR-001` forbids.
+pub fn canonical_json(value: &Value) -> String {
+    let mut out = String::new();
+    write_canonical(value, &mut out);
+    out
+}
+
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key).unwrap_or_default());
+                out.push(':');
+                write_canonical(&map[*key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => out.push_str(&serde_json::to_string(s).unwrap_or_default()),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Null => out.push_str("null"),
+    }
+}
+
 /// Extracts the JSON-pointer part of a local reference.
 ///
 /// Returns `Err` for external references. Accepting a bare `#` as the document

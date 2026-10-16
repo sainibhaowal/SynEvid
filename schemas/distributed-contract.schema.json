@@ -120,7 +120,18 @@
               "payload_enum_value_added",
               "payload_additional_properties_disallowed",
               "payload_additional_properties_allowed",
-              "payload_incomparable"
+              "payload_incomparable",
+              "pact_interaction_unmatched",
+              "pact_method_not_declared",
+              "pact_required_query_parameter_missing",
+              "pact_undeclared_request_parameter",
+              "pact_required_request_body_missing",
+              "pact_undeclared_request_body",
+              "pact_undeclared_body_property",
+              "pact_response_status_undeclared",
+              "pact_matching_rules_unmodelled",
+              "pact_ambiguous_provider_match",
+              "pact_message_interaction_not_cross_referenced"
             ]
           },
           "severity": {

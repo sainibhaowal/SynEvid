@@ -43,6 +43,8 @@ pub mod change;
 pub mod document;
 pub mod openapi;
 pub mod openapi_diff;
+pub mod pact;
+pub mod pact_xref;
 pub mod schema;
 
 pub use asyncapi::{
@@ -62,4 +64,8 @@ pub use openapi::{
     parse_openapi,
 };
 pub use openapi_diff::{diff_openapi, parameter_identities};
+pub use pact::{
+    Interaction, InteractionKind, PactDocument, PactError, PactRequest, PactResponse, parse_pact,
+};
+pub use pact_xref::xref_pact_against_provider;
 pub use schema::{SchemaFacts, SchemaReader};

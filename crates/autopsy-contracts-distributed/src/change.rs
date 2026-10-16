@@ -119,12 +119,42 @@ pub enum ChangeKind {
     PayloadAdditionalPropertiesDisallowed,
     PayloadAdditionalPropertiesAllowed,
     PayloadIncomparable,
+
+    // --- Pact consumer/provider cross-reference (Step 39) ----------------
+    /// No provider path subsumes the interaction's concrete path.
+    PactInteractionUnmatched,
+    /// The provider declares the path, but not for the interaction's method.
+    PactMethodNotDeclared,
+    /// The provider declares a required query parameter the interaction omits.
+    PactRequiredQueryParameterMissing,
+    /// The interaction sends a query parameter the provider does not declare.
+    PactUndeclaredRequestParameter,
+    /// The provider declares a required request body and the interaction sends
+    /// none.
+    PactRequiredRequestBodyMissing,
+    /// The interaction sends a body for an operation the provider declares no
+    /// body for.
+    PactUndeclaredRequestBody,
+    /// The interaction sends a body field the provider's schema does not
+    /// declare. Defaults to `Unknown` because JSON Schema permits additional
+    /// properties unless it says otherwise; the cross-reference raises it to
+    /// `Breaking` once it has seen `additionalProperties: false`.
+    PactUndeclaredBodyProperty,
+    /// The interaction expects a response status the provider does not declare.
+    PactResponseStatusUndeclared,
+    /// The artifact's `matchingRules` were recorded but not evaluated.
+    PactMatchingRulesUnmodelled,
+    /// Equally specific provider paths subsume the interaction's path, so the
+    /// match is a coin flip and is reported as one.
+    PactAmbiguousProviderMatch,
+    /// Message interactions were parsed but not cross-referenced against HTTP.
+    PactMessageInteractionNotCrossReferenced,
 }
 
 impl ChangeKind {
     /// Every variant, so a schema-completeness check can be exhaustive rather
     /// than a hand-maintained list that drifts.
-    pub const ALL: [ChangeKind; 53] = [
+    pub const ALL: [ChangeKind; 64] = [
         ChangeKind::EndpointRemoved,
         ChangeKind::EndpointAdded,
         ChangeKind::MethodRemoved,
@@ -178,6 +208,17 @@ impl ChangeKind {
         ChangeKind::PayloadAdditionalPropertiesDisallowed,
         ChangeKind::PayloadAdditionalPropertiesAllowed,
         ChangeKind::PayloadIncomparable,
+        ChangeKind::PactInteractionUnmatched,
+        ChangeKind::PactMethodNotDeclared,
+        ChangeKind::PactRequiredQueryParameterMissing,
+        ChangeKind::PactUndeclaredRequestParameter,
+        ChangeKind::PactRequiredRequestBodyMissing,
+        ChangeKind::PactUndeclaredRequestBody,
+        ChangeKind::PactUndeclaredBodyProperty,
+        ChangeKind::PactResponseStatusUndeclared,
+        ChangeKind::PactMatchingRulesUnmodelled,
+        ChangeKind::PactAmbiguousProviderMatch,
+        ChangeKind::PactMessageInteractionNotCrossReferenced,
     ];
 
     /// Severity this kind carries on its own, before direction is considered.
@@ -273,6 +314,26 @@ impl ChangeKind {
             | K::PayloadIncomparable
             | K::MessagePayloadAdded
             | K::MessagePayloadRemoved => Unknown,
+
+            // --- Pact consumer/provider cross-reference --------------------
+            // Everything here is a statement about two documents that both
+            // exist and were both read, so a positive finding needs no
+            // completeness: the interaction is absent from the provider, full
+            // stop.
+            K::PactInteractionUnmatched
+            | K::PactMethodNotDeclared
+            | K::PactRequiredQueryParameterMissing
+            | K::PactRequiredRequestBodyMissing
+            | K::PactResponseStatusUndeclared => Breaking,
+
+            // These are differences whose consequence depends on the provider's
+            // behaviour, which the interface does not state.
+            K::PactUndeclaredRequestParameter
+            | K::PactUndeclaredRequestBody
+            | K::PactUndeclaredBodyProperty
+            | K::PactMatchingRulesUnmodelled
+            | K::PactAmbiguousProviderMatch
+            | K::PactMessageInteractionNotCrossReferenced => Unknown,
         }
     }
 }

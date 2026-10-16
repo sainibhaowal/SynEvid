@@ -12,8 +12,9 @@
 
 use autopsy_contracts_distributed::openapi::OpenApiSpec;
 use autopsy_contracts_distributed::{
-    AsyncApiSpec, ChangeKind, CompatibilityVerdict, ContractDelta, DocFormat, Severity,
-    SpecDocument, diff_asyncapi, diff_openapi, parse_asyncapi, parse_openapi,
+    AsyncApiSpec, ChangeKind, CompatibilityVerdict, ContractDelta, DocFormat, PactDocument,
+    Severity, SpecDocument, diff_asyncapi, diff_openapi, parse_asyncapi, parse_openapi, parse_pact,
+    xref_pact_against_provider,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -102,12 +103,42 @@ fn deltas() -> Vec<(&'static str, ContractDelta)> {
     assert_ne!(async_to, async_source, "fixture edit was a no-op");
     let asyncapi_delta = diff_asyncapi(&parse_async(async_source), &parse_async(&async_to));
 
+    // A Pact cross-reference delta, so the Step 39 kinds are exercised by every
+    // structural check above rather than only by the exhaustive enum comparison.
+    // It is deliberately `breaking`: the consumer expects an operation the
+    // provider does not offer.
+    let pact_json = r###"{
+      "consumer": { "name": "Zoo" },
+      "provider": { "name": "PetService" },
+      "metadata": { "pactSpecification": { "version": "3.0.0" } },
+      "interactions": [
+        { "description": "get a pet",
+          "request": { "method": "GET", "path": "/pets/3" },
+          "response": { "status": 200 } },
+        { "description": "delete a pet",
+          "request": { "method": "DELETE", "path": "/pets/3" },
+          "response": { "status": 204 } }
+      ]
+    }"###;
+    let pact_delta = xref_pact_against_provider(&parse_pact_json(pact_json), &parse(base));
+    assert!(
+        !pact_delta.breaking().is_empty(),
+        "the pact fixture must produce a breaking finding: {:?}",
+        pact_delta.changes
+    );
+
     vec![
         ("compatible", compatible_delta),
         ("breaking", breaking_delta),
         ("unknown", unclassified_delta),
         ("asyncapi", asyncapi_delta),
+        ("pact", pact_delta),
     ]
+}
+
+fn parse_pact_json(json: &str) -> PactDocument {
+    let doc = SpecDocument::parse("pact.json", json, DocFormat::Json).expect("pact fixture parses");
+    parse_pact(&doc).expect("pact fixture is a pact")
 }
 
 fn parse_async(json: &str) -> AsyncApiSpec {
@@ -219,7 +250,7 @@ fn the_schema_enumerates_every_change_kind_the_engine_can_emit() {
         extra.is_empty(),
         "the schema declares change kinds the engine cannot emit: {extra:?}"
     );
-    assert_eq!(ChangeKind::ALL.len(), 53, "ALL drifted from the enum");
+    assert_eq!(ChangeKind::ALL.len(), 64, "ALL drifted from the enum");
 }
 
 #[test]
@@ -269,7 +300,7 @@ fn the_fixtures_actually_produce_all_three_verdicts() {
     // verdict, the enum-coverage tests above would still pass while checking
     // less than they claim to.
     let all = deltas();
-    assert_eq!(all.len(), 4, "a fixture went missing");
+    assert_eq!(all.len(), 5, "a fixture went missing");
     let produced: BTreeSet<String> = all.iter().map(|(_, d)| tag(&d.verdict)).collect();
     assert_eq!(
         produced,
