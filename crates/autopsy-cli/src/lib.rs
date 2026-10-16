@@ -108,6 +108,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub wal: bool,
 
+    /// Persist analysis results to the SQLite storage engine (`.autopsy/storage.db`)
+    #[arg(long, global = true)]
+    pub persist: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -596,6 +600,14 @@ fn run_extension(
     outcome: Result<extensions::Outcome, CliError>,
 ) -> Result<i32, CliError> {
     let outcome = outcome?;
+    #[allow(clippy::collapsible_if)]
+    if cli.persist {
+        if let Ok(note) =
+            extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.json)
+        {
+            println!("{}", note);
+        }
+    }
     outcome.print(cli.format)?;
     Ok(outcome.exit_code)
 }

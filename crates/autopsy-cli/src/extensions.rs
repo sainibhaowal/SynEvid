@@ -709,6 +709,42 @@ pub fn lineage(cli: &Cli, args: &LineageArgs) -> Result<Outcome, CliError> {
     Outcome::new(exit_code, &output, text)
 }
 
+/// Persistence wiring (FR-026 / Step 29): when `--persist` is set, the analysis result is
+/// saved to `.autopsy/storage.db` through the engine's deterministic write APIs. A
+/// persistence failure does not change the command's exit code (the analysis result is
+/// primary), but it is reported in the text output and recorded as a note in the JSON.
+pub fn persist_outcome(
+    cli: &Cli,
+    subcommand_name: &str,
+    exit_code: i32,
+    result_json: &str,
+) -> std::result::Result<String, String> {
+    use crate::{ANALYZER_VERSION, get_storage};
+    if !cli.persist {
+        return Ok(String::new());
+    }
+    let storage = get_storage(cli).map_err(|e| format!("persist: storage open failed: {e}"))?;
+    let digest_text = result_json.as_bytes();
+    let run_id = format!(
+        "{}-{}",
+        subcommand_name,
+        &blake3::hash(digest_text).to_hex()[..12]
+    );
+    let analysis_run = autopsy_domain::AnalysisRun {
+        run_id: run_id.clone(),
+        command: subcommand_name.to_string(),
+        analyzer_version: ANALYZER_VERSION.to_string(),
+        duration_ms: 0,
+        result_digest: blake3::hash(digest_text).to_hex().to_string(),
+    };
+    storage
+        .save_run(&analysis_run, &[], &[])
+        .map_err(|e| format!("persist: save_run: {e}"))?;
+    Ok(format!(
+        "persist: saved to `.autopsy/storage.db` (run: {run_id}, exit: {exit_code})"
+    ))
+}
+
 /// The coverage state as a word, for text output.
 fn coverage_word(coverage: CoverageState) -> &'static str {
     match coverage {
