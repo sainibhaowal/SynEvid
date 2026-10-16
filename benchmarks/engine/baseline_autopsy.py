@@ -68,7 +68,10 @@ class BaselineAutopsy:
 
     def __init__(self, corpus_root: Path, autopsy_binary: Path):
         self.corpus_root = corpus_root
-        self.autopsy_binary = Path(autopsy_binary)
+        binary = Path(autopsy_binary)
+        if not binary.exists() and binary.with_suffix(".exe").exists():
+            binary = binary.with_suffix(".exe")
+        self.autopsy_binary = binary
 
     def _run(
         self, repo_dir: Path, db_path: Path, cache_dir: Path, args: list[str]

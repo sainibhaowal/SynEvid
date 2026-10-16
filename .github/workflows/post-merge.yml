@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: post-merge-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,7 +54,7 @@ jobs:
             target: aarch64-apple-darwin
             binary_name: autopsy
             pkg_type: tar.gz
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             binary_name: autopsy
             pkg_type: tar.gz

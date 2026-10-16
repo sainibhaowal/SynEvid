@@ -199,11 +199,18 @@ fn test_benchmark_harness_execution_and_pre_registered_gate() {
         .arg(&temp_out)
         .current_dir(&root);
 
-    let release_bin = root.join("target").join("release").join("autopsy");
-    let debug_bin = root.join("target").join("debug").join("autopsy");
+    let bin_name = if cfg!(windows) {
+        "autopsy.exe"
+    } else {
+        "autopsy"
+    };
+    let release_bin = root.join("target").join("release").join(bin_name);
+    let debug_bin = root.join("target").join("debug").join(bin_name);
     if let Ok(bin) = std::env::var("AUTOPSY_BIN") {
         cmd.arg("--autopsy-bin").arg(bin);
-    } else if release_bin.exists() && !debug_bin.exists() {
+    } else if debug_bin.exists() {
+        cmd.arg("--autopsy-bin").arg(&debug_bin);
+    } else if release_bin.exists() {
         cmd.arg("--autopsy-bin").arg(&release_bin);
     }
 

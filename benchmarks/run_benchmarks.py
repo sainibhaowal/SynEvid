@@ -38,13 +38,19 @@ def parse_args():
         help="Path to output results directory",
     )
     import os
+
+    exe_suffix = ".exe" if (sys.platform == "win32" or os.name == "nt") else ""
+    bin_name = f"autopsy{exe_suffix}"
+
     env_bin = os.environ.get("AUTOPSY_BIN")
     if env_bin and Path(env_bin).exists():
         default_bin = Path(env_bin)
-    elif (REPO_ROOT / "target" / "release" / "autopsy").exists() and not (REPO_ROOT / "target" / "debug" / "autopsy").exists():
-        default_bin = REPO_ROOT / "target" / "release" / "autopsy"
+    elif (REPO_ROOT / "target" / "release" / bin_name).exists() and not (
+        REPO_ROOT / "target" / "debug" / bin_name
+    ).exists():
+        default_bin = REPO_ROOT / "target" / "release" / bin_name
     else:
-        default_bin = REPO_ROOT / "target" / "debug" / "autopsy"
+        default_bin = REPO_ROOT / "target" / "debug" / bin_name
 
     parser.add_argument(
         "--autopsy-bin",

@@ -147,9 +147,10 @@ jobs:
             const exitCode = '${{ steps.verify.outputs.exit_code }}';
             const verdict = exitCode === '2' ? '❌ **FAIL — invariant violations**' : '✅ **PASS**';
             const body = `## 🔬 SynEvid Forensic Gate ${verdict}\n\n${verifyLine}\n\n### Blast radius (callers profile, top-10 per file)\n${impact}\n\n_Engine: deterministic offline analysis, zero LLM. Full JSON + SARIF in workflow artifacts._`;
+            const issueNumber = context.payload.pull_request ? context.payload.pull_request.number : context.issue.number;
             github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: issueNumber,
               body: body.slice(0, 60000),
             });
