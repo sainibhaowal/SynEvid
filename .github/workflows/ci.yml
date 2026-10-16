@@ -38,20 +38,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   msrv-check:
-    name: MSRV 1.88 Build (the declared rust-version)
+    name: MSRV 1.90 Build (the declared rust-version)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Install the declared MSRV toolchain
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.90.0
 
       - name: Check the workspace at its declared floor
-        # The floor is measured here, not asserted in a comment: `let`-chains (used
-        # throughout the engines and adapters) stabilised in 1.88, and a declared
-        # rust-version that is lower than what the code needs tells a 1.88 toolchain it can
-        # build this workspace and then fails it inside an engine.
+        # The floor is measured here, not asserted in a comment. The language needs 1.88
+        # (`let`-chains); the dependency graph needs 1.90 (`tree-sitter-language@0.1.8`
+        # declares rustc 1.90), which installing 1.88 locally proved. A declared
+        # rust-version below the true floor tells a toolchain it can build this workspace
+        # and then fails it inside a dependency.
         run: cargo check --workspace --all-targets
 
   cross-platform-matrix:
@@ -227,7 +228,7 @@ jobs:
           echo "| Multi-Platform Matrix (Linux, macOS, Windows) | ${{ needs.cross-platform-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Determinism (100-Run) & Boundary Gate | ${{ needs.determinism-and-boundary-gate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| MSRV 1.88 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MSRV 1.90 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Web Inspector | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
 

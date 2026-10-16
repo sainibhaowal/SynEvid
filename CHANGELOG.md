@@ -517,7 +517,11 @@ Web Inspector. See
   all four places, with the reason written where the number lives, and a new `msrv-check` CI job
   installs the declared toolchain and runs `cargo check --workspace --all-targets`, wired into
   the pre-merge gate's needs, summary and failure condition. The floor is measured from now on
-  instead of asserted.
+  instead of asserted. **And the first measurement failed the first correction:** installing
+  1.88 showed `tree-sitter-language@0.1.8` requires rustc **1.90**, and
+  `cargo +1.90.0 check --workspace --all-targets` then passed cleanly, so the declared and
+  CI-verified floor is **1.90** — a number two toolchains were run against rather than one
+  inferred from syntax.
 
 ### Notes
 - New dependencies `flate2` (rust_backend, for cross-platform-identical

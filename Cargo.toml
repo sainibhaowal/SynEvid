@@ -29,11 +29,14 @@ members = [
 version = "0.0.1"
 edition = "2024"
 license = "Apache-2.0"
-# The floor is set by the language, not by preference: `let`-chains (`if let Some(x) = y
-# && let Some(z) = w`) are used throughout the adapters and the engines, and they were
-# stabilised in Rust 1.88. A lower number would tell a 1.85 toolchain it can build this
-# workspace and then fail it inside the engine. Verified by the `msrv-check` CI job.
-rust-version = "1.88"
+# The floor is measured, not inferred. The language sets a 1.88 minimum (`let`-chains,
+# `if let Some(x) = y && let Some(z) = w`, are used throughout the adapters and engines),
+# and the dependency graph sets 1.90: `tree-sitter-language@0.1.8` declares rustc 1.90.
+# Installing 1.88 and running the workspace proved it: `cargo +1.88.0 check` refused the
+# tree, and `cargo +1.90.0 check --workspace --all-targets` passes cleanly. The
+# `msrv-check` CI job pins the same toolchain, so a dependency that raises the floor
+# turns the gate red instead of silently invalidating this number.
+rust-version = "1.90"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

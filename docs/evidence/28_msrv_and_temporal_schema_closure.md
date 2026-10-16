@@ -95,3 +95,23 @@ testable, and a red job is the measurement succeeding.
 | `docs/requirements/TRACEABILITY.md` — `schemas/temporal.schema.json` | **NOT DELIVERED** ("journal is a library API only") | **VERIFIED**, pointing at the schema and the conformance test |
 | `Cargo.toml` `rust-version` | `1.85` | `1.88`, enforced by `msrv-check` |
 | `AGENTS.md` §3, `CONTRIBUTING.md`, `.agents/rules/agent-engineering-rules.md` | MSRV `1.85+` | MSRV `1.88+` with the reason |
+
+## 6. Correction, same day: the floor is 1.90, and it is now *measured*
+
+§2 declared the corrected floor to be 1.88 and said the toolchain could not be installed
+locally. The download succeeded on a later retry, and the claim was then tested instead of
+left to CI:
+
+- `rustup toolchain install 1.88.0` → `cargo +1.88.0 check --workspace --all-targets`
+  **failed**: `tree-sitter-language@0.1.8 requires rustc 1.90`. The *language* floor is 1.88
+  (`let`-chains), but the *dependency graph* floor is 1.90.
+- `rustup toolchain install 1.90.0` → `cargo +1.90.0 check --workspace --all-targets`
+  **passes cleanly**, so 1.90 is the measured floor of this workspace.
+
+Superseding §2 and its traceability row: `Cargo.toml` now declares `rust-version = "1.90"`,
+`msrv-check` pins `dtolnay/rust-toolchain@1.90.0`, and `AGENTS.md`, `CONTRIBUTING.md` and the
+agent rules say 1.90+ — each with the reason. The methodological point stands and sharpened:
+the first correction (1.85 → 1.88) was *better* but still **unverified**, and testing it
+caught a second, dependency-level falsehood that reasoning alone would have missed. The floor
+is now a fact two toolchains were run against (§2's 1.88 claim is retained above as the record
+of what was believed before the measurement).
