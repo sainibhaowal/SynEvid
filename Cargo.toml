@@ -21,6 +21,7 @@ members = [
     "crates/autopsy-contracts-distributed",
     "crates/autopsy-telemetry",
     "crates/autopsy-mining",
+    "crates/autopsy-catalog",
     "tests"
 ]
 

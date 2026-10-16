@@ -5,19 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–5 (Steps 28–42) (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–6 (Steps 28–43) (2026-10-16)
 
-Steps 28–42 of the 4.2 implementation sequence. Pillars 1–4 are complete and
-Pillar 5 is **in progress** (Step 42 done; the catalog, CLI and inspector
-layers come next). Steps 43–45 are **not** implemented. See
+Steps 28–43 of the 4.2 implementation sequence. Pillars 1–5 are complete and
+Pillar 6 is **in progress** (Step 43 done; the CLI subcommands and the inspector
+layers come next). Steps 44–45 are **not** implemented. See
 `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
 `docs/evidence/20_phase4_2_pillar3_asyncapi.md`,
 `docs/evidence/21_phase4_2_pillar3_pact.md`, and
 `docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
-`docs/evidence/23_phase4_2_pillar4_topology.md`, and
-`docs/evidence/24_phase4_2_pillar5_mining.md`.
+`docs/evidence/23_phase4_2_pillar4_topology.md`,
+`docs/evidence/24_phase4_2_pillar5_mining.md`, and
+`docs/evidence/25_phase4_2_pillar6_catalog.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -236,7 +237,63 @@ layers come next). Steps 43–45 are **not** implemented. See
   deliberately unbounded, and a test asserting no property anywhere in the document names a
   clock reading.
 
+- **Catalog and ownership ingestion (`autopsy-catalog`, Step 43):** a new crate reads Backstage
+  `catalog-info.yaml` entities (`Component`, `API`, `Resource`, `System`, `Domain`) and
+  dependency manifests (npm `package.json`, pip `requirements.txt`, Go `go.mod`, Cargo
+  `Cargo.toml`) from a repository tree, and derives a team ownership index plus an
+  organisational blast radius per component. GitHub's dependency graph is derived from exactly
+  those manifest files, so this is the same evidence GitHub uses — read offline, with no token
+  and no network call. `spec.owner` gives a team per **entity**; nothing in a catalog says
+  which files a component owns, so the symbol-level join is left where the symbol table is and
+  the repository's own component is resolved from evidence instead (a `catalog-info.yaml`
+  inside the directory, or the `github.com/project-slug` annotation).
+- The scan is bounded and every bound is **recorded**, not merely applied: symlinks are skipped
+  and counted (`INV-SANDBOX-002` — a path is not a location), oversize files are named
+  (`INV-SANDBOX-004`), the file-count and depth bounds name what they stopped at, and pruned
+  dependency directories are listed. Pruning `node_modules` or `target` is policy rather than
+  truncation and is recorded as such; a truncated scan that reported itself as complete would
+  be worse than no scan. Refusals are counted **by reason** — an unknown `apiVersion`, a
+  document with no `kind` or no `metadata.name`, an unparsable manifest — and a malformed
+  `package.json` in one directory degrades that file instead of removing every other service's
+  ownership data from the report.
+- **A requirement is not a version.** The field is named `requirement` and the report says
+  that no lockfile was read, so transitive dependencies are absent and `^18.2.0` is not the
+  installed build — the misreading has a concrete consequence (which services ship the
+  vulnerable version) and it is stated where the field is, not in a footnote. Directives,
+  environment markers, Go `replace` targets, Cargo feature flags and target-specific sections
+  all change which packages are installed; each is recorded by name and degrades coverage
+  rather than being silently dropped. A URL dependency is classified as its own source, not as
+  a registry lookup.
+- **Unresolved references have three outcomes, not two.** A `Group` owner is counted as a
+  reference to an unmodelled kind; only a reference naming one of the five modelled kinds and
+  resolving to nothing is `dangling`. Merging the two would report every entity in every
+  catalog as broken and bury the real dangling reference in expected output. An unknown
+  component answers `unknown`, never zero impact.
+- An entity declared by more than one document is **reported with both paths** rather than
+  resolved by map insertion order; `spec.definition` on an `API` is recorded as an unread
+  contract (Pillar 3 reads it, not this crate); `subcomponentOf` chains inherit a system up to
+  a bounded depth and a loop is reported instead of followed.
+- `schemas/catalog-report.schema.json` — closed and draft 2020-12 at every level, pinning the
+  five entity kinds, four ecosystems, dependency scopes and sources against their Rust
+  `all()` lists through serde, requiring the whole discovery accounting, refusing absolute
+  paths by pattern, and asserting that no property anywhere names a clock reading.
+
 ### Fixed
+- `crate::discover` and `super::discover` are **both a module and a re-exported function**,
+  which the `-D warnings` rustdoc gate refuses as an ambiguous intra-doc link. Two occurrences
+  disambiguated as `mod@…` — the third consecutive step in which that gate caught a real
+  defect before the commit.
+- An entity reference was parsed with a guess. Backstage's grammar says the first of two
+  colon-free segments is a **namespace**, so `component/checkout` means
+  `component:component/checkout` and `kind:name` is not a reference at all; both readings
+  produce a *well-formed* reference, so a guess here would never have looked wrong. The parser
+  now implements Backstage's grammar exactly and refuses the rest.
+- `spec.definition` was listed as a modelled spec key while nothing read it — the worst of both
+  worlds, since no unmodelled-key record was produced either. Reads of `system`, `domain` and
+  the relationship fields are now gated by entity kind, so an unread key is always reported.
+- A Go `replace` directive was recorded and its target thrown away, and a loop
+  \"reclassified\" replaced modules by assigning `Registry` to `Registry`. A monorepo edit and
+  a fork are different supply-chain facts, and the directive now names both ends.
 - A co-change window had **no upper bound**: a caller anchoring the window in the past
   silently included every commit *after* the anchor, so the window grew to the present while
   claiming to be historical. The window is now the closed interval

@@ -363,6 +363,15 @@ is a number that is *plausible* and wrong.
 * **Supply chain** — no new *production* dependency: `autopsy-domain`, `autopsy-temporal`,
   `blake3`, `serde`, `serde_json`, `thiserror`. `flate2` is a **dev**-dependency only, for the
   fixture encoder.
+* **One documented DAG edge is realised differently, and deliberately.**
+  `02_4.2_REPO_BUILD_CRATES_INTEGRATION.md` draws `Mining --> Repo`. `autopsy-repo` is
+  configuration loading and language classification; it holds **no** git object reader, and the
+  read-only store this step needs is Pillar 1's `autopsy-temporal`. Depending on
+  `autopsy-repo` would therefore have meant either moving the git reader there (a Pillar 1
+  change with no benefit to Pillar 1) or re-implementing it here (two readers, two answers).
+  The edge is `Mining --> Temporal`, which is core-on-core and keeps the read-only store in
+  one place. Recorded because a reader comparing that graph to the manifest would otherwise
+  reasonably assume an accident.
 
 ---
 

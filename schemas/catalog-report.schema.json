@@ -1,0 +1,591 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/catalog-report.schema.json",
+  "title": "Syncevid catalog ingestion report (Step 43)",
+  "description": "Backstage catalog entities, their ownership graph, and dependency manifests read from one repository tree. Closed: every field the engine can emit is declared and nothing else validates. The scan **root** is not a field: an absolute local path would make one repository hash differently on two machines and is a fact the caller already has.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "files_scanned",
+    "discovery",
+    "entities",
+    "unmodelled_kinds",
+    "refusals",
+    "duplicate_entities",
+    "manifests",
+    "dependencies",
+    "ownership",
+    "ecosystems_read",
+    "manifest_names_looked_for",
+    "coverage",
+    "notes",
+    "digest"
+  ],
+  "properties": {
+    "files_scanned": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discovery": {
+      "$ref": "#/$defs/discovery"
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "unmodelled_kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "Entity kinds present and not modelled, counted by kind."
+    },
+    "refusals": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "description": "Documents refused, by reason. A count keyed by reason, not a list: a tree with forty broken documents is one fact with a number, and the reason names it."
+    },
+    "duplicate_entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/duplicateEntity"
+      }
+    },
+    "manifests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/manifest"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dependency"
+      },
+      "uniqueItems": true
+    },
+    "ownership": {
+      "$ref": "#/$defs/ownership"
+    },
+    "ecosystems_read": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/ecosystem"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "manifest_names_looked_for": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "description": "The file names the scan looked for. Present so a reader can see what was out of scope: `pyproject.toml` is absent from this list, and that is the reason it is absent from the result."
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverageState"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "digest": {
+      "$ref": "#/$defs/blake3Hex"
+    }
+  },
+  "$defs": {
+    "blake3Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase BLAKE3 hex."
+    },
+    "coverageState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "partial",
+        "unsupported",
+        "unknown"
+      ]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]",
+      "description": "POSIX-relative to the scan root. A leading `/` is refused: an absolute path would make one repository hash differently on two machines and would leak the local directory layout."
+    },
+    "entityKind": {
+      "type": "string",
+      "enum": [
+        "component",
+        "api",
+        "resource",
+        "system",
+        "domain"
+      ],
+      "description": "The five kinds the design names. A `Group` or `User` is counted in `unmodelled_kinds` instead of being forced into one of these."
+    },
+    "entityReference": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9]*:[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Canonical `kind:namespace/name`. The namespace is always explicit, so one entity cannot appear as two references."
+    },
+    "ecosystem": {
+      "type": "string",
+      "enum": [
+        "npm",
+        "pip",
+        "go",
+        "cargo"
+      ]
+    },
+    "dependencyScope": {
+      "type": "string",
+      "enum": [
+        "runtime",
+        "development",
+        "build",
+        "peer",
+        "optional"
+      ]
+    },
+    "dependencySource": {
+      "type": "string",
+      "enum": [
+        "registry",
+        "path",
+        "git",
+        "url",
+        "workspace"
+      ],
+      "description": "`path` is a monorepo edge rather than a supply-chain edge, and `workspace` means the dependency is declared for members to inherit, not consumed by the manifest it appears in."
+    },
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "directories_visited": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_symlinks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_oversize_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "skipped_beyond_file_limit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "pruned_directories": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "node_modules",
+              ".git",
+              "target",
+              "vendor",
+              "dist",
+              "build",
+              ".venv",
+              "venv",
+              "__pycache__"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "depth_truncated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "directories_visited",
+        "skipped_symlinks",
+        "skipped_oversize_files",
+        "skipped_beyond_file_limit",
+        "pruned_directories",
+        "depth_truncated",
+        "truncated"
+      ],
+      "additionalProperties": false,
+      "description": "Every bound the scan hit and every entry it passed over. A truncated scan that reported itself as complete would be worse than no scan."
+    },
+    "ownership": {
+      "type": "object",
+      "properties": {
+        "by_owner": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/entityReference"
+            }
+          }
+        },
+        "by_system": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/entityReference"
+            }
+          }
+        },
+        "by_domain": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/entityReference"
+            }
+          }
+        },
+        "dangling": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/danglingReference"
+          }
+        },
+        "unmodelled_reference_kinds": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "References by the kind they point at, for kinds outside the five. Every `spec.owner` in a normal catalog points at a `Group`, so counting these separately is what keeps the real dangling references from being buried in expected output."
+        },
+        "person_owners": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityReference"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "by_owner",
+        "by_system",
+        "by_domain",
+        "dangling",
+        "unmodelled_reference_kinds",
+        "person_owners"
+      ],
+      "additionalProperties": false
+    },
+    "danglingReference": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/entityReference"
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "$ref": "#/$defs/entityReference",
+          "description": "Names one of the five modelled kinds and no such entity is in this catalog. A reference to a kind outside the five is not dangling."
+        }
+      },
+      "required": [
+        "from",
+        "field",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "duplicateEntity": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/entityReference"
+        },
+        "kept_source": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "ignored_source": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "reference",
+        "kept_source",
+        "ignored_source"
+      ],
+      "additionalProperties": false,
+      "description": "A reference declared by more than one document. Which declaration was kept is a function of sorted path order, so it does not depend on the filesystem's iteration order."
+    },
+    "entity": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/entityKind"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reference": {
+          "$ref": "#/$defs/entityReference"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/entityReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The team that owns this entity. `null` when the document declares none \u2014 a real and common gap, which degrades coverage because a component no document owns cannot contribute to organisational blast radius."
+        },
+        "owner_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner_is_team": {
+          "type": "boolean"
+        },
+        "system": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Canonicalised, so `s` and `default/s` are one reference."
+        },
+        "domain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subcomponent_of": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "component_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`spec.type`, recorded verbatim and never interpreted."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityReference"
+          },
+          "uniqueItems": true
+        },
+        "provides_apis": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityReference"
+          },
+          "uniqueItems": true
+        },
+        "consumes_apis": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityReference"
+          },
+          "uniqueItems": true
+        },
+        "github_project": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`metadata.annotations[\"github.com/project-slug\"]`, the link to GitHub's dependency graph."
+        },
+        "source_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "unmodelled_spec_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "Spec keys present and not read, by name. Kept as names rather than a count because the reader has to be able to see *which* key was skipped."
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "namespace",
+        "reference",
+        "title",
+        "description",
+        "owner",
+        "owner_kind",
+        "owner_is_team",
+        "system",
+        "domain",
+        "subcomponent_of",
+        "lifecycle",
+        "component_type",
+        "depends_on",
+        "provides_apis",
+        "consumes_apis",
+        "github_project",
+        "source_path",
+        "unmodelled_spec_keys",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "dependency": {
+      "type": "object",
+      "properties": {
+        "ecosystem": {
+          "$ref": "#/$defs/ecosystem"
+        },
+        "package": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The requirement **as written** \u2014 `^18.2.0`, `>=2.31,<3`, `v1.2.3`. Not a version: what is installed is the resolver's answer and lives in a lockfile this crate does not read."
+        },
+        "scope": {
+          "$ref": "#/$defs/dependencyScope"
+        },
+        "source": {
+          "$ref": "#/$defs/dependencySource"
+        },
+        "indirect": {
+          "type": "boolean"
+        },
+        "conditional": {
+          "type": "boolean",
+          "description": "A marker, an optional flag or a target section decides whether this is installed. Recorded rather than evaluated: evaluating it would answer for the machine that ran the scan."
+        },
+        "manifest_path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "ecosystem",
+        "package",
+        "requirement",
+        "scope",
+        "source",
+        "indirect",
+        "conditional",
+        "manifest_path"
+      ],
+      "additionalProperties": false
+    },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "ecosystem": {
+          "$ref": "#/$defs/ecosystem"
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dependency"
+          },
+          "uniqueItems": true
+        },
+        "unmodelled": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Directives and sections seen and not read, by name."
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageState"
+        }
+      },
+      "required": [
+        "path",
+        "ecosystem",
+        "subject",
+        "dependencies",
+        "unmodelled",
+        "coverage"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
