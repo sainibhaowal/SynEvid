@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/cochange-report.schema.json",
+  "title": "Syncevid co-change mining report (Step 42)",
+  "description": "Paths that changed in the same commits within an observation window, with Support, Confidence (+ a Wilson score interval) and Lift. Closed: every field the engine can emit is declared here, and nothing else validates. Every edge is tagged as temporal co-occurrence and not a dependency, on the edge itself, because a reader who slices one edge out of a report is exactly who the warning is for.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "window",
+    "edges",
+    "pairs_below_threshold",
+    "pairs_truncated",
+    "paths_with_changes",
+    "paths_never_coupled",
+    "coverage",
+    "notes",
+    "digest"
+  ],
+  "properties": {
+    "window": {
+      "$ref": "#/$defs/windowSummary"
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/coChangeEdge"
+      }
+    },
+    "pairs_below_threshold": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pairs_truncated": {
+      "type": "boolean"
+    },
+    "paths_with_changes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "paths_never_coupled": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverageState"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "digest": {
+      "$ref": "#/$defs/blake3Hex"
+    }
+  },
+  "$defs": {
+    "blake3Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase BLAKE3 hex. Uppercase would make two spellings of one digest."
+    },
+    "coverageState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "partial",
+        "unsupported",
+        "unknown"
+      ]
+    },
+    "ppm": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000,
+      "description": "Parts per million, integer arithmetic only: the exact counts beside it are authoritative and this rendering is for ordering and thresholding."
+    },
+    "exclusionReason": {
+      "description": "Why a commit the history walk reached is not part of the mined population. The report carries non-zero counts only, and `commits_seen == commits_considered + sum(excluded)` holds by construction.",
+      "type": "string",
+      "enum": [
+        "merge_commit",
+        "root_commit",
+        "mass_commit",
+        "outside_window",
+        "missing_timestamp",
+        "undecodable_tree",
+        "no_changed_paths"
+      ]
+    },
+    "edgeClaim": {
+      "description": "One variant, on purpose. A boolean could be set wrong; an enum with one value cannot be omitted, misread, or defaulted into existence.",
+      "const": "temporal_co_occurrence_only"
+    },
+    "windowSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commits_seen",
+        "commits_considered",
+        "excluded",
+        "pure_renames_collapsed",
+        "walk_truncated",
+        "window_seconds",
+        "max_files_per_commit",
+        "reference_oid",
+        "commit_set_digest"
+      ],
+      "properties": {
+        "commits_seen": {
+          "description": "Every commit the walk reached.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "commits_considered": {
+          "description": "The population the ratios are over.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/exclusionReason"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "pure_renames_collapsed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "walk_truncated": {
+          "description": "Whether the committed bound stopped the walk before history ran out, in which case the window may be incomplete.",
+          "type": "boolean"
+        },
+        "window_seconds": {
+          "description": "A duration, not a date. The window is anchored at the newest commit's timestamp read from the repository, never at a clock reading, so the same repository always yields the same window.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_files_per_commit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference_oid": {
+          "description": "The commit the window is anchored to: content-addressed, so it carries no clock reading. Empty when the repository has no resolvable HEAD.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{40})?$"
+        },
+        "commit_set_digest": {
+          "description": "BLAKE3 over the considered commit ids. Timestamp-free by construction, and it pins exactly which commits the percentages are over.",
+          "$ref": "#/$defs/blake3Hex"
+        }
+      }
+    },
+    "coChangeEdge": {
+      "description": "One mined pair. `a` sorts before `b`, so the identity of an edge does not depend on which direction a reader asked about.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "a",
+        "b",
+        "kind",
+        "claim",
+        "commits_together",
+        "commits_with_a",
+        "commits_with_b",
+        "total_commits",
+        "support_ppm",
+        "confidence_a_to_b_ppm",
+        "confidence_a_to_b_lower_ppm",
+        "confidence_a_to_b_upper_ppm",
+        "confidence_b_to_a_ppm",
+        "confidence_b_to_a_lower_ppm",
+        "confidence_b_to_a_upper_ppm",
+        "lift_ppm",
+        "coverage"
+      ],
+      "properties": {
+        "a": {
+          "type": "string",
+          "minLength": 1
+        },
+        "b": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "The domain's own graph vocabulary, pinned so a co-change edge can never be read as `calls`.",
+          "const": "statistical_co_change"
+        },
+        "claim": {
+          "$ref": "#/$defs/edgeClaim"
+        },
+        "commits_together": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "commits_with_a": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "commits_with_b": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "total_commits": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "support_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_a_to_b_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_a_to_b_lower_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_a_to_b_upper_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_b_to_a_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_b_to_a_lower_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "confidence_b_to_a_upper_ppm": {
+          "$ref": "#/$defs/ppm"
+        },
+        "lift_ppm": {
+          "description": "P(A and B) / (P(A)P(B)). Unbounded above: a rare pair that always travels together produces a very large number, which is exactly the number that must not be read as a dependency.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverage": {
+          "description": "Per edge, because the measurement covering the population completely and this particular number resting on two commits are different statements.",
+          "$ref": "#/$defs/coverageState"
+        }
+      }
+    }
+  }
+}

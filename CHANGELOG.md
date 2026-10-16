@@ -5,18 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–4 (Steps 28–41) (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–5 (Steps 28–42) (2026-10-16)
 
-Steps 28–41 of the 4.2 implementation sequence. Pillars 1–3 are complete;
-Pillar 4 is **in progress** (Steps 40–41 done; the mining pillar and the CLI
-come next). Steps 42–45 are **not** implemented. See
+Steps 28–42 of the 4.2 implementation sequence. Pillars 1–4 are complete and
+Pillar 5 is **in progress** (Step 42 done; the catalog, CLI and inspector
+layers come next). Steps 43–45 are **not** implemented. See
 `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
 `docs/evidence/20_phase4_2_pillar3_asyncapi.md`,
 `docs/evidence/21_phase4_2_pillar3_pact.md`, and
 `docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
-`docs/evidence/23_phase4_2_pillar4_topology.md`.
+`docs/evidence/23_phase4_2_pillar4_topology.md`, and
+`docs/evidence/24_phase4_2_pillar5_mining.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -193,7 +194,60 @@ come next). Steps 42–45 are **not** implemented. See
   `observed_invocations` pinned to `const: 0` on both finding types so the claim is carried
   as a field rather than inferred from an absence.
 
+- **Hidden-coupling discovery (`autopsy-mining`, Step 42):** a new crate mines a repository's
+  recent history for paths that change together, and reports Support, Confidence and Lift
+  per pair over a sliding window (default 183 days), reading first-parent history through
+  `autopsy-temporal`'s pure-Rust object store — no `git` sub-process, no network, no write.
+  The design's 6-month window is anchored at the newest commit's `committer` timestamp read
+  from the repository, never at a clock reading, so the same repository always yields the
+  same window; what enters the digest is the **set of commit ids** that were considered, which
+  is content-addressed and timestamp-free, plus the window *width* in seconds. Every ratio is
+  reported in integer parts per million beside the four counts it came from, because a digest
+  over `f64` inherits float formatting and a percentage that moves between platforms is a
+  determinism bug that looks like a data change.
+- **The non-causality boundary is structural, not a paragraph.** `EdgeClaim` has exactly one
+  variant (`TemporalCoOccurrenceOnly`) and it is a *field of every edge*, so a reader who
+  slices one edge out of a report still has the warning; a `bool` could be set wrong, an enum
+  with one value cannot be omitted or defaulted into existence. `EdgeKind::StatisticalCoChange`
+  joins the domain's graph vocabulary beside `Calls`, making the design's distinction hold at
+  the type level — a consumer filtering for `Calls` can never pick up a co-change edge by
+  accident.
+- Each confidence carries a 95% **Wilson score interval** in integer arithmetic (the normal
+  approximation is worst exactly where this engine reports most: small and boundary
+  proportions, where it renders `Confidence = 1.0` over three commits as a zero-width
+  interval). The interval answers how much of the proportion could be the accident of which
+  commits fell in the window, and the report and crate docs state that it says nothing about
+  causality.
+- **The mined population is accounted for exhaustively**, with `commits_seen ==
+  commits_considered + Σ excluded[*]` asserted by a test: merge commits, root imports, mass
+  commits, out-of-window commits, timestamp-less commits, undecodable trees and empty change
+  sets each land in their own bucket. Dropping a commit from the denominator *raises* every
+  support figure while looking like nothing happened. Exclusions that remove real edits
+  (mass commits, missing timestamps, undecodable trees) degrade coverage to `partial` with the
+  counts labelled a lower bound; an empty repository is `unknown`, never a report of zero
+  couplings; and per-edge coverage distinguishes "the measurement covered the population" from
+  "this number rests on two commits", which are different statements.
+- Pure renames (a path disappears and another appears carrying the identical blob) are
+  collapsed and counted, so a directory move does not manufacture an N² clique. The unpaired
+  surplus is restored as real changes — one blob copied to three paths is one rename and two
+  additions — and the identical-blob limit is disclosed in the report's notes.
+- `schemas/cochange-report.schema.json` — closed and draft 2020-12, with `claim` and `kind`
+  pinned to their single values, proportions bounded through a shared `$ref`, `lift_ppm`
+  deliberately unbounded, and a test asserting no property anywhere in the document names a
+  clock reading.
+
 ### Fixed
+- A co-change window had **no upper bound**: a caller anchoring the window in the past
+  silently included every commit *after* the anchor, so the window grew to the present while
+  claiming to be historical. The window is now the closed interval
+  `[anchor − window_seconds, anchor]`, and a commit dated after the anchor (which clock skew
+  and rebases produce) is counted under `outside_window` rather than quietly included.
+- The Wilson half-width used `z` where the algebra requires `z/2`, and computing `isqrt(n)`
+  separately truncated the divisor to `1` for every sample below four commits — the case this
+  engine reports most. Caught by a unit test asserting a *known* bound: with `x = n = 3` the
+  upper bound is exactly 1, and the code returned 0.999999.
+- `[R31]`-style requirement ids in doc comments were read by rustdoc as intra-doc links, and
+  the document gate added in the previous commit failed on ten occurrences.
 - A declared-but-**uninvoked** route left no trace in the topology report at all, so the
   report digest did not cover the contract's surface and two genuinely different contracts
   produced the same report. Found by a control assertion (a changed contract must move the

@@ -1,0 +1,18 @@
+[package]
+name = "autopsy-mining"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-temporal = { path = "../autopsy-temporal" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The git fixture builders are reused from `autopsy-temporal`'s test toolkit by path, so
+# there is exactly one byte-level encoder for loose objects in this workspace.
+flate2 = { workspace = true }

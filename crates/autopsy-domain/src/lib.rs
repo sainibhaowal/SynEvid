@@ -66,6 +66,14 @@ pub enum EdgeKind {
     ReadsSchema,
     WritesSchema,
     TestCovers,
+    /// Two paths changed in the same commits within an observation window.
+    ///
+    /// Deliberately in the same enum as the semantic kinds, and deliberately named after
+    /// the *evidence* rather than the relationship: temporal co-occurrence is not a call,
+    /// an import, or a data flow, and the type system is where that distinction has to
+    /// live `R32``R33`. A consumer that filters for `Calls` will never pick this up by
+    /// accident, and a consumer that wants co-change has to name it.
+    StatisticalCoChange,
 }
 
 impl fmt::Display for EdgeKind {
@@ -80,6 +88,7 @@ impl fmt::Display for EdgeKind {
             Self::ReadsSchema => write!(f, "reads_schema"),
             Self::WritesSchema => write!(f, "writes_schema"),
             Self::TestCovers => write!(f, "test_covers"),
+            Self::StatisticalCoChange => write!(f, "statistical_co_change"),
         }
     }
 }

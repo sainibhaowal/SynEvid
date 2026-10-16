@@ -20,6 +20,7 @@ members = [
     "crates/autopsy-test-impact",
     "crates/autopsy-contracts-distributed",
     "crates/autopsy-telemetry",
+    "crates/autopsy-mining",
     "tests"
 ]
 
