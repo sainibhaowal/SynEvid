@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import { createAutopsyMcpServer } from '../dist/server.js';
 import { runAutopsy, resolveAutopsyBinary } from '../dist/cli.js';
+import { evidenceEnvelope } from '../dist/evidence.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,7 +59,7 @@ test('runAutopsy executes verify command on repo-api', async () => {
   assert.equal(result.data.coverage.state, 'verified');
 });
 
-test('createAutopsyMcpServer registers all 5 mandatory read-only tools and resources', () => {
+test('createAutopsyMcpServer registers all 9 read-only tools and resources', () => {
   const server = createAutopsyMcpServer();
   assert.ok(server, 'McpServer instance must be created');
 
@@ -66,7 +69,15 @@ test('createAutopsyMcpServer registers all 5 mandatory read-only tools and resou
   assert.ok(tools.includes('autopsy_diff'), 'Must register autopsy_diff');
   assert.ok(tools.includes('autopsy_verify'), 'Must register autopsy_verify');
   assert.ok(tools.includes('autopsy_explain'), 'Must register autopsy_explain');
-  assert.equal(tools.length, 5, 'Must register exactly 5 mandatory tools');
+  for (const tool of [
+    'autopsy_temporal',
+    'autopsy_test_selection',
+    'autopsy_contract_diff',
+    'autopsy_distributed_blast_radius',
+  ]) {
+    assert.ok(tools.includes(tool), `Must register ${tool}`);
+  }
+  assert.equal(tools.length, 9, 'Must register exactly 5 mandatory plus 4 Phase 4.2 tools');
 
   const resources = Object.keys(server._registeredResources);
   assert.ok(resources.includes('autopsy://graph'), 'Must register autopsy://graph resource');
@@ -109,4 +120,135 @@ test('runAutopsy browses 1-hop edges for a symbol', async () => {
 test('runAutopsy rejects unknown edge-browse symbols explicitly', async () => {
   const result = await runAutopsy('edges', ['--source', 'no-such-symbol'], { repoRoot: REPO_API_ROOT });
   assert.equal(result.success, false, 'Unknown symbols must fail, never return empty success');
+});
+
+// ---------------------------------------------------------------------------------------
+// Phase 4.2 evidence tools (Step 45)
+//
+// The interesting assertions are the exit codes. An engine that refuses to hand back an
+// actionable answer says so with `4`, and a tool layer that turned that into a transport
+// error would hide the refusal behind a stack trace.
+// ---------------------------------------------------------------------------------------
+
+function writeFile(relative, content, root) {
+  const full = path.join(root, relative);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content);
+  return full;
+}
+
+/** A two-component catalog whose relationship fields use **bare names**, as real ones do. */
+function catalogFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autopsy-mcp-catalog-'));
+  writeFile(
+    'components/checkout/catalog-info.yaml',
+    'apiVersion: backstage.io/v1alpha1\nkind: Component\nmetadata:\n  name: checkout\nspec:\n  type: service\n  lifecycle: production\n  owner: team-x\n',
+    root
+  );
+  writeFile(
+    'components/cart/catalog-info.yaml',
+    'apiVersion: backstage.io/v1alpha1\nkind: Component\nmetadata:\n  name: cart\nspec:\n  type: service\n  lifecycle: production\n  owner: team-x\n',
+    root
+  );
+  return root;
+}
+
+test('evidenceEnvelope keeps the exit code, because 4 is a refusal and not a failure', () => {
+  const refused = evidenceEnvelope('temporal', {
+    success: true,
+    exitCode: 4,
+    data: { stats: { total: 3 } },
+    rawStdout: '',
+    rawStderr: '',
+  });
+  assert.equal(refused.exit_code, 4);
+  assert.equal(refused.actionable, false, 'a refusal must not look actionable');
+  assert.deepEqual(refused.report, { stats: { total: 3 } }, 'the evidence is still returned');
+
+  const ok = evidenceEnvelope('cochange', {
+    success: true,
+    exitCode: 0,
+    data: null,
+    rawStdout: '',
+    rawStderr: '',
+  });
+  assert.equal(ok.actionable, true);
+
+  const policy = evidenceEnvelope('contract-dist', {
+    success: true,
+    exitCode: 2,
+    data: { verdict: 'breaking' },
+    rawStdout: '',
+    rawStderr: '',
+  });
+  assert.equal(policy.actionable, false, 'a breaking change is a policy gate, not a success');
+});
+
+test('runAutopsy blast-radius joins a bare owner name to the team group', async () => {
+  const root = catalogFixture();
+  const result = await runAutopsy('blast-radius', ['component:default/checkout', '--root', root], {
+    repoRoot: root,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.success, true);
+  const radius = result.data.blast_radius;
+  assert.deepEqual(radius.owners, ['group:default/team-x'], 'a bare owner name is a group');
+  assert.equal(radius.owner_is_team, true);
+  assert.ok(
+    radius.co_owned_components.includes('component:default/cart'),
+    'the same team owns cart, and that join is the point of the tool'
+  );
+  assert.ok(
+    result.data.catalog.entities.length >= 2,
+    'the catalog the radius was computed from travels with it'
+  );
+});
+
+test('runAutopsy treats exit 4 as evidence rather than a transport error', async () => {
+  const root = catalogFixture();
+  const result = await runAutopsy('blast-radius', ['component:default/ghost', '--root', root], {
+    repoRoot: root,
+  });
+  assert.equal(result.exitCode, 4, 'an absent component is a refusal to answer');
+  assert.equal(result.success, true, 'the analysis did not fail — it declined to be actionable');
+  assert.equal(result.data.blast_radius.found, false);
+  assert.equal(result.data.blast_radius.coverage, 'unknown');
+});
+
+test('runAutopsy contract-dist exits 2 on a breaking change and still returns the diff', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autopsy-mcp-contract-'));
+  const head = 'openapi: 3.2.1\ninfo:\n  title: shop\n  version: 1.0.0\npaths:\n';
+  const pay = "  /pay:\n    get:\n      responses:\n        '200':\n          description: ok\n";
+  const refund = "  /refund:\n    get:\n      responses:\n        '200':\n          description: ok\n";
+  const from = writeFile('from.yaml', head + pay + refund, dir);
+  const to = writeFile('to.yaml', head + pay, dir);
+
+  const result = await runAutopsy('contract-dist', [from, to, '--protocol', 'openapi'], {
+    repoRoot: dir,
+  });
+  assert.equal(result.exitCode, 2, 'a removed endpoint is a policy failure');
+  assert.equal(result.success, true, 'and it is still a successful analysis');
+  assert.equal(result.data.verdict, 'breaking');
+});
+
+test('runAutopsy temporal replays the history of this workspace', async () => {
+  const repoRoot = path.resolve(__dirname, '../../..');
+  const result = await runAutopsy('temporal', ['--max-commits', '100000'], { repoRoot });
+  assert.equal(result.exitCode, 0, result.rawStderr);
+  assert.ok(result.data.stats.total > 0, 'the workspace has history to replay');
+  assert.ok(Array.isArray(result.data.journal), 'the journal projection is embedded verbatim');
+  assert.ok(
+    result.data.notes.some((note) => note.includes('not which symbols')),
+    'the extractor granularity is stated in the machine-readable output'
+  );
+});
+
+test('runAutopsy test-select reports a partial selection rather than a guess', async () => {
+  const result = await runAutopsy('test-select', ['--changed', 'src/user.ts'], {
+    repoRoot: REPO_API_ROOT,
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.data.coverage, 'partial', 'a file-level change set cannot be verified');
+  assert.ok(result.data.digest, 'the plan is digested');
+  assert.equal(result.data.fallback.kind, 'none');
 });

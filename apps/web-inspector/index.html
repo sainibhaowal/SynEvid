@@ -187,6 +187,49 @@
       text-align: center; margin-bottom: 1.5rem; cursor: pointer; transition: border-color 0.15s ease;
     }
 
+    /* Phase 4.2 views (Step 45) */
+    .graph-caption {
+      font-size: 0.78rem; color: var(--text-secondary); margin: 0.75rem 0 1.5rem;
+      border-left: 2px solid var(--border-color); padding-left: 0.75rem;
+    }
+    .ref-group { margin-bottom: 1.25rem; }
+    .ref-group-title {
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--text-muted); margin-bottom: 0.5rem;
+    }
+    .ref-chip {
+      display: inline-block; font-family: var(--font-mono); font-size: 0.78rem;
+      background: var(--bg-surface-elevated); border: 1px solid var(--border-color);
+      border-radius: 4px; padding: 0.2rem 0.5rem; margin: 0 0.35rem 0.35rem 0;
+    }
+    .ref-chip.unresolved { border-style: dashed; color: var(--text-muted); }
+    .ref-chip .tag { color: var(--accent-cyan); margin-left: 0.4rem; }
+    .ref-none { font-size: 0.8rem; color: var(--text-muted); font-style: italic; }
+    .timeline-fact {
+      display: flex; gap: 0.75rem; align-items: baseline; font-size: 0.82rem;
+      border-bottom: 1px solid var(--bg-surface-elevated); padding: 0.35rem 0;
+    }
+    .timeline-fact .pred { color: var(--accent-violet); font-family: var(--font-mono); min-width: 9rem; }
+    .timeline-fact .obj { color: var(--text-secondary); }
+    .delta-add { color: var(--accent-green); }
+    .delta-del { color: #f87171; }
+    input[type="range"].revision-slider { width: 100%; accent-color: var(--accent-cyan); }
+    .coverage-pill {
+      display: inline-block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+      border: 1px solid var(--border-color); border-radius: 999px; padding: 0.1rem 0.5rem;
+      color: var(--text-secondary);
+    }
+    .coverage-pill.verified { border-color: var(--accent-green); color: var(--accent-green); }
+    .coverage-pill.partial { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+    .coverage-pill.unsupported, .coverage-pill.unknown { border-color: #f59e0b; color: #f59e0b; }
+    details.raw { margin-top: 1rem; }
+    details.raw summary { cursor: pointer; font-size: 0.78rem; color: var(--text-muted); }
+    details.raw pre {
+      background-color: #05070d; border: 1px solid var(--border-color); border-radius: 8px;
+      padding: 1rem; color: #38bdf8; font-family: var(--font-mono); font-size: 0.75rem;
+      overflow-x: auto; max-height: 320px;
+    }
+
     .upload-box:hover, .upload-box.dragover { border-color: var(--accent-cyan); }
     .digest-note { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem; }
   </style>
@@ -206,6 +249,8 @@
   <nav class="nav-tabs">
     <button class="tab-btn active" onclick="switchTab(event, 'tab-evidence')">Forensic Evidence Board</button>
     <button class="tab-btn" onclick="switchTab(event, 'tab-blast')">Blast Radius &amp; Multigraph</button>
+    <button class="tab-btn" onclick="switchTab(event, 'tab-timeline')">Temporal Evolution Timeline</button>
+    <button class="tab-btn" onclick="switchTab(event, 'tab-distributed')">Distributed Blast Radius</button>
     <button class="tab-btn" onclick="switchTab(event, 'tab-report')">Autopsy Report JSON</button>
   </nav>
 
@@ -274,8 +319,14 @@
     <div id="tab-report" class="tab-content">
       <div class="upload-box" id="upload-box" onclick="document.getElementById('file-upload').click()">
         <input type="file" id="file-upload" style="display: none;" accept=".json,application/json" onchange="handleFileUpload(event)">
-        <div style="font-weight: 600; font-size: 1rem; margin-bottom: 0.25rem;">Load <code>autopsy.json</code> artifact</div>
+        <div style="font-weight: 600; font-size: 1rem; margin-bottom: 0.25rem;">Load an engine artifact</div>
         <div style="font-size: 0.8rem; color: var(--text-secondary);">Click, drop a file, or paste JSON below — inspection runs 100% locally</div>
+        <div class="digest-note">
+          Rendered: a verification report (<code>autopsy verify --format json</code>), a revision journal
+          (<code>autopsy temporal --format json</code>, or a bare fact list), or a blast radius
+          (<code>autopsy blast-radius &lt;ref&gt; --format json</code>). Anything else is refused rather than
+          shown as an empty case.
+        </div>
       </div>
 
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
@@ -299,6 +350,40 @@
         Digests are displayed exactly as reported by the engine artifact. This static page does not
         recompute BLAKE3 (no bundled crypto); re-verify with
         <code style="font-family: var(--font-mono);">autopsy doctor</code> and deterministic reruns.
+      </div>
+    </div>
+
+    <!-- TAB 4: Temporal Evolution Timeline (Pillar 1) -->
+    <div id="tab-timeline" class="tab-content">
+      <div class="blast-tree">
+        <div style="font-weight: 700; font-size: 1.1rem; margin-bottom: 0.5rem;">Temporal Evolution Timeline</div>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;" id="timeline-sub">
+          No journal loaded. Produce one with
+          <code style="font-family: var(--font-mono);">autopsy temporal --format json</code>
+          and load it in the Report tab, or load a bare fact list.
+        </p>
+        <div id="timeline-controls"></div>
+        <div class="meta-grid" style="margin-bottom: 1rem;" id="timeline-stats"></div>
+        <div id="timeline-facts"></div>
+        <div class="graph-caption" id="timeline-caption"></div>
+      </div>
+    </div>
+
+    <!-- TAB 5: Distributed Blast Radius (Pillar 6, with Pillar 4 topology when present) -->
+    <div id="tab-distributed" class="tab-content">
+      <div class="blast-tree">
+        <div style="font-weight: 700; font-size: 1.1rem; margin-bottom: 0.5rem;">Distributed Blast Radius</div>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;" id="distributed-sub">
+          No blast radius loaded. Produce one with
+          <code style="font-family: var(--font-mono);">autopsy blast-radius &lt;component-ref&gt; --format json</code>
+          and load it in the Report tab.
+        </p>
+        <div id="distributed-graph"></div>
+        <div class="graph-caption" id="distributed-caption"></div>
+        <div id="distributed-refs"></div>
+        <div class="meta-grid" style="margin-top: 1rem;" id="distributed-stats"></div>
+        <div id="distributed-topology"></div>
+        <div id="distributed-scan"></div>
       </div>
     </div>
   </main>
@@ -326,16 +411,464 @@
       return hex.length > 32 ? hex.slice(0, 32) + '…' : hex;
     }
 
+    // ---------------------------------------------------------------------------------
+    // Phase 4.2 views (Step 45)
+    //
+    // Two artifact kinds the evidence board cannot show: a revision journal and an
+    // organisational blast radius. The rule the rest of this page follows holds here too —
+    // these views render what the engine said, *including what it said it could not read*,
+    // and derive nothing the engine already asserts. Where a derivation is unavoidable
+    // (the slider needs an order, and the journal carries commit ids rather than dates),
+    // the caption says what was assumed.
+    // ---------------------------------------------------------------------------------
+
+    function coveragePill(state) {
+      var text = String(state == null ? 'unknown' : state).toLowerCase();
+      return '<span class="coverage-pill ' + esc(text) + '">' + esc(text) + '</span>';
+    }
+
+    function classifyArtifact(parsed) {
+      if (Array.isArray(parsed)) {
+        var looksLikeFacts = parsed.length > 0 && parsed.every(function (f) {
+          return f && typeof f === 'object' && f.fact_id && f.predicate && f.valid_from;
+        });
+        return looksLikeFacts ? 'journal-bare' : 'unknown';
+      }
+      if (!parsed || typeof parsed !== 'object') { return 'unknown'; }
+      if (Array.isArray(parsed.journal) && parsed.stats) { return 'temporal'; }
+      if (parsed.blast_radius && parsed.catalog) { return 'blast_radius'; }
+      if (parsed.run && parsed.coverage) { return 'verify'; }
+      return 'unknown';
+    }
+
     function loadArtifact(parsed) {
-      if (!parsed || typeof parsed !== 'object' || !parsed.run || !parsed.coverage) {
-        throw new Error('Not an autopsy report: missing run/coverage sections (schema_version 0.0.1 expected).');
+      var kind = classifyArtifact(parsed);
+      if (kind === 'unknown') {
+        throw new Error('Not an artifact this page renders: expected a verification report ' +
+          '(run/coverage), `autopsy temporal --format json` (journal/stats), or ' +
+          '`autopsy blast-radius <ref> --format json` (catalog/blast_radius).');
       }
       currentArtifact = parsed;
       document.getElementById('json-display').textContent = JSON.stringify(parsed, null, 2);
-      renderMeta(parsed);
-      renderEvidence(parsed);
-      renderBlast(parsed);
+
+      if (kind === 'verify') {
+        renderMeta(parsed);
+        renderEvidence(parsed);
+        renderBlast(parsed);
+        return;
+      }
+      if (kind === 'temporal' || kind === 'journal-bare') {
+        renderTemporal(parsed);
+      } else {
+        renderBlastRadius(parsed);
+      }
+      renderMetaFor(kind, parsed);
+      markVerifyViewsLoaded(kind);
     }
+
+    function markVerifyViewsLoaded(kind) {
+      var what = kind === 'blast_radius' ? 'an organisational blast radius' : 'a temporal journal';
+      document.getElementById('case-title').textContent = 'Not a verification report';
+      document.getElementById('case-sub').textContent =
+        'This artifact is ' + what + '. The Evidence Board renders verification findings, so it has ' +
+        'nothing to show here — the dedicated tab does.';
+      var badge = document.getElementById('case-badge');
+      badge.style.display = 'none';
+      document.getElementById('evidence-empty').style.display = 'none';
+      document.getElementById('evidence-container').innerHTML =
+        '<div class="graph-caption">No findings in this artifact. Nothing is inferred from that.</div>';
+      document.getElementById('evidence-footer').innerHTML = '';
+    }
+
+    function renderMetaFor(kind, doc) {
+      if (kind === 'temporal' || kind === 'journal-bare') {
+        var facts = kind === 'temporal' ? (doc.journal || []) : doc;
+        var stats = kind === 'temporal' ? (doc.stats || null) : null;
+        setMeta('meta-snapshot', 'temporal journal · ' + facts.length + ' fact(s)');
+        setMeta('meta-digest', kind === 'temporal' ? 'not carried by this envelope' : 'bare fact list');
+        setMeta('meta-coverage', kind === 'temporal'
+          ? String(doc.coverage || 'unknown').toUpperCase()
+          : 'NOT STATED BY THIS DOCUMENT');
+        setMeta('meta-rules', stats
+          ? ('active ' + (stats.active == null ? '?' : stats.active) +
+             ' / retired ' + (stats.retired == null ? '?' : stats.retired) +
+             ' / partial ' + (stats.partial == null ? '?' : stats.partial) +
+             ' / unknown ' + (stats.unknown == null ? '?' : stats.unknown))
+          : 'the envelope is not in this document');
+        return;
+      }
+      var radius = doc.blast_radius || {};
+      var catalog = doc.catalog || {};
+      setMeta('meta-snapshot', 'catalog scan · ' + (catalog.files_scanned == null ? '?' : catalog.files_scanned) +
+        ' file(s) · ' + ((catalog.entities || []).length) + ' entit(y/ies)');
+      setMeta('meta-digest', shortDigest(catalog.digest));
+      setMeta('meta-coverage', String(radius.coverage || 'unknown').toUpperCase() + ' (blast radius)');
+      setMeta('meta-rules', 'ownership: ' + ((radius.owners || []).length) + ' owner(s) · ' +
+        ((radius.dependents || []).length) + ' dependent(s)');
+    }
+
+    // ------------------------------------------------ Temporal Evolution Timeline
+
+    var timelineState = null;
+
+    function renderTemporal(doc) {
+      var envelope = Array.isArray(doc) ? null : doc;
+      var facts = envelope ? (doc.journal || []) : doc;
+      var sub = document.getElementById('timeline-sub');
+      var controls = document.getElementById('timeline-controls');
+      var stats = document.getElementById('timeline-stats');
+      var list = document.getElementById('timeline-facts');
+      var caption = document.getElementById('timeline-caption');
+      controls.innerHTML = '';
+      stats.innerHTML = '';
+      list.innerHTML = '';
+
+      var revisions = [];
+      var seen = {};
+      facts.forEach(function (f) {
+        var from = String(f.valid_from || '');
+        if (!Object.prototype.hasOwnProperty.call(seen, from)) {
+          seen[from] = revisions.length;
+          revisions.push(from);
+        }
+      });
+
+      if (facts.length === 0) {
+        sub.textContent = 'The journal is empty: the history it replays contains no facts. ' +
+          'That is not the same statement as "the history is empty".';
+        caption.innerHTML = envelope ? notesHtml(doc.notes) : '';
+        return;
+      }
+
+      sub.innerHTML = 'Revision journal · <strong>' + revisions.length + ' revision(s)</strong> · ' +
+        facts.length + ' fact(s) · ' + coveragePill(envelope ? doc.coverage : null) +
+        (envelope ? '' : ' (bare fact list — no envelope)');
+
+      controls.innerHTML =
+        '<div style="display: flex; justify-content: space-between; font-size: 0.8rem; ' +
+        'color: var(--text-secondary); margin-bottom: 0.35rem;">' +
+        '<span id="tl-label"></span><span id="tl-count"></span></div>' +
+        '<input class="revision-slider" id="tl-slider" type="range" min="0" ' +
+        'max="' + (revisions.length - 1) + '" value="' + (revisions.length - 1) + '" step="1">';
+
+      timelineState = { facts: facts, revisions: revisions, seen: seen, envelope: envelope };
+
+      document.getElementById('tl-slider').addEventListener('input', function () {
+        paintTimeline(Number(this.value));
+      });
+      paintTimeline(revisions.length - 1);
+      caption.innerHTML = captionsHtml(envelope);
+    }
+
+    function captionsHtml(envelope) {
+      var html = '';
+      if (envelope) {
+        html += notesHtml(envelope.notes);
+      } else {
+        html += '<div>Bare fact list: the envelope\'s <code>notes</code> (extractor granularity) and ' +
+          '<code>coverage</code> are not in this document, so the two statements above cannot be made.</div>';
+      }
+      html += '<div style="margin-top: 0.5rem;">Revision order is the order in which each ' +
+        '<code>valid_from</code> first appears in the journal. The journal carries commit ids, not ' +
+        'timestamps, so this page puts no date on a history the engine deliberately does not date. ' +
+        'A fact is active at a revision when it was introduced at or before it and retired after it.</div>';
+      return html;
+    }
+
+    function notesHtml(notes) {
+      var list = notes || [];
+      if (list.length === 0) { return ''; }
+      return '<div>' + list.map(function (note) {
+        return '<div style="margin-bottom: 0.25rem;">note: ' + esc(note) + '</div>';
+      }).join('') + '</div>';
+    }
+
+    function paintTimeline(k) {
+      var state = timelineState;
+      if (!state) { return; }
+      var indexOf = function (commitId) {
+        return Object.prototype.hasOwnProperty.call(state.seen, commitId) ? state.seen[commitId] : -1;
+      };
+      var active = [];
+      var added = [];
+      var retired = [];
+      var partial = 0;
+      state.facts.forEach(function (f) {
+        var from = indexOf(String(f.valid_from || ''));
+        var to = f.valid_to ? indexOf(String(f.valid_to)) : -1;
+        if (from <= k && (to === -1 || to > k)) { active.push(f); }
+        if (from === k) { added.push(f); }
+        if (to === k) { retired.push(f); }
+        if (String(f.coverage || 'verified').toLowerCase() !== 'verified') { partial++; }
+      });
+
+      document.getElementById('tl-label').textContent =
+        'Revision ' + (k + 1) + ' of ' + state.revisions.length + ' · ' + shortDigest(state.revisions[k]);
+      document.getElementById('tl-count').textContent =
+        added.length + ' added here · ' + retired.length + ' retired here';
+
+      document.getElementById('timeline-stats').innerHTML =
+        statCard('Active at this revision', String(active.length)) +
+        statCard('Added here', String(added.length)) +
+        statCard('Retired here', String(retired.length)) +
+        statCard('Facts not verified', String(partial));
+
+      var shown = active.slice(0, 200);
+      var list = document.getElementById('timeline-facts');
+      list.innerHTML = shown.map(function (f) {
+        var badge = String(f.coverage || 'verified').toLowerCase() !== 'verified'
+          ? ' ' + coveragePill(f.coverage)
+          : '';
+        var delta = indexOf(String(f.valid_from || '')) === k ? '<span class="delta-add">added</span> ' : '';
+        return '<div class="timeline-fact">' +
+          '<span class="pred">' + esc(f.predicate) + '</span>' +
+          '<span>' + delta + esc(f.subject) + ' <span class="obj">→ ' + esc(f.object) +
+          '</span><br><span style="font-size: 0.72rem; color: var(--text-muted);">' +
+          esc(f.provenance) + ' · ' + esc(shortDigest(f.evidence_digest)) + '</span></span>' + badge +
+          '</div>';
+      }).join('') + (active.length > shown.length
+        ? '<div class="graph-caption">Showing the first ' + shown.length + ' of ' + active.length +
+          ' active facts: this page renders in the browser and does not page.</div>'
+        : '');
+    }
+
+    // ------------------------------------------------ Distributed Blast Radius
+
+    function renderBlastRadius(doc) {
+      var radius = doc.blast_radius || {};
+      var catalog = doc.catalog || {};
+      var topology = doc.topology || null;
+      var sub = document.getElementById('distributed-sub');
+      var graph = document.getElementById('distributed-graph');
+      var refs = document.getElementById('distributed-refs');
+      var caption = document.getElementById('distributed-caption');
+      var stats = document.getElementById('distributed-stats');
+      var scan = document.getElementById('distributed-scan');
+      var topologyEl = document.getElementById('distributed-topology');
+      refs.innerHTML = '';
+      topologyEl.innerHTML = '';
+      graph.innerHTML = '';
+
+      sub.innerHTML = '<strong>' + esc(radius.component || '?') + '</strong> · ' +
+        coveragePill(radius.coverage) +
+        (radius.found ? '' : ' · <span style="color: #f59e0b;">NOT IN THE CATALOG</span>');
+
+      if (!radius.found) {
+        graph.innerHTML = '<div class="graph-caption" style="border-left-color: #f59e0b;">' +
+          'The catalog does not contain this component, so there is no graph to draw: nothing is ' +
+          'known about who owns it or what it touches. This is a refusal to answer, not an empty ' +
+          'answer — an empty answer would read as "it touches nothing".</div>';
+      } else {
+        graph.innerHTML = radialGraph(radius);
+      }
+
+      var groups = [
+        ['Owner', radius.owners, radius.owner_is_team ? 'team (group)' : 'not a team'],
+        ['Co-owned by the same team', radius.co_owned_components],
+        ['Sibling component in the same system', radius.siblings],
+        ['Provides API', radius.provided_apis],
+        ['Consumes API', radius.consumed_apis],
+        ['Depends on this component', radius.dependents]
+      ];
+      refs.innerHTML = groups.map(function (group) {
+        var items = group[1] || [];
+        var tag = group[2] ? '<span class="tag">' + esc(group[2]) + '</span>' : '';
+        return '<div class="ref-group"><div class="ref-group-title">' + esc(group[0]) + tag + '</div>' +
+          (items.length === 0
+            ? '<div class="ref-none">none declared by the catalog</div>'
+            : items.map(function (item) {
+                return '<span class="ref-chip">' + esc(item) + '</span>';
+              }).join('')) +
+          '</div>';
+      }).join('');
+
+      var unresolved = radius.unresolved || [];
+      if (unresolved.length > 0) {
+        refs.innerHTML += '<div class="ref-group"><div class="ref-group-title">Unresolved references ' +
+          '— not edges</div>' +
+          unresolved.map(function (line) {
+            return '<span class="ref-chip unresolved">' + esc(line) + '</span>';
+          }).join('') +
+          '<div class="ref-none" style="margin-top: 0.35rem;">These are stated by the catalog and could ' +
+          'not be resolved to an entity. They are not drawn as edges, and they are why the coverage ' +
+          'state is what it is.</div></div>';
+      }
+
+      caption.innerHTML = notesHtml(radius.notes) +
+        '<div style="margin-top: 0.5rem;">Every edge drawn is a reference the catalog <em>states</em>: ' +
+        'an unresolved reference is dashed or named, never an edge. Ownership rolls up only as far as ' +
+        'the reference, because a <code>Group</code> is outside the five entity kinds this scan models ' +
+        'and its own declarations are not read.</div>';
+
+      stats.innerHTML =
+        statCard('Owner', (radius.owners || []).length === 0 ? 'NONE DECLARED'
+          : (radius.owner_is_team ? 'TEAM' : 'PERSON — NO TEAM TO ROLL UP TO')) +
+        statCard('System', radius.system == null ? 'none declared' : radius.system) +
+        statCard('Domain', radius.domain == null ? 'none declared' : radius.domain) +
+        statCard('Unresolved references', String(unresolved.length));
+
+      scan.innerHTML = '<div class="ref-group-title" style="margin-top: 1rem;">What the scan read, ' +
+        'and what it did not</div>' +
+        '<div style="font-size: 0.82rem; color: var(--text-secondary);">' +
+        (catalog.files_scanned == null ? '?' : catalog.files_scanned) + ' file(s) scanned · ' +
+        ((catalog.entities || []).length) + ' entit(y/ies) · ' +
+        ((catalog.manifests || []).length) + ' manifest(s) · ' +
+        ((catalog.dependencies || []).length) + ' dependenc(y/ies) · coverage ' +
+        coveragePill(catalog.coverage) + '</div>' +
+        unmodelledHtml(catalog) +
+        notesHtml(catalog.notes);
+
+      if (topology) {
+        topologyEl.innerHTML = topologyHtml(topology);
+      } else {
+        topologyEl.innerHTML = '<div class="graph-caption">No trace export is correlated with this ' +
+          'radius, so nothing here says what was <em>observed</em> at runtime. The catalog says what ' +
+          'is declared; only a telemetry correlation can say what is called.</div>';
+      }
+    }
+
+    function unmodelledHtml(catalog) {
+      var kinds = catalog.unmodelled_kinds || {};
+      var names = Object.keys(kinds);
+      var refusals = catalog.refusals || {};
+      var refusalNames = Object.keys(refusals);
+      var duplicates = (catalog.duplicate_entities || []).length;
+      var html = '';
+      if (names.length > 0) {
+        html += '<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 0.35rem;">' +
+          'entity kinds outside the five this scan models, not read: ' +
+          names.map(function (name) { return esc(name) + ' (' + kinds[name] + ')'; }).join(', ') +
+          '</div>';
+      }
+      if (refusalNames.length > 0) {
+        html += '<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 0.35rem;">' +
+          'documents refused rather than guessed at: ' +
+          refusalNames.map(function (name) { return esc(name) + ' (' + refusals[name] + ')'; }).join(', ') +
+          '</div>';
+      }
+      if (duplicates > 0) {
+        html += '<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 0.35rem;">' +
+          duplicates + ' duplicate entity reference(s): the first in sorted path order was kept, and ' +
+          'both paths are in the report.</div>';
+      }
+      return html;
+    }
+
+    function topologyHtml(topology) {
+      var report = topology.report || {};
+      var observation = report.observation || {};
+      return '<div class="ref-group-title" style="margin-top: 1rem;">Observed topology (traces correlated ' +
+        'against a declared surface)</div>' +
+        '<div style="font-size: 0.82rem; color: var(--text-secondary);">exit ' +
+        esc(topology.exit_code) + ' · ' +
+        (topology.actionable ? 'actionable' : 'NOT ACTIONABLE') + ' · coverage ' +
+        coveragePill(report.coverage) + ' · windows ' +
+        esc(observation.windows_observed == null ? '?' : observation.windows_observed) + ' of ' +
+        esc(observation.required_windows == null ? '?' : observation.required_windows) + ' · spans ' +
+        esc(observation.span_count == null ? '?' : observation.span_count) + '</div>' +
+        '<div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">' +
+        'complete observation: ' + (observation.complete_observation ? 'asserted' : 'not asserted') +
+        ' · dispatch: ' + esc(observation.dispatch == null ? '?' : observation.dispatch) + '</div>' +
+        notesHtml(report.notes) +
+        '<details class="raw"><summary>Raw topology report</summary><pre>' +
+        esc(JSON.stringify(report, null, 2)) + '</pre></details>';
+    }
+
+    function radialGraph(radius) {
+      var categories = [
+        { label: 'owner', key: 'owners', color: '#8b5cf6', incoming: false },
+        { label: 'co-owned', key: 'co_owned_components', color: '#06b6d4', incoming: false },
+        { label: 'sibling', key: 'siblings', color: '#10b981', incoming: false },
+        { label: 'provides', key: 'provided_apis', color: '#f59e0b', incoming: false },
+        { label: 'consumes', key: 'consumed_apis', color: '#f472b6', incoming: false },
+        { label: 'dependent', key: 'dependents', color: '#ef4444', incoming: true }
+      ];
+      var width = 900;
+      var height = 560;
+      var cx = width / 2;
+      var cy = height / 2;
+      var ring = 236;
+      var perCategory = 8;
+      var nodes = [];
+      var truncated = [];
+      categories.forEach(function (cat, ci) {
+        var all = radius[cat.key] || [];
+        var items = all.slice(0, perCategory);
+        if (all.length > items.length) {
+          truncated.push(cat.label + ': showing ' + items.length + ' of ' + all.length);
+        }
+        var sectorStart = (ci / categories.length) * Math.PI * 2 - Math.PI / 2;
+        var sectorWidth = (Math.PI * 2) / categories.length;
+        items.forEach(function (item, i) {
+          var t = items.length === 1 ? 0.5 : (i / (items.length - 1));
+          var angle = sectorStart + 0.18 * sectorWidth + t * 0.64 * sectorWidth;
+          nodes.push({
+            item: item,
+            label: cat.label,
+            color: cat.color,
+            incoming: cat.incoming,
+            x: cx + Math.cos(angle) * ring,
+            y: cy + Math.sin(angle) * ring
+          });
+        });
+      });
+
+      var parts = [];
+      parts.push('<svg viewBox="0 0 ' + width + ' ' + height + '" width="100%" height="auto" ' +
+        'style="max-height: 560px;" role="img" aria-label="Radial graph of the stated references">');
+      parts.push('<defs><marker id="arrow-in" viewBox="0 0 10 10" refX="19" refY="5" markerWidth="5" ' +
+        'markerHeight="5" orient="auto-start-reverse">' +
+        '<path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444"></path></marker></defs>');
+
+      nodes.forEach(function (node) {
+        if (node.incoming) {
+          parts.push('<line x1="' + node.x.toFixed(1) + '" y1="' + node.y.toFixed(1) + '" x2="' + cx +
+            '" y2="' + cy + '" stroke="' + node.color + '" stroke-width="1.2" marker-end="url(#arrow-in)"></line>');
+        } else {
+          parts.push('<line x1="' + cx + '" y1="' + cy + '" x2="' + node.x.toFixed(1) + '" y2="' +
+            node.y.toFixed(1) + '" stroke="' + node.color + '" stroke-width="1.2" stroke-dasharray="3 3"></line>');
+        }
+      });
+
+      parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="60" fill="var(--bg-surface-elevated)" ' +
+        'stroke="var(--accent-cyan)" stroke-width="2"></circle>');
+      parts.push('<text x="' + cx + '" y="' + (cy - 4) + '" text-anchor="middle" fill="var(--text-primary)" ' +
+        'font-size="13" font-weight="700">' +
+        esc(shortRef(radius.component, 22)) + '</text>');
+      parts.push('<title>' + esc(radius.component || '') + '</title>');
+      parts.push('<text x="' + cx + '" y="' + (cy + 14) + '" text-anchor="middle" ' +
+        'fill="var(--text-muted)" font-size="10">' + esc(String(radius.coverage || '')) + '</text>');
+
+      nodes.forEach(function (node) {
+        parts.push('<circle cx="' + node.x.toFixed(1) + '" cy="' + node.y.toFixed(1) +
+          '" r="16" fill="var(--bg-surface)" stroke="' + node.color + '" stroke-width="1.5"></circle>');
+        parts.push('<text x="' + node.x.toFixed(1) + '" y="' + (node.y + 30).toFixed(1) +
+          '" text-anchor="middle" fill="var(--text-secondary)" font-size="10">' +
+          esc(shortRef(node.item, 20)) + '<title>' + esc(node.item) + '</title></text>');
+        parts.push('<text x="' + node.x.toFixed(1) + '" y="' + (node.y + 4).toFixed(1) +
+          '" text-anchor="middle" fill="var(--text-muted)" font-size="8">' +
+          esc(node.label) + '</text>');
+      });
+      parts.push('</svg>');
+
+      if (nodes.length === 0) {
+        parts.push('<div class="graph-caption">The component is in the catalog, and it declares no ' +
+          'resolvable references: no owners, siblings, APIs or dependents. An empty graph is what the ' +
+          'catalog states.</div>');
+      }
+      if (truncated.length > 0) {
+        parts.push('<div class="graph-caption">Not all references are drawn (' +
+          truncated.map(esc).join(' · ') + '). The lists below are complete.</div>');
+      }
+      return parts.join('');
+    }
+
+    function shortRef(ref, limit) {
+      var text = String(ref == null ? '' : ref);
+      return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+    }
+
+
 
     function renderMeta(r) {
       var snap = (r.snapshots && r.snapshots[0]) || {};

@@ -26,7 +26,10 @@ schemas:
 mcp-check:
 	cd apps/mcp-server && npm run typecheck && npm run lint && npm test
 
-check: fmt boundaries schemas determinism cross-platform mcp-check
+web-inspector-check:
+	cd apps/web-inspector && npm test
+
+check: fmt boundaries schemas determinism cross-platform mcp-check web-inspector-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace --all-targets
 	cargo test --workspace --doc

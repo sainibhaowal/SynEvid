@@ -187,7 +187,14 @@ impl EntityRef {
     /// `component:default/checkout`. Reading a kind out of the left half would be this
     /// crate inventing an interpretation the format does not state, and the mistake would
     /// be invisible — both readings produce a well-formed reference.
-    pub fn parse(raw: &str) -> Result<Self, CatalogError> {
+    ///
+    /// The kind of a bare name comes from the **field**, not from the string, so this is
+    /// the version that takes it. An `owner` is a group, a `system` is a system, an entry
+    /// of `providesApis` is an API. Reading every bare name as a component — which this
+    /// crate did — rewrites `owner: team-x` into `component:default/team-x`: a well-formed
+    /// reference that resolves to nothing, so the entity is parsed, the owner is present,
+    /// and only the join across entities is silently lost.
+    pub fn parse(raw: &str, implied_kind: &str) -> Result<Self, CatalogError> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Err(CatalogError::BadEntityRef(raw.to_string()));
@@ -195,7 +202,7 @@ impl EntityRef {
         let parts: Vec<&str> = trimmed.split('/').collect();
         let (kind, namespace, name) = match parts.as_slice() {
             [name] => (
-                "component".to_string(),
+                implied_kind.to_string(),
                 "default".to_string(),
                 name.to_string(),
             ),
@@ -206,7 +213,7 @@ impl EntityRef {
                     name.to_string(),
                 ),
                 None => (
-                    "component".to_string(),
+                    implied_kind.to_string(),
                     prefix.to_string(),
                     name.to_string(),
                 ),
@@ -266,8 +273,11 @@ const MODELLED_ANNOTATIONS: &[&str] = &[GITHUB_PROJECT_ANNOTATION];
 
 /// `system:default/s` and `system/s` are one reference, and a graph keyed on the raw text
 /// would hold two.
-fn canonicalize(raw: String) -> String {
-    EntityRef::parse(&raw)
+///
+/// The implied kind travels with the call: canonicalising a `system` field as if it could
+/// only name a component is how a relationship is lost while still looking canonical.
+fn canonicalize(raw: String, implied_kind: &str) -> String {
+    EntityRef::parse(&raw, implied_kind)
         .map(|reference| reference.canonical())
         .unwrap_or(raw)
 }
@@ -384,7 +394,7 @@ pub fn parse_catalog(source_path: &str, content: &str) -> Result<ParsedCatalogFi
             EntityKind::Component | EntityKind::Api | EntityKind::Resource
         );
         let declares_relationships = matches!(kind, EntityKind::Component | EntityKind::Resource);
-        let relationship = |field: &str| -> Result<Vec<String>, CatalogError> {
+        let relationship = |field: &str, implied_kind: &str| -> Result<Vec<String>, CatalogError> {
             match spec.and_then(|s| s.get(field)) {
                 None => Ok(Vec::new()),
                 Some(value) => {
@@ -397,7 +407,7 @@ pub fn parse_catalog(source_path: &str, content: &str) -> Result<ParsedCatalogFi
                     };
                     items
                         .iter()
-                        .map(|item| EntityRef::parse(item).map(|r| r.canonical()))
+                        .map(|item| EntityRef::parse(item, implied_kind).map(|r| r.canonical()))
                         .collect()
                 }
             }
@@ -405,7 +415,8 @@ pub fn parse_catalog(source_path: &str, content: &str) -> Result<ParsedCatalogFi
 
         let (owner, owner_kind, owner_is_team) = match spec_field("owner") {
             Some(raw) => {
-                let owner = EntityRef::parse(&raw)?;
+                // Backstage's own default for an owner: a bare name is a group.
+                let owner = EntityRef::parse(&raw, "group")?;
                 let is_team = owner.kind == "group";
                 (Some(owner.canonical()), Some(owner.kind.clone()), is_team)
             }
@@ -446,29 +457,29 @@ pub fn parse_catalog(source_path: &str, content: &str) -> Result<ParsedCatalogFi
             system: declares_system
                 .then(|| spec_field("system"))
                 .flatten()
-                .map(canonicalize),
+                .map(|raw| canonicalize(raw, "system")),
             domain: (kind == EntityKind::System)
                 .then(|| spec_field("domain"))
                 .flatten()
-                .map(canonicalize),
+                .map(|raw| canonicalize(raw, "domain")),
             subcomponent_of: (kind == EntityKind::Component)
                 .then(|| spec_field("subcomponentOf"))
                 .flatten()
-                .map(canonicalize),
+                .map(|raw| canonicalize(raw, "component")),
             lifecycle: spec_field("lifecycle"),
             component_type: spec_field("type"),
             depends_on: if declares_relationships {
-                relationship("dependsOn")?
+                relationship("dependsOn", "component")?
             } else {
                 Vec::new()
             },
             provides_apis: if kind == EntityKind::Component {
-                relationship("providesApis")?
+                relationship("providesApis", "api")?
             } else {
                 Vec::new()
             },
             consumes_apis: if kind == EntityKind::Component {
-                relationship("consumesApis")?
+                relationship("consumesApis", "api")?
             } else {
                 Vec::new()
             },
@@ -608,32 +619,34 @@ spec:
     #[test]
     fn the_reference_grammar_is_backstages_own() {
         assert_eq!(
-            EntityRef::parse("checkout").expect("parses").canonical(),
+            EntityRef::parse("checkout", "component")
+                .expect("parses")
+                .canonical(),
             "component:default/checkout"
         );
         assert_eq!(
-            EntityRef::parse("group:default/team-x")
+            EntityRef::parse("group:default/team-x", "component")
                 .expect("parses")
                 .canonical(),
             "group:default/team-x"
         );
-        let two_segments = EntityRef::parse("component/checkout").expect("parses");
+        let two_segments = EntityRef::parse("component/checkout", "component").expect("parses");
         assert_eq!(two_segments.namespace, "component");
         assert_eq!(two_segments.kind, "component");
         assert_eq!(two_segments.canonical(), "component:component/checkout");
         assert_eq!(
-            EntityRef::parse("default/checkout")
+            EntityRef::parse("default/checkout", "component")
                 .expect("parses")
                 .canonical(),
             "component:default/checkout"
         );
         // Refusals, not guesses.
         assert!(
-            EntityRef::parse("a/b/c").is_err(),
+            EntityRef::parse("a/b/c", "component").is_err(),
             "three segments is not a reference"
         );
         assert!(
-            EntityRef::parse("group:team-x").is_err(),
+            EntityRef::parse("group:team-x", "component").is_err(),
             "a kind with no namespace is not a reference"
         );
     }
@@ -641,7 +654,7 @@ spec:
     #[test]
     fn a_name_that_backstage_would_reject_is_rejected_here_too() {
         for bad in ["-leading-dash", "has space", "", "a", &"x".repeat(64)] {
-            let reference = EntityRef::parse(&format!("group:default/{bad}"));
+            let reference = EntityRef::parse(&format!("group:default/{bad}"), "component");
             if bad == "a" {
                 // A single character is a legal Backstage name; the loop asserts on the
                 // others, and this arm keeps the fixture honest rather than silently
@@ -651,6 +664,60 @@ spec:
                 assert!(reference.is_err(), "{bad:?} should be refused");
             }
         }
+    }
+
+    #[test]
+    fn the_implied_kind_of_a_bare_reference_comes_from_its_field() {
+        // The defect this test exists for: every bare name was read as a *component*, so
+        // `owner: team-x` became `component:default/team-x`, which resolves to nothing. The
+        // entity still parsed and still had an owner, so nothing failed — the only symptom
+        // was a join across entities that silently did not happen.
+        let yaml = r#"
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: checkout
+spec:
+  type: service
+  lifecycle: production
+  owner: team-x
+  system: checkout-system
+  providesApis:
+    - checkout-api
+  consumesApis:
+    - payments-api
+  dependsOn:
+    - cart
+"#;
+        let parsed = parse_catalog("catalog-info.yaml", yaml).expect("parses");
+        let entity = &parsed.entities[0];
+        assert_eq!(entity.owner.as_deref(), Some("group:default/team-x"));
+        assert!(entity.owner_is_team, "a group owner is a team");
+        assert_eq!(
+            entity.system.as_deref(),
+            Some("system:default/checkout-system")
+        );
+        assert_eq!(entity.provides_apis, vec!["api:default/checkout-api"]);
+        assert_eq!(entity.consumes_apis, vec!["api:default/payments-api"]);
+        assert_eq!(
+            entity.depends_on,
+            vec!["component:default/cart"],
+            "`dependsOn` is the one relationship field whose implied kind is component"
+        );
+    }
+
+    #[test]
+    fn an_explicit_kind_in_a_bare_owners_reference_still_wins() {
+        let yaml = COMPONENT.replace("group:default/team-checkout", "user:default/ravi");
+        let parsed = parse_catalog("catalog-info.yaml", &yaml).expect("parses");
+        assert_eq!(
+            parsed.entities[0].owner.as_deref(),
+            Some("user:default/ravi")
+        );
+        assert!(
+            !parsed.entities[0].owner_is_team,
+            "a person owner has no team to roll up to"
+        );
     }
 
     #[test]

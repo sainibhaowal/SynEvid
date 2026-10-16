@@ -75,6 +75,13 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: web-inspector-check
+        name: Web Inspector Render Tests (headless, zero-build)
+        entry: bash -c 'cd apps/web-inspector && npm test'
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: arch-boundary-check
         name: Architectural Boundary Gate (Zero LLM/MCP in Core Crates)
         entry: ./scripts/verify-arch-boundaries.sh

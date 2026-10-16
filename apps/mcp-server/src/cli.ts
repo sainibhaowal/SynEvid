@@ -86,8 +86,13 @@ export async function runAutopsy(
     const stdout = error.stdout ? error.stdout.toString() : '';
     const stderr = error.stderr ? error.stderr.toString() : error.message || '';
 
-    // Exit code 2 indicates a policy violation (e.g. invariant failed),
-    // which still produces valid canonical JSON evidence on stdout.
+    // Exit codes 2 and 4 still produce valid canonical JSON evidence on stdout:
+    //   2 — a policy gate failed (a breaking contract change, or a selection that could
+    //       not narrow when --fail-if-all-tests-required was asked for);
+    //   4 — the engine refused to hand back an *actionable* answer (coverage unknown or
+    //       unsupported, or partial under --strict). A refusal is not a failure, and
+    //       reporting it as a transport error would hide the one field the caller needs.
+    // 3 remains a failure: the analysis could not be performed at all.
     let data: any = null;
     try {
       data = JSON.parse(stdout);
@@ -96,7 +101,7 @@ export async function runAutopsy(
     }
 
     return {
-      success: exitCode === 0 || exitCode === 2,
+      success: exitCode === 0 || exitCode === 2 || exitCode === 4,
       exitCode,
       data,
       rawStdout: stdout,

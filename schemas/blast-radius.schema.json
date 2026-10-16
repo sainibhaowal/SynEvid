@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/blast-radius.schema.json",
+  "title": "Syncevid organisational blast radius output (Step 45)",
+  "description": "The output document of `autopsy blast-radius`: the catalog report the traversal was computed from, and the radius itself. Closed: every field the engine can emit is declared and nothing else validates. Emitting only the radius would leave every answer unverifiable — a reader could not see the entities the traversal walked, and the radius is a view of those entities rather than an independent fact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalog", "blast_radius"],
+  "properties": {
+    "catalog": {
+      "$ref": "catalog-report.schema.json"
+    },
+    "blast_radius": {
+      "$ref": "#/$defs/blastRadius"
+    }
+  },
+  "$defs": {
+    "blastRadius": {
+      "description": "One component's organisational blast radius: who owns it, what the same team owns, what its system contains, what it provides and consumes, and who depends on it. Every list is sorted and deduplicated, so two runs produce identical bytes. A reference that does not resolve to an entity in the scanned catalog is named in `unresolved` rather than dropped, and never counts as an edge.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "found",
+        "owners",
+        "owner_is_team",
+        "co_owned_components",
+        "siblings",
+        "system",
+        "domain",
+        "provided_apis",
+        "consumed_apis",
+        "dependents",
+        "unresolved",
+        "coverage",
+        "notes"
+      ],
+      "properties": {
+        "component": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*:[^/]+/.+$",
+          "description": "The canonical `kind:namespace/name` reference the traversal started from, as parsed — not as typed."
+        },
+        "found": {
+          "type": "boolean",
+          "description": "Whether the catalog contains the component at all. `false` forces `coverage` to `unknown`: nothing is known about who owns it or what it touches, which is a different statement from \"it has no owners\"."
+        },
+        "owners": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Owner references as declared and canonicalised. Empty when the component declares none."
+        },
+        "owner_is_team": {
+          "type": "boolean",
+          "description": "Whether the owner is a group. A person owner has no team to roll up to, and the note says so rather than leaving `co_owned_components` looking like an answer."
+        },
+        "co_owned_components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other components the same owner owns — the same team's on-call surface."
+        },
+        "siblings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other **components** in the same system. Entities of other kinds are not siblings."
+        },
+        "system": {
+          "type": ["string", "null"]
+        },
+        "domain": {
+          "type": ["string", "null"],
+          "description": "The system's domain, or the component's own if it declares one."
+        },
+        "provided_apis": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "consumed_apis": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Components that declare this component, or an API it provides, as a dependency."
+        },
+        "unresolved": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "References this traversal could not resolve, as prose lines naming both ends. A dangling reference degrades coverage and is never silently treated as an edge."
+        },
+        "coverage": {
+          "$ref": "catalog-report.schema.json#/$defs/coverageState"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

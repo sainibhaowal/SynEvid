@@ -119,8 +119,10 @@ If `apps/mcp-server` or `apps/web-inspector` are touched:
 ```bash
 npm run lint      # ESLint with zero errors
 npm run format    # Prettier check
-npm test          # Vitest / unit test runner
-npx tsc --noEmit  # Strict TypeScript compilation check
+npm test          # node:test — MCP server CLI integration tests, and the inspector's
+                  # headless render tests (the script the browser runs, in a vm context)
+npx tsc --noEmit  # Strict TypeScript compilation check (mcp-server; the inspector is a
+                  # single zero-build HTML file and has no compilation step)
 ```
 
 #### D. Pre-Commit Enforcement:

@@ -927,6 +927,77 @@ pub fn catalog(
     Outcome::new(exit_code, &report, text)
 }
 
+/// The organisational blast radius of one catalog component: who owns it, what the same
+/// team owns, what its system contains, what it provides and consumes, and who depends on it.
+///
+/// The output is one document with two named halves — the catalog report the radius was
+/// computed **from**, and the radius itself. Emitting only the radius would leave every
+/// answer unverifiable: a reader could not see the entities the traversal walked, and the
+/// radius is a view of those entities, not an independent fact.
+pub fn blast_radius(
+    cli: &Cli,
+    reference: &str,
+    root: Option<&Path>,
+    max_file_bytes: Option<u64>,
+    strict: bool,
+) -> Result<Outcome, CliError> {
+    use autopsy_catalog::DiscoveryOptions;
+
+    let root = root.unwrap_or(&cli.repo_root);
+    let mut options = DiscoveryOptions::new();
+    if let Some(max) = max_file_bytes {
+        options = options.with_max_file_bytes(max);
+    }
+    let report = autopsy_catalog::scan(root, &options)
+        .map_err(|error| CliError::Analysis(format!("catalog scan failed: {error}")))?;
+    let radius = report
+        .ownership
+        .blast_radius(&report.entities, reference)
+        .map_err(|error| {
+            // A refusal here is about the *reference*, not about the tree: three segments is
+            // not a catalog reference, and saying so beats scanning and then returning an
+            // empty radius for a component nobody could have declared.
+            CliError::Analysis(format!(
+                "`{reference}` is not a usable component reference: {error}"
+            ))
+        })?;
+
+    let exit_code = if strict && radius.coverage == CoverageState::Partial {
+        EXIT_UNSUPPORTED
+    } else {
+        coverage_exit(strict, radius.coverage)
+    };
+    let mut text = format!(
+        "blast radius ({}): {} owner(s), {} co-owned component(s), {} sibling(s), \
+         {} provided API(s), {} consumed API(s), {} dependent(s), coverage {:?}\n",
+        radius.component,
+        radius.owners.len(),
+        radius.co_owned_components.len(),
+        radius.siblings.len(),
+        radius.provided_apis.len(),
+        radius.consumed_apis.len(),
+        radius.dependents.len(),
+        radius.coverage
+    );
+    if !radius.found {
+        text.push_str(
+            "  the component is not in the catalog: nothing is known about who owns it or \
+             what it touches\n",
+        );
+    }
+    for unresolved in &radius.unresolved {
+        text.push_str(&format!("  unresolved: {unresolved}\n"));
+    }
+    for note in &radius.notes {
+        text.push_str(&format!("  note: {note}\n"));
+    }
+    let value = serde_json::json!({
+        "catalog": report,
+        "blast_radius": radius,
+    });
+    Outcome::new(exit_code, &value, text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

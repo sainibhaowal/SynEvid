@@ -244,7 +244,7 @@ impl OwnershipIndex {
         entities: &[CatalogEntity],
         component: &str,
     ) -> Result<OrgBlastRadius, CatalogError> {
-        let reference = EntityRef::parse(component)?.canonical();
+        let reference = EntityRef::parse(component, "component")?.canonical();
         let known: BTreeMap<&str, &CatalogEntity> = entities
             .iter()
             .map(|entity| (entity.reference.as_str(), entity))
@@ -262,6 +262,24 @@ impl OwnershipIndex {
                 ..OrgBlastRadius::empty(&reference)
             });
         };
+
+        if entity.kind != EntityKind::Component {
+            // Found, and still not actionable: the traversal is component-shaped — owners,
+            // sibling workloads, provided and consumed APIs — and every one of those fields
+            // is either undefined or would be a category error for another kind. Reporting
+            // an empty radius for a group would read as "this team touches nothing".
+            return Ok(OrgBlastRadius {
+                component: reference.clone(),
+                found: true,
+                coverage: autopsy_domain::CoverageState::Unsupported,
+                notes: vec![format!(
+                    "{reference} is a {}, not a component; an organisational blast radius is \
+                     defined for components, whose owners, systems and APIs the catalog states",
+                    entity.kind.as_str()
+                )],
+                ..OrgBlastRadius::empty(&reference)
+            });
+        }
 
         let mut notes: Vec<String> = Vec::new();
         let mut unresolved: Vec<String> = Vec::new();

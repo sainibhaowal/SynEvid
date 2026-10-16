@@ -347,6 +347,21 @@ pub enum Commands {
         #[arg(long)]
         strict: bool,
     },
+    /// The organisational blast radius of one catalog component: owners, co-owned
+    /// components, siblings, provided and consumed APIs, and dependents (Pillar 6)
+    BlastRadius {
+        /// The component reference to traverse from, e.g. `component:default/checkout`
+        reference: String,
+        /// The tree to scan (defaults to the repository root)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Bound on a single file's size, in bytes
+        #[arg(long)]
+        max_file_bytes: Option<u64>,
+        /// Exit 4 when coverage is partial as well as when it is unknown
+        #[arg(long)]
+        strict: bool,
+    },
     /// Verify repository configuration, storage integrity, and analyzer health
     Doctor,
     /// Display engine version and adapter capabilities
@@ -510,6 +525,15 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
         } => run_extension(
             cli,
             extensions::catalog(cli, root.as_deref(), *max_file_bytes, *strict),
+        ),
+        Commands::BlastRadius {
+            reference,
+            root,
+            max_file_bytes,
+            strict,
+        } => run_extension(
+            cli,
+            extensions::blast_radius(cli, reference, root.as_deref(), *max_file_bytes, *strict),
         ),
         Commands::Doctor => handle_doctor(cli),
         Commands::Version => handle_version(cli),

@@ -1,10 +1,15 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { runAutopsy } from './cli.js';
+import { asText, evidenceEnvelope } from './evidence.js';
 
 /**
  * Creates and configures the Code Autopsy Model Context Protocol (MCP) server.
- * Implements the 5 mandatory read-only tools defined in CA-TECH-001 Chapter 4.1.
+ * Implements the 5 mandatory read-only tools defined in CA-TECH-001 Chapter 4.1, plus the
+ * 4 Phase 4.2 evidence tools (temporal, test selection, distributed contract diff, and the
+ * organisational blast radius). Every one of them is read-only: they run the `autopsy` CLI
+ * with the flags the caller supplied and return what the engine said, including the exit
+ * code that says whether the answer is actionable.
  */
 export function createAutopsyMcpServer(): McpServer {
   const server = new McpServer({
@@ -300,6 +305,261 @@ export function createAutopsyMcpServer(): McpServer {
               typeof result.data === 'string'
                 ? result.data
                 : JSON.stringify(result.data, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // 6. autopsy_temporal: revision journal (Pillar 1) or mined co-change (Pillar 5)
+  server.registerTool(
+    'autopsy_temporal',
+    {
+      description:
+        'Replay repository history: the revision journal of facts that were added and removed, ' +
+        'optionally reconstructed at one revision, or the mined pairs of paths that change ' +
+        'together. Co-change is temporal co-occurrence and never causation (read-only).',
+      inputSchema: z.object({
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Target repository root directory (must contain .git)'),
+        view: z
+          .enum(['timeline', 'co_change'])
+          .optional()
+          .describe(
+            'Which temporal engine to run. `timeline` is the revision journal of facts ' +
+              '(Pillar 1); `co_change` is the mined historical co-change edges (Pillar 5). ' +
+              'They are different engines with different reports and different digests. ' +
+              'Default: timeline.'
+          ),
+        at: z
+          .string()
+          .optional()
+          .describe('Reconstruct the graph at this revision instead of emitting the whole journal (timeline only)'),
+        max_commits: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Bound on commits walked. The walker refuses a timeline that does not fit rather ' +
+              'than truncating it silently, so this must cover the reachable history.'
+          ),
+        window_seconds: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Co-change window width in seconds (default: 183 days)'),
+        min_pair_commits: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Fewest joint commits before a path pair is reported at all'),
+        strict: z
+          .boolean()
+          .optional()
+          .describe('Exit 4 when coverage is partial as well as when it is unknown'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const view = args.view || 'timeline';
+      const cliArgs: string[] = [];
+
+      if (view === 'co_change') {
+        if (args.max_commits) cliArgs.push('--max-commits', String(args.max_commits));
+        if (args.window_seconds) cliArgs.push('--window-seconds', String(args.window_seconds));
+        if (args.min_pair_commits) cliArgs.push('--min-pair-commits', String(args.min_pair_commits));
+      } else {
+        if (args.at) cliArgs.push('--at', args.at);
+        if (args.max_commits) cliArgs.push('--max-commits', String(args.max_commits));
+      }
+      if (args.strict) cliArgs.push('--strict');
+
+      const command = view === 'co_change' ? 'cochange' : 'temporal';
+      const result = await runAutopsy(command, cliArgs, { repoRoot });
+
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope(command, result)) }],
+      };
+    }
+  );
+
+  // 7. autopsy_test_selection: changed files + coverage -> the tests that must run (Pillar 2)
+  server.registerTool(
+    'autopsy_test_selection',
+    {
+      description:
+        'Select the tests a set of changed files requires, with the engine`s own fallback and ' +
+        'coverage state. A selection that could not narrow is reported as such rather than ' +
+        'guessed at (read-only).',
+      inputSchema: z.object({
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Target repository root directory'),
+        changed: z
+          .array(z.string())
+          .min(1)
+          .describe('Changed source files, POSIX-relative to the repository root'),
+        lcov: z
+          .array(z.string())
+          .optional()
+          .describe('LCOV coverage report paths, one per suite'),
+        fail_if_all_tests_required: z
+          .boolean()
+          .optional()
+          .describe('Exit 2 when the plan is `run-all-tests`: the CI gate for a selection that did not narrow'),
+        strict: z
+          .boolean()
+          .optional()
+          .describe('Exit 4 when coverage is partial as well as when it is unknown'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const cliArgs: string[] = [];
+      for (const changed of args.changed) {
+        cliArgs.push('--changed', changed);
+      }
+      for (const report of args.lcov || []) {
+        cliArgs.push('--lcov', report);
+      }
+      if (args.fail_if_all_tests_required) cliArgs.push('--fail-if-all-tests-required');
+      if (args.strict) cliArgs.push('--strict');
+
+      const result = await runAutopsy('test-select', cliArgs, { repoRoot });
+
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('test-select', result)) }],
+      };
+    }
+  );
+
+  // 8. autopsy_contract_diff: two contract revisions -> changes and a verdict (Pillar 3)
+  server.registerTool(
+    'autopsy_contract_diff',
+    {
+      description:
+        'Diff two revisions of one distributed contract (OpenAPI, AsyncAPI, AsyncAPI flows, ' +
+        'or Pact) and report breaking versus non-breaking changes with the verdict and its ' +
+        'coverage. A `compatible` verdict is only ever returned with verified coverage ' +
+        '(read-only).',
+      inputSchema: z.object({
+        from: z.string().describe('The earlier document: the previous revision, the Pact, or the flows document'),
+        to: z.string().describe('The later document: the current revision, or the provider OpenAPI spec'),
+        protocol: z
+          .enum(['openapi', 'asyncapi', 'asyncapi-flows', 'pact'])
+          .optional()
+          .describe('Which contract protocol to compare (default: openapi)'),
+        strict: z
+          .boolean()
+          .optional()
+          .describe('Exit 4 when the verdict is `unknown` or coverage is partial'),
+      }),
+    },
+    async (args) => {
+      const cliArgs: string[] = [args.from, args.to];
+      if (args.protocol) cliArgs.push('--protocol', args.protocol);
+      if (args.strict) cliArgs.push('--strict');
+
+      const result = await runAutopsy('contract-dist', cliArgs, { repoRoot: '.' });
+
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('contract-dist', result)) }],
+      };
+    }
+  );
+
+  // 9. autopsy_distributed_blast_radius: ownership + observed topology for one component
+  server.registerTool(
+    'autopsy_distributed_blast_radius',
+    {
+      description:
+        'The cross-service blast radius of one catalog component: its owners, the components ' +
+        'the same team owns, its siblings, the APIs it provides and consumes, and the ' +
+        'components that depend on it — plus, when a trace export is supplied, which of those ' +
+        'routes and callers were actually observed. Unresolved references are named and ' +
+        'degrade coverage; they are never counted as edges (read-only).',
+      inputSchema: z.object({
+        component: z
+          .string()
+          .describe('The component reference to traverse from, e.g. `component:default/checkout`. A bare name is read as a component.'),
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Repository root (used for the catalog scan when catalog_root is absent)'),
+        catalog_root: z
+          .string()
+          .optional()
+          .describe('The tree to scan for catalog entities (defaults to the repository root)'),
+        traces: z
+          .string()
+          .optional()
+          .describe('An OTLP/JSON trace export to correlate against the observed surface'),
+        surface: z
+          .string()
+          .optional()
+          .describe('A declared-surface JSON document to correlate the trace export against'),
+        salt_hex: z
+          .string()
+          .optional()
+          .describe(
+            'The pseudonymisation salt for the trace export: exactly 64 hex characters. ' +
+              'Required when `traces` is given, and never defaulted — a default salt would ' +
+              'make pseudonyms comparable across repositories and therefore forgeable.'
+          ),
+        windows: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Minimum observation windows a dead-code claim needs (default: 3)'),
+        strict: z
+          .boolean()
+          .optional()
+          .describe('Exit 4 when coverage is partial as well as when it is unknown'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      if (args.traces && !args.salt_hex) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: asText({
+                error:
+                  'the trace export requires salt_hex: telemetry has no default salt, and a ' +
+                  'default would make pseudonyms comparable across repositories',
+              }),
+            },
+          ],
+        };
+      }
+
+      const radiusArgs: string[] = [args.component];
+      if (args.catalog_root) radiusArgs.push('--root', args.catalog_root);
+      if (args.strict) radiusArgs.push('--strict');
+      const radius = await runAutopsy('blast-radius', radiusArgs, { repoRoot });
+
+      let topology: ReturnType<typeof evidenceEnvelope> | null = null;
+      if (args.traces) {
+        const telemetryArgs: string[] = [args.traces, '--salt', args.salt_hex as string];
+        if (args.surface) telemetryArgs.push('--surface', args.surface);
+        if (args.windows) telemetryArgs.push('--windows', String(args.windows));
+        if (args.strict) telemetryArgs.push('--strict');
+        topology = evidenceEnvelope('telemetry', await runAutopsy('telemetry', telemetryArgs, { repoRoot }));
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: asText({ ...evidenceEnvelope('blast-radius', radius), topology }),
           },
         ],
       };

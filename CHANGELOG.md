@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–6 (Steps 28–44) (2026-10-16)
+## [Unreleased] - Phase 4.2 (Steps 28–45, all six pillars) (2026-10-16)
 
-Steps 28–44 of the 4.2 implementation sequence. Pillars 1–5 are complete and
-Pillar 6 is **in progress** (Steps 43 and 44 done; the inspector layer comes
-next). Step 45 is **not** implemented. See
+Steps 28–45 of the 4.2 implementation sequence — the sequence's last step is
+done, so all six pillars are complete end-to-end: engine, CLI, MCP tools and
+Web Inspector. See
 `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
@@ -18,8 +18,9 @@ next). Step 45 is **not** implemented. See
 `docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
 `docs/evidence/23_phase4_2_pillar4_topology.md`,
 `docs/evidence/24_phase4_2_pillar5_mining.md`,
-`docs/evidence/25_phase4_2_pillar6_catalog.md`, and
-`docs/evidence/26_phase4_2_pillar6_cli.md`.
+`docs/evidence/25_phase4_2_pillar6_catalog.md`,
+`docs/evidence/26_phase4_2_pillar6_cli.md`, and
+`docs/evidence/27_phase4_2_pillar6_step45_views.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -521,7 +522,63 @@ next). Step 45 is **not** implemented. See
 
 ## [Unreleased] - Forensic closure (2026-10-09)
 
-### Fixed
+- **Four new MCP read-only tools (Step 45).** `autopsy_temporal` (Pillar 1 journal and `at`
+  reconstruction, plus Pillar 5's mined co-change under an explicit `view` selector),
+  `autopsy_test_selection` (Pillar 2), `autopsy_contract_diff` (Pillar 3, all four
+  protocols) and `autopsy_distributed_blast_radius` (Pillar 6 ownership composed with
+  Pillar 4 observed topology — the design's cross-repo blast radius *is* that composition).
+  Every tool returns an envelope carrying the engine's exit code, because the code is part
+  of the answer: `0` actionable, `2` a policy gate failed, `4` **not actionable** (coverage
+  unknown/unsupported, or partial under `--strict`). The MCP layer previously understood only
+  `0` and `2`, so every Step 44 refusal would have surfaced as a failed call with the refusal
+  buried in stderr; `cli.ts` now treats `4` as evidence.
+- **`autopsy blast-radius <component-ref>`** so the organisational traversal has one
+  implementation rather than one in Rust and a second one in the viewer. Its output document
+  is `{catalog, blast_radius}` on every path, including "not found": the radius is a view of
+  the entities it walked, and a reader has to be able to see them. Closed schema in
+  `schemas/blast-radius.schema.json`, asserted as set equality in both directions against
+  what the engine emits.
+- **Two Web Inspector views.** *Temporal Evolution Timeline*: a slider over the journal's
+  revisions with active/added/retired facts and a badge on anything that did not fully
+  resolve. Revision order is first appearance of `valid_from` and the caption says so — the
+  journal carries commit ids, not timestamps, and the viewer will not put a clock on a history
+  the engine deliberately does not date. A bare fact array is accepted, and then the page says
+  the envelope's coverage and granularity notes are not in the document rather than inventing
+  them. *Distributed Blast Radius*: a radial multigraph of the stated references, with
+  unresolved references drawn dashed and named **and never as edges**, the catalog's
+  "what the scan did not read" beside the graph, and the observation summary when a trace
+  export was correlated. A component the catalog does not contain renders no graph and says
+  the omission is a refusal to answer, not an empty answer.
+- The page refuses any other document with a message naming the three artifact kinds it
+  renders. It stays one static file: zero build, zero backend, no network API, no storage
+  write, no clock — asserted by a source guard, not by convention.
+- Wiring kept in step with the new layer (AGENTS.md §4): a `web-inspector-check` pre-commit
+  hook, the same check in `Makefile`'s `check`, a CI step in `mcp-server-check` (now
+  "TypeScript MCP Server & Web Inspector Checks"), and the language rules text corrected —
+  the tests are `node:test`, not Vitest, and the inspector has no compilation step.
+
+- **The implied kind of a bare Backstage reference was always `component`.** `owner: team-x`
+  became `component:default/team-x`, `system: checkout-system` became
+  `component:default/checkout-system`, an entry of `providesApis` became a component — each a
+  well-formed reference that resolves to nothing. Nothing failed: the entities parsed, the
+  owner was present, the catalog reported `verified` coverage, and every join *across*
+  entities silently did not happen, so co-ownership was empty and siblings were keyed on a
+  fabricated reference. The implied kind is a property of the field, not of the string, and is
+  now threaded per field (`owner` → group, `system` → system, `domain` → domain,
+  `providesApis`/`consumesApis` → api, `dependsOn`/`subcomponentOf` → component, the CLI entry
+  point → component). Found by building the blast-radius view on a catalog that used bare
+  names — the spelling real catalogs use, and the one the Step 43 fixtures did not.
+- **A modelled kind that is not a component** (system, domain, API, resource) reported an
+  all-empty blast radius, which reads as "this system touches nothing". It now reports
+  coverage `unsupported` with a note saying an organisational blast radius is defined for
+  components.
+- **`apps/mcp-server`'s tests imported a `dist/` that nothing built.** `dist/` is gitignored
+  and the hook ran `typecheck && lint && test` with no build step, so the hook passed only on
+  machines with a stale build from an earlier manual run and would have failed on a fresh
+  checkout for reasons unrelated to the change. `pretest` now builds.
+- The inspector's helpers would have been `export`ed inside the MCP server factory; caught by
+  `tsc` and moved to `apps/mcp-server/src/evidence.ts`, which also made the exit-code rule
+  directly testable.
 - **Real two-state `diff`/`verify` (FR-007, FR-010):** `baseline` now persists
   canonical per-file bytes to the content-addressed cache; `diff --before`
   and `verify --baseline-id` rebuild the genuine before-state graph and
