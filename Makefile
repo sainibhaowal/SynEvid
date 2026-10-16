@@ -1,6 +1,6 @@
 .PHONY: all check test fmt determinism cross-platform boundaries schemas pre-commit
 
-export TMPDIR ?= /home/ravi/.cache/tmp
+export TMPDIR ?= /tmp
 
 all: check
 

@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -51,7 +53,7 @@ jobs:
 
       - name: Performance Tier Regression Tripwire
         run: |
-          ./scripts/verify-perf-tiers.sh
+          AUTOPSY_BIN="$PWD/target/release/autopsy" ./scripts/verify-perf-tiers.sh
 
       - name: Generate Rich Benchmark Telemetry Summary
         run: |

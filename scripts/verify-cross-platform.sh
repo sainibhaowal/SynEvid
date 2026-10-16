@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export TMPDIR="${TMPDIR:-/home/ravi/.cache/tmp}"
+export TMPDIR="${TMPDIR:-/tmp}"
 mkdir -p "${TMPDIR}"
 
 echo "================================================================="

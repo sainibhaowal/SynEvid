@@ -12,7 +12,10 @@ targets = [
 ]
 
 [advisories]
-ignore = []
+ignore = [
+    # serde_yaml archived upstream; unsafe-libyaml has no security vulnerability, only unmaintained notice
+    "RUSTSEC-2024-0449",
+]
 
 [licenses]
 allow = [

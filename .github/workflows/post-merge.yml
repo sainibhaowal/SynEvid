@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -89,7 +91,7 @@ jobs:
             cp "target/release/${{ matrix.binary_name }}" "$DIST_DIR/"
           fi
           
-          cp LICENSE NOTICE README.md "$DIST_DIR/"
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "$DIST_DIR/"
           
           if [ "${{ matrix.pkg_type }}" == "zip" ]; then
             7z a "autopsy-${{ matrix.target }}.zip" "$DIST_DIR"
