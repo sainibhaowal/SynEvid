@@ -67,18 +67,19 @@ export default function HomePage() {
             transition={{ duration: 0.5 }}
             className="flex items-center space-x-3.5"
           >
-            <div className="w-9 h-9 flex items-center justify-center shrink-0">
+            {/* Accurate SynEvid Crystal Logo in Clean White Box */}
+            <div className="relative group flex items-center justify-center w-11 h-11 md:w-12 md:h-12 rounded-xl bg-white p-1 shadow-[0_0_18px_rgba(255,255,255,0.35)] hover:shadow-[0_0_26px_rgba(255,255,255,0.6)] transition-all shrink-0 overflow-hidden">
               <img
-                src="/assets/logo.svg"
-                alt="SynEvid Logo"
-                className="w-full h-full object-contain drop-shadow-[0_0_12px_rgba(0,240,255,0.7)]"
+                src="/assets/logo_clean_emblem.png"
+                alt="SynEvid Crystal Logo"
+                className="w-full h-full object-contain"
               />
             </div>
-            <div className="flex flex-col">
-              <span className="font-brand font-bold text-xl tracking-[0.16em] text-white uppercase neon-title-glow">
+            <div className="flex flex-col justify-center">
+              <span className="font-brand font-bold text-xl md:text-2xl tracking-[0.16em] text-white uppercase neon-title-glow leading-tight">
                 SYNEVID
               </span>
-              <span className="text-[9px] tracking-[0.22em] text-cyan-300 font-brand font-medium uppercase opacity-90">
+              <span className="text-[9px] md:text-[10px] tracking-[0.24em] text-cyan-300 font-brand font-semibold uppercase opacity-95">
                 CODE AUTOPSY
               </span>
             </div>
@@ -98,7 +99,7 @@ export default function HomePage() {
               Benchmarks
             </a>
             <a href="#tooling" className="hover:text-cyan-400 transition-colors">
-              Inspector & MCP
+              Inspector &amp; MCP
             </a>
           </nav>
 
@@ -144,12 +145,12 @@ export default function HomePage() {
             transition={{ duration: 0.7 }}
             className="mb-8"
           >
-            <h1 className="font-brand text-5xl sm:text-7xl lg:text-8xl font-black uppercase tracking-[0.18em] text-white leading-none mb-4 neon-title-glow">
+            <h1 className="font-brand text-5xl sm:text-7xl lg:text-8xl font-bold uppercase tracking-[0.16em] text-white leading-none mb-4 neon-banner-glow">
               <span className="bg-gradient-to-b from-white via-cyan-100 to-cyan-300 bg-clip-text text-transparent">
                 SYNEVID
               </span>
             </h1>
-            <div className="font-brand text-xs sm:text-sm lg:text-base font-semibold uppercase tracking-[0.24em] text-cyan-200/90 max-w-4xl mx-auto neon-sub-glow">
+            <div className="font-brand text-xs sm:text-sm lg:text-base font-semibold uppercase tracking-[0.22em] text-cyan-200/90 max-w-4xl mx-auto neon-sub-glow">
               DETERMINISTIC VERIFICATION &amp; CHANGE-IMPACT ENGINE
             </div>
           </motion.div>
@@ -478,8 +479,17 @@ export default function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-10 mb-12">
             <div className="md:col-span-1">
               <div className="flex items-center space-x-3 mb-4">
-                <img src="/assets/logo.svg" alt="SynEvid Logo" className="w-8 h-8 object-contain" />
-                <span className="font-extrabold text-lg text-white font-mono">SynEvid</span>
+                <div className="relative group flex items-center justify-center w-10 h-10 rounded-lg bg-white p-1 shadow-[0_0_12px_rgba(255,255,255,0.3)] shrink-0 overflow-hidden">
+                  <img src="/assets/logo_clean_emblem.png" alt="SynEvid Logo" className="w-full h-full object-contain" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-brand font-bold text-lg tracking-[0.16em] text-white uppercase neon-title-glow leading-tight">
+                    SYNEVID
+                  </span>
+                  <span className="text-[8px] tracking-[0.2em] text-cyan-300 font-brand font-medium uppercase opacity-90">
+                    CODE AUTOPSY
+                  </span>
+                </div>
               </div>
               <p className="text-xs text-gray-400 leading-relaxed mb-4">
                 Evidence Is All You Need. Offline, mathematically deterministic software verification & change-impact engine.

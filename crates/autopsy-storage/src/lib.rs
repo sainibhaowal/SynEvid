@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub mod rows;
+pub use rows::{CoChangeEdgeRow, ContractRow, TemporalFactRow, TestMappingRow, validate_coverage};
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("Database error: {0}")]
@@ -21,6 +24,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("Schema migration error: {0}")]
     Migration(String),
+    #[error("Invalid row: {0}")]
+    InvalidRow(String),
 }
 
 /// Configuration options for storage initialization.
@@ -224,6 +229,49 @@ impl StorageEngine {
 
                 INSERT INTO schema_migrations (version, applied_at)
                 VALUES (2, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
+        // Migration 003 — the pillar tables get their production write path (Evidence 32).
+        //
+        // Two changes, both safe because no production path ever wrote these tables:
+        //
+        // 1. `temporal_facts.coverage` — a fact row without its coverage state would read
+        //    back as an unqualified answer. The `DEFAULT 'unknown'` exists only because
+        //    SQLite requires one for NOT NULL on ALTER TABLE; the save API always writes
+        //    the real state, and the table has never had a row.
+        // 2. `co_change_matrix` is recreated in the shape the engine actually produces:
+        //    window-scoped primary key (`window_id` is the commit-set digest, an id, not a
+        //    timestamp, so two windows coexist), ppm integers for support/confidence/lift,
+        //    and the `claim` column that keeps association from ever reading as causation.
+        //    The v2 shape stored a wall-clock window and no claim, which no writer ever
+        //    produced; any rows dropped here were test rows in development databases.
+        if current_version < 3 {
+            conn.execute_batch(
+                "BEGIN;
+                DROP INDEX IF EXISTS idx_co_change_matrix_a;
+                DROP INDEX IF EXISTS idx_co_change_matrix_b;
+                DROP TABLE IF EXISTS co_change_matrix;
+                CREATE TABLE co_change_matrix (
+                    entity_a TEXT NOT NULL,
+                    entity_b TEXT NOT NULL,
+                    window_id TEXT NOT NULL,
+                    commits_together INTEGER NOT NULL,
+                    support_ppm INTEGER NOT NULL,
+                    confidence_a_to_b_ppm INTEGER NOT NULL,
+                    lift_ppm INTEGER NOT NULL,
+                    claim TEXT NOT NULL,
+                    coverage TEXT NOT NULL,
+                    PRIMARY KEY (entity_a, entity_b, window_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_co_change_matrix_a
+                    ON co_change_matrix (entity_a, lift_ppm);
+                CREATE INDEX IF NOT EXISTS idx_co_change_matrix_b
+                    ON co_change_matrix (entity_b, lift_ppm);
+                ALTER TABLE temporal_facts ADD COLUMN coverage TEXT NOT NULL DEFAULT 'unknown';
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (3, datetime('now'));
                 COMMIT;",
             )?;
         }
@@ -722,7 +770,8 @@ mod tests {
     #[test]
     fn test_migration_002_creates_pillar_tables() {
         let engine = StorageEngine::in_memory().unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 2);
+        // 002 creates the tables; 003 reshapes two of them. A fresh database carries both.
+        assert_eq!(engine.schema_version().unwrap(), 3);
 
         let tables = table_names(&engine);
         for expected in [
@@ -788,7 +837,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 2);
+        // The upgrade runs through 002 *and* 003 in place.
+        assert_eq!(engine.schema_version().unwrap(), 3);
 
         let tables = table_names(&engine);
         assert!(tables.contains(&"temporal_facts".to_string()));
@@ -816,11 +866,11 @@ mod tests {
 
         for _ in 0..3 {
             let engine = StorageEngine::open(&db_path, opts()).unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 2);
+            assert_eq!(engine.schema_version().unwrap(), 3);
             // Re-running migrations explicitly must be a no-op.
             let mut engine = engine;
             engine.run_migrations().unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 2);
+            assert_eq!(engine.schema_version().unwrap(), 3);
         }
 
         // Exactly one row per migration version: no duplicate application.
@@ -828,8 +878,113 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 2, "expected versions 1 and 2 exactly once each");
+        assert_eq!(count, 3, "expected versions 1, 2 and 3 exactly once each");
 
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// Creates a database containing *only* the v2 pillar schema, to prove migration 003
+    /// upgrades a pre-existing v2 database in place. Two documented consequences are
+    /// asserted below: the v2 co-change shape is replaced (it had no writer, so the rows
+    /// it held were development rows), and a v2 fact row survives with its coverage
+    /// defaulted — the `DEFAULT 'unknown'` that SQLite's ALTER TABLE requires.
+    fn create_v2_only_database(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE temporal_facts (
+                fact_id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                valid_from TEXT NOT NULL,
+                valid_to TEXT,
+                evidence_digest TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE co_change_matrix (
+                entity_a TEXT NOT NULL,
+                entity_b TEXT NOT NULL,
+                commit_count INTEGER NOT NULL,
+                lift REAL NOT NULL,
+                window_start TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                PRIMARY KEY (entity_a, entity_b)
+            );
+            INSERT INTO schema_migrations (version, applied_at)
+            VALUES (2, datetime('now'));
+            INSERT INTO temporal_facts
+                (fact_id, subject, predicate, object, valid_from, valid_to, evidence_digest, created_at)
+            VALUES ('f-1', 'src/a.ts', 'file_present', 'blob:1', 'r1', NULL, 'd', 0);
+            INSERT INTO co_change_matrix
+                (entity_a, entity_b, commit_count, lift, window_start, window_end)
+            VALUES ('old.ts', 'older.ts', 3, 1.5, 'w0', 'w1');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_migration_003_upgrades_v2_database_in_place() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("autopsy-test-mig-v3-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("autopsy.db");
+
+        create_v2_only_database(&db_path);
+
+        let mut engine = StorageEngine::open(
+            &db_path,
+            StorageOptions {
+                use_wal: false,
+                cache_dir: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(engine.schema_version().unwrap(), 3);
+
+        // The v2 fact survived, and its coverage is the documented ALTER default. A row
+        // that read back as `verified` would be a lie; `unknown` says "no coverage stated".
+        let facts = engine.load_temporal_facts().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].fact_id, "f-1");
+        assert_eq!(facts[0].coverage, "unknown");
+
+        // The engine can now write an honest coverage for it.
+        let updated = TemporalFactRow {
+            coverage: "verified".to_string(),
+            ..facts[0].clone()
+        };
+        engine
+            .save_temporal_facts(std::slice::from_ref(&updated))
+            .unwrap();
+        assert_eq!(engine.load_temporal_facts().unwrap(), vec![updated]);
+
+        // The v2 edge row is gone with its table, and the new shape accepts rows.
+        assert!(engine.load_co_change_edges(None).unwrap().is_empty());
+        let edge = CoChangeEdgeRow {
+            entity_a: "a.ts".to_string(),
+            entity_b: "b.ts".to_string(),
+            window_id: "w".repeat(64),
+            commits_together: 4,
+            support_ppm: 100_000,
+            confidence_a_to_b_ppm: 200_000,
+            lift_ppm: 1_000_000,
+            claim: "temporal_co_occurrence_only".to_string(),
+            coverage: "partial".to_string(),
+        };
+        engine
+            .save_co_change_edges(std::slice::from_ref(&edge))
+            .unwrap();
+        assert_eq!(engine.load_co_change_edges(None).unwrap(), vec![edge]);
+
+        // Re-running migrations on the upgraded database is a no-op.
+        engine.run_migrations().unwrap();
+        assert_eq!(engine.schema_version().unwrap(), 3);
+
+        drop(engine);
         let _ = fs::remove_dir_all(temp_dir);
     }
 
@@ -915,25 +1070,53 @@ mod tests {
 
     #[test]
     fn test_co_change_matrix_composite_key_and_lift_storage() {
+        // Migration 003 reshaped this table to what the engine actually produces: the
+        // window is an id (the commit-set digest), the ratios are the engine's ppm
+        // integers, and the claim column keeps association from reading as causation.
+        // The v2 shape (wall-clock window, float lift, no claim) had no writer, so the
+        // test documents the v3 shape through the public write path.
         let engine = StorageEngine::in_memory().unwrap();
-        let conn = engine.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO co_change_matrix
-             (entity_a, entity_b, commit_count, lift, window_start, window_end)
-             VALUES ('a.ts', 'b.ts', 7, 3.25, 'w0', 'w1');",
-            [],
-        )
-        .unwrap();
-
-        let (count, lift): (i64, f64) = conn
-            .query_row(
-                "SELECT commit_count, lift FROM co_change_matrix
-                 WHERE entity_a = 'a.ts' AND entity_b = 'b.ts';",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+        let row = CoChangeEdgeRow {
+            entity_a: "a.ts".to_string(),
+            entity_b: "b.ts".to_string(),
+            window_id: "d".repeat(64),
+            commits_together: 7,
+            support_ppm: 250_000,
+            confidence_a_to_b_ppm: 350_000,
+            lift_ppm: 3_250_000,
+            claim: "temporal_co_occurrence_only".to_string(),
+            coverage: "verified".to_string(),
+        };
+        engine
+            .save_co_change_edges(std::slice::from_ref(&row))
             .unwrap();
-        assert_eq!(count, 7);
-        assert!((lift - 3.25).abs() < f64::EPSILON);
+
+        let loaded = engine.load_co_change_edges(None).unwrap();
+        assert_eq!(loaded, vec![row.clone()]);
+        // A second window coexists; neither overwrites the other.
+        let other = CoChangeEdgeRow {
+            window_id: "e".repeat(64),
+            ..row.clone()
+        };
+        engine
+            .save_co_change_edges(std::slice::from_ref(&other))
+            .unwrap();
+        let both = engine.load_co_change_edges(None).unwrap();
+        assert_eq!(both.len(), 2);
+        assert_eq!(
+            engine.load_co_change_edges(Some(&row.window_id)).unwrap(),
+            vec![row.clone()]
+        );
+
+        // The natural key is (a, b, window): re-saving replaces its own edge only.
+        let replaced = CoChangeEdgeRow {
+            commits_together: 9,
+            ..row.clone()
+        };
+        engine
+            .save_co_change_edges(std::slice::from_ref(&replaced))
+            .unwrap();
+        let edges = engine.load_co_change_edges(Some(&row.window_id)).unwrap();
+        assert_eq!(edges, vec![replaced]);
     }
 }

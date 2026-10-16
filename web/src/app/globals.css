@@ -1,7 +1,37 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'SynevidDisplay';
+  src: url('/fonts/synevid-display.woff2') format('woff2'),
+       url('/fonts/synevid-display.ttf') format('truetype');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SynevidSlab';
+  src: url('/fonts/synevid-slab.woff2') format('woff2'),
+       url('/fonts/synevid-slab.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SynevidLibre';
+  src: url('/fonts/synevid-libre.woff2') format('woff2'),
+       url('/fonts/synevid-libre.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --font-brand: var(--font-orbitron), 'Orbitron', sans-serif;
+  --font-brand: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  --font-display: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  --font-slab: 'SynevidSlab', serif;
+  --font-libre: 'SynevidLibre', sans-serif;
   --font-sans: var(--font-space), 'Space Grotesk', -apple-system, sans-serif;
   --font-mono: var(--font-mono), 'SF Mono', Consolas, monospace;
 }
@@ -34,26 +64,40 @@ body {
 }
 
 /* ==========================================================================
-   Cybernetic Sci-Fi Brand Typography (Matching Official SynEvid Banner)
+   Cybernetic Sci-Fi Brand Typography (Rebranded SynEvid Display Letterforms)
    ========================================================================== */
 .font-brand {
-  font-family: var(--font-orbitron), 'Orbitron', sans-serif;
-  letter-spacing: 0.15em;
+  font-family: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
 }
 
-.neon-title-glow {
+.font-display {
+  font-family: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+}
+
+.font-slab {
+  font-family: 'SynevidSlab', serif;
+}
+
+.font-libre {
+  font-family: 'SynevidLibre', sans-serif;
+}
+
+.neon-banner-glow {
   text-shadow: 
-    0 0 10px rgba(0, 240, 255, 0.9),
-    0 0 25px rgba(0, 240, 255, 0.6),
-    0 0 50px rgba(0, 240, 255, 0.35);
+    0 0 10px rgba(0, 240, 255, 0.95),
+    0 0 25px rgba(0, 240, 255, 0.7),
+    0 0 50px rgba(0, 240, 255, 0.4),
+    0 0 80px rgba(0, 240, 255, 0.2);
 }
 
 .neon-sub-glow {
-  text-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+  text-shadow: 
+    0 0 10px rgba(0, 240, 255, 0.6),
+    0 0 20px rgba(0, 240, 255, 0.3);
 }
 
 h1, h2, h3, h4 {
-  font-family: var(--font-orbitron), 'Orbitron', var(--font-space), sans-serif;
+  font-family: var(--font-chakra), 'Chakra Petch', var(--font-space), sans-serif;
   text-wrap: balance;
 }
 

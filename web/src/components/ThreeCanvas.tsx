@@ -46,13 +46,14 @@ export default function ThreeCanvas() {
       { color: '#ffffff', glow: 'rgba(255, 255, 255, 1.0)' },   // Pure White
     ];
 
-    // 260 Fine Pinpoint Neon Particles spread across entire viewport
-    const particleCount = 260;
+    // 220 Fine Pinpoint Neon Particles spread across entire viewport
+    const particleCount = 220;
     const particles: Particle[] = [];
 
     for (let i = 0; i < particleCount; i++) {
       const pTheme = palette[i % palette.length];
-      const speed = 0.22 + Math.random() * 0.48;
+      // Cinematic slow-motion drift
+      const speed = 0.04 + Math.random() * 0.08;
       const angle = Math.random() * Math.PI * 2;
 
       particles.push({
@@ -60,18 +61,18 @@ export default function ThreeCanvas() {
         y: Math.random() * height,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        baseRadius: 0.65 + Math.random() * 1.1,
-        currentRadius: 1.0,
+        baseRadius: 0.6 + Math.random() * 0.9,
+        currentRadius: 0.9,
         color: pTheme.color,
         glowColor: pTheme.glow,
         flash: 0,
         pulsePhase: Math.random() * Math.PI * 2,
-        pulseSpeed: 0.02 + Math.random() * 0.035,
+        pulseSpeed: 0.006 + Math.random() * 0.01,
       });
     }
 
-    // 60 Traveling Electric Energy Sparks
-    const sparkCount = 60;
+    // 28 Elegant Slow-Motion Traveling Electric Energy Sparks
+    const sparkCount = 28;
     const sparks: Spark[] = [];
     const sparkColorChoices = ['#ffffff', '#00f0ff', '#38bdf8', '#c084fc'];
 
@@ -80,7 +81,8 @@ export default function ThreeCanvas() {
         startIdx: Math.floor(Math.random() * particleCount),
         endIdx: Math.floor(Math.random() * particleCount),
         progress: Math.random(),
-        speed: 0.018 + Math.random() * 0.026,
+        // Graceful slow-motion transit speed
+        speed: 0.0025 + Math.random() * 0.005,
         sparkColor: sparkColorChoices[s % sparkColorChoices.length],
       });
     }
@@ -145,10 +147,10 @@ export default function ThreeCanvas() {
           p.y -= (dy / distToMouse) * force * 10;
         }
 
-        // Contact flash decay
+        // Contact flash decay (gentle slow-motion phosphorescent fade)
         if (p.flash > 0.01) {
-          p.flash *= 0.86;
-          p.currentRadius = p.baseRadius + breath + p.flash * 2.8;
+          p.flash *= 0.94;
+          p.currentRadius = p.baseRadius + breath + p.flash * 1.4;
         } else {
           p.currentRadius = p.baseRadius + breath;
         }
@@ -168,13 +170,13 @@ export default function ThreeCanvas() {
 
           if (distSq < maxDist * maxDist) {
             const dist = Math.sqrt(distSq);
-            const alpha = (1 - dist / maxDist) * 0.35;
+            const alpha = (1 - dist / maxDist) * 0.22;
 
             ctx.beginPath();
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
-            ctx.strokeStyle = `rgba(0, 240, 255, ${alpha + (p1.flash + p2.flash) * 0.3})`;
-            ctx.lineWidth = 0.65;
+            ctx.strokeStyle = `rgba(0, 240, 255, ${alpha + (p1.flash + p2.flash) * 0.15})`;
+            ctx.lineWidth = 0.55;
             ctx.stroke();
 
             activeConnections.push([i, j]);
@@ -188,23 +190,23 @@ export default function ThreeCanvas() {
 
         ctx.beginPath();
         ctx.arc(p.x, p.y, Math.max(0.4, p.currentRadius), 0, Math.PI * 2);
-        ctx.fillStyle = p.flash > 0.15 ? '#ffffff' : p.color;
+        ctx.fillStyle = p.flash > 0.2 ? '#ffffff' : p.color;
         ctx.shadowColor = p.glowColor;
-        ctx.shadowBlur = p.flash > 0.15 ? 12 : 5;
+        ctx.shadowBlur = p.flash > 0.2 ? 8 : 4;
         ctx.fill();
         ctx.shadowBlur = 0; // reset
       }
 
-      // 4. Draw Traveling Electric Sparks along Dynamic Circuits
+      // 4. Draw Traveling Electric Sparks along Dynamic Circuits (Slow-Motion)
       for (let s = 0; s < sparkCount; s++) {
         const spark = sparks[s];
         spark.progress += spark.speed;
 
         // If spark arrived at destination or connection severed
         if (spark.progress >= 1.0 || activeConnections.length === 0) {
-          // Trigger electrical contact flash!
+          // Trigger gentle slow-motion electrical glow
           if (particles[spark.endIdx]) {
-            particles[spark.endIdx].flash = 1.0;
+            particles[spark.endIdx].flash = 0.45;
           }
 
           if (activeConnections.length > 0) {
@@ -213,7 +215,7 @@ export default function ThreeCanvas() {
             spark.endIdx = randPair[1];
           }
           spark.progress = 0;
-          spark.speed = 0.02 + Math.random() * 0.028;
+          spark.speed = 0.0025 + Math.random() * 0.005;
         }
 
         const p1 = particles[spark.startIdx];
@@ -224,12 +226,12 @@ export default function ThreeCanvas() {
           const sx = (1 - t) * p1.x + t * p2.x;
           const sy = (1 - t) * p1.y + t * p2.y;
 
-          // Electric bright spark dot
+          // Electric bright spark dot in graceful slow motion
           ctx.beginPath();
-          ctx.arc(sx, sy, 1.3, 0, Math.PI * 2);
+          ctx.arc(sx, sy, 1.1, 0, Math.PI * 2);
           ctx.fillStyle = spark.sparkColor;
           ctx.shadowColor = '#00f0ff';
-          ctx.shadowBlur = 9;
+          ctx.shadowBlur = 6;
           ctx.fill();
           ctx.shadowBlur = 0;
         }
