@@ -392,11 +392,12 @@ pub struct GitObjectStore {
     resolved_refs: BTreeMap<String, ObjectId>,
 }
 
-/// A single `.pack` / `.idx` pair.
+/// A single `.pack` / `.idx` pair with in-memory pack cache.
 #[derive(Debug)]
 struct PackedObjects {
     index: PackIndex,
     pack_path: PathBuf,
+    pack_data: Vec<u8>,
 }
 
 impl GitObjectStore {
@@ -515,9 +516,12 @@ impl GitObjectStore {
         for idx_path in idx_paths {
             let bytes = fs::read(&idx_path).map_err(|e| io_err(&idx_path, e))?;
             let index = PackIndex::parse(&bytes)?;
+            let pack_path = idx_path.with_extension("pack");
+            let pack_data = fs::read(&pack_path).map_err(|e| io_err(&pack_path, e))?;
             packs.push(PackedObjects {
                 index,
-                pack_path: idx_path.with_extension("pack"),
+                pack_path,
+                pack_data,
             });
         }
         Ok(packs)
@@ -688,7 +692,7 @@ impl GitObjectStore {
         oid: ObjectId,
         depth: usize,
     ) -> Result<(String, Vec<u8>), GitError> {
-        let bytes = fs::read(&pack.pack_path).map_err(|e| io_err(&pack.pack_path, e))?;
+        let bytes = &pack.pack_data;
         let at = offset as usize;
 
         if bytes.len() < 12 || &bytes[0..4] != b"PACK" {
@@ -697,7 +701,7 @@ impl GitObjectStore {
                 pack.pack_path.display()
             )));
         }
-        let pack_version = read_u32(&bytes, 4)?;
+        let pack_version = read_u32(bytes, 4)?;
         if pack_version != 2 && pack_version != 3 {
             return Err(GitError::Unsupported(format!(
                 "pack version {pack_version}"
@@ -747,8 +751,8 @@ impl GitObjectStore {
                     .checked_sub(base_rel)
                     .ok_or_else(|| GitError::Malformed("ofs-delta base underflow".into()))?;
 
-                let (kind_name, base) = self.read_packed_at(&bytes, base_offset, depth + 1)?;
-                let delta = inflate_from(&bytes, cursor, &oid.to_hex())?;
+                let (kind_name, base) = self.read_packed_at(bytes, base_offset, depth + 1)?;
+                let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
@@ -762,12 +766,12 @@ impl GitObjectStore {
                 let base_oid = ObjectId(arr);
 
                 let (kind_name, base) = self.raw_object(base_oid, depth + 1)?;
-                let delta = inflate_from(&bytes, cursor, &oid.to_hex())?;
+                let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
             concrete => {
-                let data = inflate_from(&bytes, cursor, &oid.to_hex())?;
+                let data = inflate_from(bytes, cursor, &oid.to_hex())?;
                 let name = concrete
                     .type_name()
                     .ok_or_else(|| GitError::Malformed("unexpected delta kind".into()))?;

@@ -31,6 +31,7 @@ NOTICE
 README.md
 SECURITY.md
 START_HERE.md
+THIRD_PARTY_NOTICES.md
 apps/mcp-server/README.md
 apps/mcp-server/package-lock.json
 apps/mcp-server/package.json
