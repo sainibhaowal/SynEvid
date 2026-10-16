@@ -14,7 +14,7 @@ import { asText, evidenceEnvelope } from './evidence.js';
 export function createAutopsyMcpServer(): McpServer {
   const server = new McpServer({
     name: 'code-autopsy',
-    version: '0.0.1',
+    version: '0.1.0',
   });
 
   // 1. autopsy_status: repo/root -> index state, capabilities, snapshot ID

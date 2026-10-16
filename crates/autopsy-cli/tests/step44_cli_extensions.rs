@@ -839,7 +839,7 @@ fn gate_the_exit_code_constants_are_the_documented_ones() {
     assert_eq!(EXIT_POLICY_FAIL, POLICY_FAIL);
     assert_eq!(EXIT_ANALYSIS_ERROR, ANALYSIS_ERROR);
     assert_eq!(EXIT_UNSUPPORTED, UNSUPPORTED);
-    assert_eq!(autopsy_cli::ANALYZER_VERSION, "0.0.1");
+    assert_eq!(autopsy_cli::ANALYZER_VERSION, "0.1.0");
 }
 
 #[test]

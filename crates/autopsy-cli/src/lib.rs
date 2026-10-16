@@ -42,7 +42,7 @@ pub const EXIT_POLICY_FAIL: i32 = 2;
 pub const EXIT_ANALYSIS_ERROR: i32 = 3;
 pub const EXIT_UNSUPPORTED: i32 = 4;
 
-pub const ANALYZER_VERSION: &str = "0.0.1";
+pub const ANALYZER_VERSION: &str = "0.1.0";
 
 #[derive(Debug, Error)]
 pub enum CliError {

@@ -376,6 +376,17 @@ Web Inspector. See
   `crates/autopsy-cli/tests/step31_lineage_cli.rs`; see
   `docs/evidence/29_lineage_user_facing_path.md`.
 
+### Changed
+
+- **Artifacts bumped to `0.1.0`** — the version the CHANGELOG's dated `[0.1.0]` release
+  section already documents. `Cargo.toml` (workspace), `ANALYZER_VERSION` (snapshots,
+  reports, `autopsy version`), the MCP server and the web inspector all say `0.1.0` now.
+  Every remaining `0.0.1` is a **format version** (config, invariants config, baseline
+  file, report schema and its digest prefix) and is pinned deliberately: bumping one would
+  invalidate persisted artifacts or change every computed digest, which is a compatibility
+  break, not a rename. The distinction, and the full list of what stayed and why, is in
+  `docs/evidence/30_version_consistency.md`.
+
 ### Fixed
 
 - The `temporal` subcommand's default commit bound was `500`, which `TemporalJournal::build`
