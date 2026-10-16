@@ -93,12 +93,19 @@ jobs:
           
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "$DIST_DIR/"
           
+          PKG="autopsy-${{ matrix.target }}.${{ matrix.pkg_type }}"
           if [ "${{ matrix.pkg_type }}" == "zip" ]; then
-            7z a "autopsy-${{ matrix.target }}.zip" "$DIST_DIR"
-            shasum -a 256 "autopsy-${{ matrix.target }}.zip" > "autopsy-${{ matrix.target }}.zip.sha256"
+            7z a "$PKG" "$DIST_DIR"
           else
-            tar -czvf "autopsy-${{ matrix.target }}.tar.gz" "$DIST_DIR"
-            shasum -a 256 "autopsy-${{ matrix.target }}.tar.gz" > "autopsy-${{ matrix.target }}.tar.gz.sha256"
+            tar -czvf "$PKG" "$DIST_DIR"
+          fi
+          
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$PKG" > "$PKG.sha256"
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$PKG" > "$PKG.sha256"
+          else
+            python3 -c "import hashlib, sys; h=hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest(); print(f'{h}  {sys.argv[1]}')" "$PKG" > "$PKG.sha256"
           fi
           
           mkdir -p artifacts

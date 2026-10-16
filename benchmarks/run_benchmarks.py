@@ -37,10 +37,19 @@ def parse_args():
         default=REPO_ROOT / "benchmarks" / "results",
         help="Path to output results directory",
     )
+    import os
+    env_bin = os.environ.get("AUTOPSY_BIN")
+    if env_bin and Path(env_bin).exists():
+        default_bin = Path(env_bin)
+    elif (REPO_ROOT / "target" / "release" / "autopsy").exists() and not (REPO_ROOT / "target" / "debug" / "autopsy").exists():
+        default_bin = REPO_ROOT / "target" / "release" / "autopsy"
+    else:
+        default_bin = REPO_ROOT / "target" / "debug" / "autopsy"
+
     parser.add_argument(
         "--autopsy-bin",
         type=Path,
-        default=REPO_ROOT / "target" / "debug" / "autopsy",
+        default=default_bin,
         help="Path to compiled autopsy CLI binary",
     )
     parser.add_argument(

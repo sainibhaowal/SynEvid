@@ -192,14 +192,22 @@ fn test_benchmark_harness_execution_and_pre_registered_gate() {
     let _ = fs::remove_dir_all(&temp_out);
     fs::create_dir_all(&temp_out).unwrap();
 
-    let output = Command::new("python3")
-        .arg(&runner_script)
+    let mut cmd = Command::new("python3");
+    cmd.arg(&runner_script)
         .arg("--check-gate")
         .arg("--output-dir")
         .arg(&temp_out)
-        .current_dir(&root)
-        .output()
-        .expect("Failed to execute run_benchmarks.py");
+        .current_dir(&root);
+
+    let release_bin = root.join("target").join("release").join("autopsy");
+    let debug_bin = root.join("target").join("debug").join("autopsy");
+    if let Ok(bin) = std::env::var("AUTOPSY_BIN") {
+        cmd.arg("--autopsy-bin").arg(bin);
+    } else if release_bin.exists() && !debug_bin.exists() {
+        cmd.arg("--autopsy-bin").arg(&release_bin);
+    }
+
+    let output = cmd.output().expect("Failed to execute run_benchmarks.py");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

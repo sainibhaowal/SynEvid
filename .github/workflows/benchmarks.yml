@@ -40,8 +40,8 @@ jobs:
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Autopsy CLI Release Binary
-        run: cargo build --release -p autopsy-cli
+      - name: Build Autopsy CLI Binaries (Debug & Release)
+        run: cargo build -p autopsy-cli && cargo build --release -p autopsy-cli
 
       - name: Execute Full Benchmark Harness (Baselines A, B, C)
         run: |
