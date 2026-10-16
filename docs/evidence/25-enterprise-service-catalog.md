@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Step 43 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Crate:** `crates/autopsy-catalog` (new)
-**Predecessor:** `docs/evidence/24_phase4_2_pillar5_mining.md` (Step 42)
+**Predecessor:** `docs/evidence/24-git-cochange-mining.md` (Step 42)
 
 ---
 

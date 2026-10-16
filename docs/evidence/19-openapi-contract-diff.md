@@ -3,8 +3,8 @@
 **Date:** 2026-10-16
 **Scope:** Step 37 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **New crate:** `crates/autopsy-contracts-distributed`
-**Predecessors:** `docs/evidence/17_phase4_2_pillar1_temporal.md` (Steps 28–32),
-`docs/evidence/18_phase4_2_pillar2_test_impact.md` (Steps 33–36)
+**Predecessors:** `docs/evidence/17-temporal-semantic-graph.md` (Steps 28–32),
+`docs/evidence/18-predictive-test-selection.md` (Steps 33–36)
 
 ---
 

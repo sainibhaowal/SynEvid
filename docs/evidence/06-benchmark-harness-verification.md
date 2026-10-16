@@ -6,7 +6,7 @@
 > execute the real engine binary per task. Authoritative re-measurement:
 > **recall 100.00% (+31.73pp, PASS)**, precision 5.98%, F1 10.80%,
 > 2693 tokens (cost FAIL), 0 task-vocabulary failure classes (FAIL) —
-> see `13_forensic_closure_verification.md` §3. The harness, corpus,
+> see `13-forensic-benchmark-closure.md` §3. The harness, corpus,
 > schema, and gate machinery described here are unchanged and VERIFIED;
 > only the Baseline-C numbers below are withdrawn.
 

@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Step 42 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Crate:** `crates/autopsy-mining` (new)
-**Predecessor:** `docs/evidence/23_phase4_2_pillar4_topology.md` (Step 41)
+**Predecessor:** `docs/evidence/23-runtime-static-topology-fusion.md` (Step 41)
 
 ---
 

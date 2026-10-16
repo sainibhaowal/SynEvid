@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Steps 33–36 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **New crate:** `crates/autopsy-test-impact`
-**Predecessor:** `docs/evidence/17_phase4_2_pillar1_temporal.md` (Steps 28–32)
+**Predecessor:** `docs/evidence/17-temporal-semantic-graph.md` (Steps 28–32)
 
 ---
 

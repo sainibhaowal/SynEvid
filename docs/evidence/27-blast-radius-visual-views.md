@@ -4,7 +4,7 @@
 **Scope:** Step 45 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Targets:** `apps/mcp-server` (4 new read-only tools), `apps/web-inspector` (two views),
 `crates/autopsy-cli` (one new subcommand), `crates/autopsy-catalog` (one defect fixed)
-**Predecessor:** `docs/evidence/26_phase4_2_pillar6_cli.md` (Step 44)
+**Predecessor:** `docs/evidence/26-unified-cli-orchestration.md` (Step 44)
 
 ---
 

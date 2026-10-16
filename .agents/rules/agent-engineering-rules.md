@@ -138,21 +138,21 @@ Before any commit:
   - How the solution works technically.
   - Exact command execution output and test telemetry.
   - Historical evidence records:
-    - [`01_phase0_phase1_implementation_and_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01_phase0_phase1_implementation_and_verification.md)
-    - [`02_phase2_typescript_adapter_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02_phase2_typescript_adapter_verification.md)
-    - [`03_phase3_graph_diff_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03_phase3_graph_diff_verification.md)
-    - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
-    - [`05_phase5_cli_storage_report_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05_phase5_cli_storage_report_verification.md)
-    - [`06_phase6_benchmark_harness_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06_phase6_benchmark_harness_verification.md)
-    - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
-    - [`08_pillar_a_universal_hardware_and_multi_arch.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
-    - [`09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
-    - [`10_pillar_c_enterprise_sandboxing_and_defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
-    - [`11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md)
-    - [`12_phase4_1_master_tech_plan_end_to_end_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md)
-    - [`13_forensic_closure_verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13_forensic_closure_verification.md)
-    - [`14_precision_incremental_pr_gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14_precision_incremental_pr_gate.md)
-    - [`15_phase4_1_gap_closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15_phase4_1_gap_closure.md)
+    - [`01-core-foundation-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01-core-foundation-verification.md)
+    - [`02-typescript-adapter-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02-typescript-adapter-verification.md)
+    - [`03-dependency-graph-and-diff.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03-dependency-graph-and-diff.md)
+    - [`04-impact-contracts-and-invariants.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04-impact-contracts-and-invariants.md)
+    - [`05-cli-and-storage-engine.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05-cli-and-storage-engine.md)
+    - [`06-benchmark-harness-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06-benchmark-harness-verification.md)
+    - [`07-cross-platform-hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07-cross-platform-hardening.md)
+    - [`08-hardware-and-multi-arch-determinism.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08-hardware-and-multi-arch-determinism.md)
+    - [`09-dual-cicd-and-release-lifecycle.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09-dual-cicd-and-release-lifecycle.md)
+    - [`10-enterprise-sandboxing-and-defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10-enterprise-sandboxing-and-defense.md)
+    - [`11-mcp-server-and-web-inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11-mcp-server-and-web-inspector.md)
+    - [`12-agent-lifecycle-protocol.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12-agent-lifecycle-protocol.md)
+    - [`13-forensic-benchmark-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13-forensic-benchmark-closure.md)
+    - [`14-precision-incremental-pr-gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14-precision-incremental-pr-gate.md)
+    - [`15-security-and-compliance-audit.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15-security-and-compliance-audit.md)
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.

@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Step 38 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Crate:** `crates/autopsy-contracts-distributed` (extended; no new crate)
-**Predecessors:** `docs/evidence/19_phase4_2_pillar3_openapi.md` (Step 37)
+**Predecessors:** `docs/evidence/19-openapi-contract-diff.md` (Step 37)
 
 ---
 

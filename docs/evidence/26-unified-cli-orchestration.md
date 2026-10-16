@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Step 44 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Crate:** `crates/autopsy-cli` (`src/extensions.rs` — new module)
-**Predecessor:** `docs/evidence/25_phase4_2_pillar6_catalog.md` (Step 43)
+**Predecessor:** `docs/evidence/25-enterprise-service-catalog.md` (Step 43)
 
 ---
 

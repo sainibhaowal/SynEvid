@@ -1,6 +1,6 @@
 # 3.1 Appendix — Full FR/NFR/SEC/UC/RQ Coverage (gap fill, source 02 CA-REQ-001 + 01 CA-FOUND-001)
 
-This file duplicates every normative ID verbatim-grouped so `docs/3.1/` is 100% line-complete. Source PDFs remain truth on conflict. Wording rule: shall=must, should=desire, may=option.
+This file duplicates every normative ID verbatim-grouped so `docs/requirements/` is 100% line-complete. Source PDFs remain truth on conflict. Wording rule: shall=must, should=desire, may=option.
 
 ## 1. UC-01..09 (02 Ch.6)
 - UC-01 Create baseline — Developer/CI — snapshot+index with reproducible digest.

@@ -10,17 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Steps 28–45 of the 4.2 implementation sequence — the sequence's last step is
 done, so all six pillars are complete end-to-end: engine, CLI, MCP tools and
 Web Inspector. See
-`docs/evidence/17_phase4_2_pillar1_temporal.md`,
-`docs/evidence/18_phase4_2_pillar2_test_impact.md`,
-`docs/evidence/19_phase4_2_pillar3_openapi.md`,
-`docs/evidence/20_phase4_2_pillar3_asyncapi.md`,
-`docs/evidence/21_phase4_2_pillar3_pact.md`, and
-`docs/evidence/22_phase4_2_pillar4_otel_ingest.md`, and
-`docs/evidence/23_phase4_2_pillar4_topology.md`,
-`docs/evidence/24_phase4_2_pillar5_mining.md`,
-`docs/evidence/25_phase4_2_pillar6_catalog.md`,
-`docs/evidence/26_phase4_2_pillar6_cli.md`, and
-`docs/evidence/27_phase4_2_pillar6_step45_views.md`.
+`docs/evidence/17-temporal-semantic-graph.md`,
+`docs/evidence/18-predictive-test-selection.md`,
+`docs/evidence/19-openapi-contract-diff.md`,
+`docs/evidence/20-asyncapi-contract-diff.md`,
+`docs/evidence/21-pact-contract-diff.md`, and
+`docs/evidence/22-opentelemetry-trace-ingestion.md`, and
+`docs/evidence/23-runtime-static-topology-fusion.md`,
+`docs/evidence/24-git-cochange-mining.md`,
+`docs/evidence/25-enterprise-service-catalog.md`,
+`docs/evidence/26-unified-cli-orchestration.md`, and
+`docs/evidence/27-blast-radius-visual-views.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -374,7 +374,7 @@ Web Inspector. See
   invariant is zero sub-process execution, and a fixture that spawns git trains the suite to
   depend on exactly what the engine must never do. 14 new tests in
   `crates/autopsy-cli/tests/step31_lineage_cli.rs`; see
-  `docs/evidence/29_lineage_user_facing_path.md`.
+  `docs/evidence/29-symbol-lineage-protocol.md`.
 - **Co-change gets its inspector view (Pillar 5, Step 45 closure).** A sixth tab renders
   `autopsy cochange --format json` with the engine's own claim carried through: the banner
   says **association, never causation** and every edge row shows the verbatim
@@ -385,7 +385,7 @@ Web Inspector. See
   stated lower bound; the three "no edges" situations (below-threshold pairs counted,
   nothing to couple, coverage-unknown refusal) render three different statements; excluded
   commits are named with their reasons. 4 new tests in `apps/web-inspector/test/inspector.test.js`
-  (15 total); see `docs/evidence/31_cochange_inspector_view.md`.
+  (15 total); see `docs/evidence/31-cochange-coupling-inspector.md`.
 
 ### Changed
 
@@ -396,7 +396,7 @@ Web Inspector. See
   file, report schema and its digest prefix) and is pinned deliberately: bumping one would
   invalidate persisted artifacts or change every computed digest, which is a compatibility
   break, not a rename. The distinction, and the full list of what stayed and why, is in
-  `docs/evidence/30_version_consistency.md`.
+  `docs/evidence/30-version-consistency-audit.md`.
 
 ### Fixed
 
@@ -665,7 +665,7 @@ Web Inspector. See
 - **Benchmark honesty (FR-025):** Baseline-C executes the real engine
   binary per task; prior 100%/100% precision figures withdrawn (simulated).
   Re-measured gate: recall +31.73pp PASS; cost/failure-class FAILs disclosed
-  (see `docs/evidence/13_forensic_closure_verification.md`).
+  (see `docs/evidence/13-forensic-benchmark-closure.md`).
 - **Web inspector:** zero hardcoded evidence; renders live artifacts only
   (verified headlessly against real `impact` + `verify` output).
 - **Pillar C resource bound (3.2):** new `analysis.max_file_bytes`

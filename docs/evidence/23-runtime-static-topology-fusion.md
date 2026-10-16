@@ -3,7 +3,7 @@
 **Date:** 2026-10-16
 **Scope:** Step 41 of `Resource/4.2/04_4.2_IMPLEMENTATION_SEQUENCE.md`.
 **Crate:** `crates/autopsy-telemetry` (extends the Step 40 crate)
-**Predecessor:** `docs/evidence/22_phase4_2_pillar4_otel_ingest.md` (Step 40)
+**Predecessor:** `docs/evidence/22-opentelemetry-trace-ingestion.md` (Step 40)
 
 ---
 

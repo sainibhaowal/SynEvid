@@ -254,7 +254,7 @@ flowchart TD
 > per task (see `benchmarks/engine/baseline_autopsy.py`). Earlier 100%
 > precision / 353-token figures came from a simulated baseline that copied
 > ground truth and are withdrawn. Full telemetry and limitations in
-> `docs/evidence/13_forensic_closure_verification.md`.
+> `docs/evidence/13-forensic-benchmark-closure.md`.
 
 ### C. Pre-Registered Gate Status (01 Ch.12)
 
@@ -407,22 +407,22 @@ To run SynEvid on a partner's historical change (base ref → worktree):
 
 * **Requirements Matrix:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001 through FR-030).
 * **Engineering Evidence Log:**
-  - [`01_phase0_phase1_implementation_and_verification.md`](docs/evidence/01_phase0_phase1_implementation_and_verification.md)
-  - [`02_phase2_typescript_adapter_verification.md`](docs/evidence/02_phase2_typescript_adapter_verification.md)
-  - [`03_phase3_graph_diff_verification.md`](docs/evidence/03_phase3_graph_diff_verification.md)
-  - [`04_phase4_impact_contracts_invariants_evidence_verification.md`](docs/evidence/04_phase4_impact_contracts_invariants_evidence_verification.md)
-  - [`05_phase5_cli_storage_report_verification.md`](docs/evidence/05_phase5_cli_storage_report_verification.md)
-  - [`06_phase6_benchmark_harness_verification.md`](docs/evidence/06_phase6_benchmark_harness_verification.md) (Baseline-C figures superseded — see 13)
-  - [`07_phase3_2_cross_platform_and_enterprise_hardening.md`](docs/evidence/07_phase3_2_cross_platform_and_enterprise_hardening.md)
-  - [`08_pillar_a_universal_hardware_and_multi_arch.md`](docs/evidence/08_pillar_a_universal_hardware_and_multi_arch.md)
-  - [`09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md`](docs/evidence/09_pillar_b_dual_cicd_lifecycle_and_release_matrix.md)
-  - [`10_pillar_c_enterprise_sandboxing_and_defense.md`](docs/evidence/10_pillar_c_enterprise_sandboxing_and_defense.md)
-  - [`11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md`](docs/evidence/11_phase4_1_agent_lifecycle_mcp_and_web_inspector.md)
-  - [`12_phase4_1_master_tech_plan_end_to_end_verification.md`](docs/evidence/12_phase4_1_master_tech_plan_end_to_end_verification.md)
-  - [`13_forensic_closure_verification.md`](docs/evidence/13_forensic_closure_verification.md)
-  - [`14_precision_incremental_pr_gate.md`](docs/evidence/14_precision_incremental_pr_gate.md) (current: precision controls, incremental, PR gate)
-  - [`16_landscape_parity.md`](docs/evidence/16_landscape_parity.md) (landscape audit, Python adapter, universal install)
-  - [`15_phase4_1_gap_closure.md`](docs/evidence/15_phase4_1_gap_closure.md)
+  - [`01-core-foundation-verification.md`](docs/evidence/01-core-foundation-verification.md)
+  - [`02-typescript-adapter-verification.md`](docs/evidence/02-typescript-adapter-verification.md)
+  - [`03-dependency-graph-and-diff.md`](docs/evidence/03-dependency-graph-and-diff.md)
+  - [`04-impact-contracts-and-invariants.md`](docs/evidence/04-impact-contracts-and-invariants.md)
+  - [`05-cli-and-storage-engine.md`](docs/evidence/05-cli-and-storage-engine.md)
+  - [`06-benchmark-harness-verification.md`](docs/evidence/06-benchmark-harness-verification.md) (Baseline-C figures superseded — see 13)
+  - [`07-cross-platform-hardening.md`](docs/evidence/07-cross-platform-hardening.md)
+  - [`08-hardware-and-multi-arch-determinism.md`](docs/evidence/08-hardware-and-multi-arch-determinism.md)
+  - [`09-dual-cicd-and-release-lifecycle.md`](docs/evidence/09-dual-cicd-and-release-lifecycle.md)
+  - [`10-enterprise-sandboxing-and-defense.md`](docs/evidence/10-enterprise-sandboxing-and-defense.md)
+  - [`11-mcp-server-and-web-inspector.md`](docs/evidence/11-mcp-server-and-web-inspector.md)
+  - [`12-agent-lifecycle-protocol.md`](docs/evidence/12-agent-lifecycle-protocol.md)
+  - [`13-forensic-benchmark-closure.md`](docs/evidence/13-forensic-benchmark-closure.md)
+  - [`14-precision-incremental-pr-gate.md`](docs/evidence/14-precision-incremental-pr-gate.md) (current: precision controls, incremental, PR gate)
+  - [`16-python-adapter-and-installer.md`](docs/evidence/16-python-adapter-and-installer.md) (landscape audit, Python adapter, universal install)
+  - [`15-security-and-compliance-audit.md`](docs/evidence/15-security-and-compliance-audit.md)
 * **AI Coding Agent Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 * **Architecture Decision Records:** [`docs/adr/`](docs/adr/).
 

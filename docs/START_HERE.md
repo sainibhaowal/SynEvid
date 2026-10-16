@@ -47,7 +47,7 @@ docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/
 
 ### Path D: Empirical Benchmarks & Production Evidence
 1. [**Benchmark Protocol**](benchmark/PROTOCOL.md): Pre-registered evaluation methodology across 50 refactoring tasks and 5 TypeScript target repositories.
-2. [**Evidence Dossier (33 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 to Phase 4.6 (e.g., [13: Forensic Closure](evidence/13_forensic_closure_verification.md), [17: Temporal Graph](evidence/17_phase4_2_pillar1_temporal.md), [18: Test Impact](evidence/18_phase4_2_pillar2_test_impact.md), [33: How to Verify](evidence/33_how_to_verify.md)).
+2. [**Evidence Dossier (33 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 to Phase 4.6 (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md)).
 
 ---
 

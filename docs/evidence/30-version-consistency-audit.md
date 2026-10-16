@@ -49,7 +49,7 @@ digests, so each is pinned on purpose:
   a test constructs and digests itself; they are self-consistent at any value and are not
   assertions about the shipped constant. (The one place that *asserts* the shipped
   constant — `step44`'s pinning test — was updated, so a future bump is conscious.)
-* `docs/START_HERE.md` and `docs/3.1/*` — historical plan text ("Must v0.0.1") describing
+* `docs/START_HERE.md` and `docs/requirements/*` — historical plan text ("Must v0.0.1") describing
   the requirements document's own milestones, not the artifact.
 
 The distinction is now written down here so the next bump does not have to rediscover it:
