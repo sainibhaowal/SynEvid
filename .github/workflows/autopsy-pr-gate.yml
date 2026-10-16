@@ -64,13 +64,13 @@ jobs:
           CODE=$?
           set -e
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
-          python3 -c "
-          import json
-          d = json.load(open('/tmp/autopsy-verify.json'))
-          fails = [f for f in d.get('findings', []) if f.get('status') == 'fail']
-          unknowns = [f for f in d.get('findings', []) if f.get('status') == 'unknown']
-          print(f\"findings={len(d.get('findings', []))} fail={len(fails)} unknown={len(unknowns)}\")
-          "
+          python3 - << 'PYEOF'
+import json
+d = json.load(open('/tmp/autopsy-verify.json'))
+fails = [f for f in d.get('findings', []) if f.get('status') == 'fail']
+unknowns = [f for f in d.get('findings', []) if f.get('status') == 'unknown']
+print(f"findings={len(d.get('findings', []))} fail={len(fails)} unknown={len(unknowns)}")
+PYEOF
           # Exit 2 (policy failure) fails the gate; 0/4 pass with annotation.
           if [ "$CODE" -eq 2 ]; then
             echo "INVARIANT FAILURES DETECTED"
@@ -91,22 +91,17 @@ jobs:
             [ -f "$f" ] || continue
             echo "## \`$f\`" >> /tmp/autopsy-impact.md
             if $BIN --repo-root . impact -s "$f" --profile callers --top-k 10 --format json > /tmp/imp.json 2>/dev/null; then
-              python3 -c "
-              import json
-              d = json.load(open('/tmp/imp.json'))
-              imp = d.get('impact', {}) or {}
-              top = imp.get('ranked_top', []) or imp.get('impacted_entities', [])
-              total = imp.get('total_impacted', len(imp.get('impacted_entities', [])))
-              print(f'impact seed: $f -> top {len(top)} of {total}', flush=True)
-              " >> /tmp/autopsy-impact.md
-              python3 -c "
-              import json
-              d = json.load(open('/tmp/imp.json'))
-              imp = d.get('impact', {}) or {}
-              top = imp.get('ranked_top', []) or imp.get('impacted_entities', [])
-              for e in top[:10]:
-                  print(f'- \`{e}\`')
-              " >> /tmp/autopsy-impact.md
+              python3 - "$f" << 'PYEOF' >> /tmp/autopsy-impact.md
+import json, sys
+f = sys.argv[1]
+d = json.load(open('/tmp/imp.json'))
+imp = d.get('impact') or {}
+top = imp.get('ranked_top') or imp.get('impacted_entities') or []
+total = imp.get('total_impacted', len(top))
+print(f"impact seed: {f} -> top {len(top)} of {total}", flush=True)
+for e in top[:10]:
+    print(f"- `{e}`")
+PYEOF
             else
               echo "_impact analysis unavailable for this file_" >> /tmp/autopsy-impact.md
             fi
