@@ -5,14 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Phase 4.2 Pillars 1–3 (2026-10-16)
+## [Unreleased] - Phase 4.2 Pillars 1–4 (Steps 28–40) (2026-10-16)
 
-Steps 28–39 of the 4.2 implementation sequence. Pillars 4–6 (Steps 40–45)
+Steps 28–40 of the 4.2 implementation sequence. Pillars 1–3 are complete;
+Pillar 4 is **in progress** (Step 40 done, Step 41 not started). Steps 41–45
 are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
 `docs/evidence/18_phase4_2_pillar2_test_impact.md`,
 `docs/evidence/19_phase4_2_pillar3_openapi.md`,
-`docs/evidence/20_phase4_2_pillar3_asyncapi.md`, and
-`docs/evidence/21_phase4_2_pillar3_pact.md`.
+`docs/evidence/20_phase4_2_pillar3_asyncapi.md`,
+`docs/evidence/21_phase4_2_pillar3_pact.md`, and
+`docs/evidence/22_phase4_2_pillar4_otel_ingest.md`.
 
 ### Added
 - **Global entity identity — RFC-GLOBAL-001 (`autopsy-domain::global_id`, Step 28):**
@@ -143,7 +145,35 @@ are **not** implemented. See `docs/evidence/17_phase4_2_pillar1_temporal.md`,
   matcher-based interaction can never be reported as checked. An ambiguous provider
   match (two equally specific templates) is reported rather than resolved by choosing.
 
+- **OpenTelemetry OTLP trace ingest & redaction (`autopsy-telemetry`, Step 40):** a new
+  crate that reads `ExportTraceServiceRequest` OTLP/JSON losslessly, then sanitizes it into
+  a record whose digests are taken over the **sanitized** value — never the raw one, so a
+  digest can never become a fingerprint of the secret it contained. Span and trace ids are
+  pseudonymised with **BLAKE3 in keyed mode** under a caller-supplied 32-byte salt with
+  role domain separation; there is deliberately no `Default`, because an 8-byte span id
+  under an unkeyed hash is invertible by exhaustive search and a default would hand out a
+  public key. Redaction recurses through every `AnyValue`, span/event names, event and link
+  attributes, and `status.message`, and is driven by two layers: exact **key-table** rules
+  and value **shape** rules (JWT, `Authorization` scheme, AWS access key id, PEM material,
+  IP/MAC literal, e-mail, Luhn-valid card). Hand-written linear scans only — no regex, so
+  ReDoS is structurally impossible. Structural keys (`http.route`, `code.function`,
+  `service.name`, …) are exempt from the fuzzy detectors, so `checkout@1.0.0` is a version
+  rather than an e-mail address and the fusion surface survives. Two identities per span:
+  a full observation digest (timestamps included) and an `OccupancyKey` (timestamps
+  excluded) for Step 41's dead-code detection. Free text, unmodelled nodes, SDK-dropped
+  data, an uncorrelatable span and an empty export all degrade coverage. No new
+  dependencies; no regex engine, URL parser or telemetry SDK.
+
 ### Fixed
+- The telemetry span `pointer` — *where in the export* a span sat — reached the span and
+  record digests. A collector is free to export spans in any order, so reversing two spans
+  upstream changed the record digest and a **reformatting would have been reported as a
+  change**. `pointer` and `notes` are now excluded from every digest, and the record digest
+  is an explicitly named projection (`TraceDigestInput`) rather than a blanket
+  serialization that inherits whatever happens to be in the struct.
+- `IngestOptions::default()` returned a **publicly known** salt, silently reducing keyed
+  BLAKE3 to the unkeyed hash the module's own documentation calls obfuscation. The `Default`
+  impl was deleted; a caller must name a salt or call the explicitly-named `test_salt`.
 - A Pact interaction calling an operation the provider **does not offer** produced
   no finding at all. The provider path search ranked candidate paths *without* regard
   to the request method, then the caller looked the operation up under the path it had

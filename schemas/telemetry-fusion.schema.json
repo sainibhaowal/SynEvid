@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://syncevid.dev/schemas/telemetry-fusion.schema.json",
+  "title": "Synevid telemetry fusion record (Step 40)",
+  "description": "A sanitized OpenTelemetry OTLP/JSON trace export. Closed: every field an ingest can emit is declared here, and nothing else validates. Redaction is reported as a reason and a count, never as a value or a length.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "document_path",
+    "span_count",
+    "services",
+    "spans",
+    "redaction_totals",
+    "coverage",
+    "notes",
+    "digest"
+  ],
+  "properties": {
+    "document_path": { "type": "string", "minLength": 1 },
+    "span_count": { "type": "integer", "minimum": 0 },
+    "services": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/spanRecord" }
+    },
+    "redaction_totals": {
+      "description": "How many values of each reason were removed across the export. Counts only: a per-value record would have to name the value, and even a length narrows the field.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/redactionKind" },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "coverage": { "$ref": "#/$defs/coverageState" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "digest": { "$ref": "#/$defs/blake3Hex" }
+  },
+  "$defs": {
+    "blake3Hex": {
+      "description": "Lowercase BLAKE3 hex. Uppercase would make two spellings of one digest, so it is excluded by pattern rather than normalised at read time.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coverageState": {
+      "type": "string",
+      "enum": ["verified", "partial", "unsupported", "unknown"]
+    },
+    "spanKind": {
+      "type": "string",
+      "enum": ["unspecified", "internal", "server", "client", "producer", "consumer"]
+    },
+    "statusCode": {
+      "type": "string",
+      "enum": ["unset", "ok", "error"]
+    },
+    "redactionKind": {
+      "description": "Why a value was removed. Kept in sync with `RedactionKind::ALL` by tests/schema_conformance.rs, which compares through serde so a rename cannot drift unnoticed.",
+      "type": "string",
+      "enum": [
+        "authorization_header",
+        "cookie_header",
+        "api_key",
+        "credential",
+        "token",
+        "session_key",
+        "payload",
+        "query_string",
+        "url_fragment",
+        "url_user_info",
+        "network_address",
+        "email_address",
+        "json_web_token",
+        "aws_access_key_id",
+        "private_key_material",
+        "credit_card_number",
+        "user_identifier",
+        "opaque_binary_value"
+      ]
+    },
+    "sanitizedValue": {
+      "description": "A value after the redaction policy. Externally tagged, so exactly one key is present. `free_text` and `unmodelled` are the two variants that are not a sanitization success: each one is a gap the coverage state records.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": { "text": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["free_text"],
+          "properties": { "free_text": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["number"],
+          "properties": { "number": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["flag"],
+          "properties": { "flag": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["redacted"],
+          "properties": { "redacted": { "$ref": "#/$defs/redactionKind" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["list"],
+          "properties": {
+            "list": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/sanitizedValue" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["map"],
+          "properties": {
+            "map": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/sanitizedEntry" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unmodelled"],
+          "properties": {
+            "unmodelled": {
+              "type": "array",
+              "items": { "type": "string" },
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
+    },
+    "sanitizedEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "value"],
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "$ref": "#/$defs/sanitizedValue" }
+      }
+    },
+    "statusRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/statusCode" },
+        "message": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sanitizedValue" }]
+        }
+      }
+    },
+    "eventRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "time_unix_nano", "attributes", "coverage"],
+      "properties": {
+        "name": { "$ref": "#/$defs/sanitizedValue" },
+        "time_unix_nano": { "type": "integer", "minimum": 0 },
+        "attributes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sanitizedEntry" }
+        },
+        "coverage": { "$ref": "#/$defs/coverageState" }
+      }
+    },
+    "linkRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id_hash", "span_id_hash", "attributes", "coverage"],
+      "properties": {
+        "trace_id_hash": { "$ref": "#/$defs/blake3Hex" },
+        "span_id_hash": {
+          "description": "Empty when the exporter emitted a link with no id. An empty string is used rather than a pseudonym of the empty string, which would mint an identifier for a span that does not exist.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{64})?$"
+        },
+        "attributes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sanitizedEntry" }
+        },
+        "coverage": { "$ref": "#/$defs/coverageState" }
+      }
+    },
+    "occupancySubject": {
+      "description": "What a span represents, independent of when it ran. The timestamp is deliberately absent from the occupancy key: dead-code detection asks whether a code path executed in a window, which the time of the execution must not change.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["route"],
+          "properties": { "route": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["function"],
+          "properties": { "function": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rpc"],
+          "properties": { "rpc": { "type": "string" } }
+        },
+        { "const": "uncorrelated" }
+      ]
+    },
+    "spanRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointer",
+        "trace_id_hash",
+        "span_id_hash",
+        "parent_span_id_hash",
+        "name",
+        "kind",
+        "start_unix_nano",
+        "duration_nanos",
+        "attributes",
+        "events",
+        "links",
+        "status",
+        "service",
+        "route",
+        "url_path",
+        "code_function",
+        "code_filepath",
+        "http_method",
+        "http_status_code",
+        "rpc_service",
+        "rpc_method",
+        "redactions",
+        "coverage",
+        "notes",
+        "digest"
+      ],
+      "properties": {
+        "pointer": {
+          "description": "Where the span sat in the export. Excluded from every digest: a collector may export in any order, so a digest covering this would make the same observations disagree across two exports.",
+          "type": "string",
+          "pattern": "^/(resourceSpans/[0-9]+/scopeSpans/[0-9]+/spans/[0-9]+)?$"
+        },
+        "trace_id_hash": { "$ref": "#/$defs/blake3Hex" },
+        "span_id_hash": { "$ref": "#/$defs/blake3Hex" },
+        "parent_span_id_hash": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/blake3Hex" }]
+        },
+        "name": { "$ref": "#/$defs/sanitizedValue" },
+        "kind": { "$ref": "#/$defs/spanKind" },
+        "start_unix_nano": { "type": "integer", "minimum": 0 },
+        "duration_nanos": { "type": "integer", "minimum": 0 },
+        "attributes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sanitizedEntry" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventRecord" }
+        },
+        "links": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/linkRecord" }
+        },
+        "status": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/statusRecord" }]
+        },
+        "service": {
+          "oneOf": [{ "type": "null" }, { "type": "string" }]
+        },
+        "route": {
+          "description": "The `http.route` template, exactly as the instrumented code reported it. Not canonicalised here: mapping it to a declared endpoint is Step 41's job, and doing it in two places is how two definitions drift apart.",
+          "oneOf": [{ "type": "null" }, { "type": "string" }]
+        },
+        "url_path": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "code_function": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "code_filepath": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "http_method": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "http_status_code": {
+          "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 100, "maximum": 599 }]
+        },
+        "rpc_service": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "rpc_method": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "redactions": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/redactionKind" },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
+        "coverage": { "$ref": "#/$defs/coverageState" },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "digest": { "$ref": "#/$defs/blake3Hex" }
+      }
+    }
+  }
+}
