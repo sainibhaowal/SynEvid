@@ -48,7 +48,6 @@ assets/logo.jpg
 assets/logo.png
 assets/logo.svg
 autopsy.toml
-banner.jpg
 benchmarks/README.md
 benchmarks/corpus/.gitkeep
 benchmarks/corpus/repo-api/.autopsy/invariants.yml
