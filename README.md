@@ -56,28 +56,163 @@ SynEvid enforces strict architectural axioms (governed by [`AGENTS.md`](AGENTS.m
 
 ---
 
-## 3. Deterministic Pipeline Architecture
+---
 
-### A. Core Verification Engine Flow (Phases 0–5)
+## 3. Architecture, Use Cases & Business Value Model
+
+### A. Multi-Tier UML Component Architecture
+
+SynEvid implements a strict clean architectural inversion (`ARCH_NO_CORE_TO_MCP`). Correctness crates never import presentation layers, LLM libraries, or network transports. All operations execute strictly offline with 100/100 BLAKE3 determinism:
 
 ```mermaid
 flowchart TD
-    Repo["Git Repository / Source Root"] --> Scan["autopsy-repo<br/>(Ignore-Aware Scan)"]
-    Scan --> Snap["RepoSnapshot<br/>BLAKE3(Files + Config + Analyzer)"]
-    Snap --> Adapter["autopsy-adapter-typescript<br/>(Tree-Sitter AST & Contract Extraction)"]
-    Adapter --> Sym["autopsy-symbols<br/>(Stable Symbol Identifiers)"]
-    Sym --> Graph["autopsy-graph<br/>(Petgraph Multigraph & Edge Provenance)"]
-    Graph --> Diff["autopsy-diff<br/>(Semantic Symbol & Contract Delta)"]
-    Diff --> Impact["autopsy-impact<br/>(Bounded BFS / SCC Condensation)"]
-    Impact --> Contracts["autopsy-contracts<br/>(Compatibility & Breaking Change Detection)"]
-    Contracts --> Inv["autopsy-invariants<br/>(Policy Evaluators: Layers, Cycles, Forbidden)"]
-    Inv --> Evid["autopsy-evidence<br/>(Cryptographic BLAKE3 Receipts)"]
-    Evid --> Storage["autopsy-storage<br/>(SQLite + Content-Addressed Cache)"]
-    Evid --> Report["autopsy-report<br/>(Canonical JSON, Text & SARIF 2.1.0)"]
-    Storage & Report --> CLI["autopsy-cli<br/>(Deterministic Exit Codes: 0, 2, 3, 4)"]
+    subgraph Tier1["1. Integration & Interaction Tier"]
+        CLI["autopsy-cli<br/>(Deterministic CLI Binary)"]
+        MCP["apps/mcp-server<br/>(Model Context Protocol Stdio)"]
+        WEB["apps/web-inspector<br/>(Forensic Graph Visualizer)"]
+        PRG["GitHub Actions PR Gate<br/>(autopsy-pr-gate.yml)"]
+    end
+
+    subgraph Tier2["2. Diagnostics, Telemetry & Storage Tier"]
+        REP["autopsy-report<br/>(SARIF 2.1.0, JSON, Terminal)"]
+        STO["autopsy-storage<br/>(SQLite + Content-Addressed Store)"]
+        TEL["autopsy-telemetry<br/>(OTLP Tracing & Span Ingestion)"]
+        CAT["autopsy-catalog<br/>(Service Registry & Asset Catalog)"]
+    end
+
+    subgraph Tier3["3. Deterministic Verification Core"]
+        IMP["autopsy-impact<br/>(SCC Condensation, Bounded BFS, Top-K)"]
+        INV["autopsy-invariants<br/>(Layer Invariants, Cycle & Forbidden Rules)"]
+        DIF["autopsy-diff<br/>(Semantic AST & Contract Deltas)"]
+        CON["autopsy-contracts<br/>(Callable Interface Normalization)"]
+        DIS["autopsy-contracts-distributed<br/>(OpenAPI, AsyncAPI & Pact Compatibility)"]
+        TEM["autopsy-temporal<br/>(Git Object Store, Bi-Temporal Fact DAG)"]
+        TST["autopsy-test-impact<br/>(Predictive Test Selection & Coverage Mapping)"]
+        MIN["autopsy-mining<br/>(Git Co-Change Coupling & Association Rules)"]
+        EVI["autopsy-evidence<br/>(BLAKE3 Tamper-Proof Receipts)"]
+    end
+
+    subgraph Tier4["4. Graph & Symbol Substrate"]
+        GRA["autopsy-graph<br/>(Petgraph Multigraph & Edge Provenance)"]
+        SYM["autopsy-symbols<br/>(Stable Identities & Identity/Shape Split)"]
+        DOM["autopsy-domain<br/>(Strict Typed IDs & Canonical BTree Models)"]
+    end
+
+    subgraph Tier5["5. Polyglot Adapters & Sandboxed Infrastructure"]
+        API["autopsy-adapter-api<br/>(Extensible Language Parser Traits)"]
+        ATS["autopsy-adapter-typescript<br/>(Tree-Sitter TypeScript/JS Compiler)"]
+        APY["autopsy-adapter-python<br/>(Tree-Sitter Python Compiler)"]
+        REP_SCAN["autopsy-repo<br/>(Ignore Scanner, Path Sanitization, Symlink Guard, BLAKE3)"]
+    end
+
+    %% Tier 1 to Tier 2 & 3
+    CLI & MCP & WEB & PRG --> REP & STO & TEL & CAT
+    CLI & MCP & WEB & PRG --> IMP & INV & DIF & TEM & TST
+
+    %% Tier 2 to Tier 3
+    STO & CAT & TEL --> EVI & GRA
+
+    %% Tier 3 Verification Core interconnections
+    DIF --> IMP & CON & DIS
+    IMP & CON & DIS & TEM & TST & MIN --> INV
+    INV --> EVI
+    TEM --> STO
+
+    %% Tier 3 to Tier 4
+    IMP & DIF & INV & TEM --> GRA
+    GRA & DIF --> SYM
+    SYM --> DOM
+
+    %% Tier 4 to Tier 5
+    SYM --> API
+    API --> ATS & APY
+    ATS & APY --> REP_SCAN
 ```
 
-### B. Agent In-Session Verification Lifecycle Protocol (4.1 Ch.4.2)
+---
+
+### B. Enterprise Use Case Model (Actors & Operational Journeys)
+
+SynEvid bridges autonomous coding agents, platform architects, CI/CD gates, and compliance auditors through deterministic mathematical verification:
+
+```mermaid
+flowchart LR
+    subgraph Actors["Operational Actors"]
+        Agent["🤖 Autonomous AI Agent<br/>(Claude Code, Cursor, Windsurf, Gemini)"]
+        Architect["🧑‍💻 Staff Systems Architect<br/>(System Tech Lead, Core Platform)"]
+        DevOps["🚀 DevOps & CI/CD Pipeline<br/>(GitHub Actions, Merge Queue)"]
+        Auditor["🛡️ Compliance & Security Auditor<br/>(Zero-Trust, Air-Gapped Verification)"]
+    end
+
+    subgraph UseCases["Forensic Verification Use Cases"]
+        UC1["UC-01: In-Session Blast Radius & Caller Profiling<br/>(Bounded BFS, Ranked Top-K)"]
+        UC2["UC-02: Pre-Commit & In-Session Invariant Gate<br/>(Prevent Layer & Cycle Regressions)"]
+        UC3["UC-03: Automated PR Merge Gate & SARIF Ingestion<br/>(Fail-Closed Merge Gating)"]
+        UC4["UC-04: Bi-Temporal Lineage & Symbol Rename Forensics<br/>(Zero False-Positive Identity Tracking)"]
+        UC5["UC-05: Distributed API Contract Compatibility<br/>(OpenAPI, AsyncAPI, Pact Verification)"]
+        UC6["UC-06: Predictive Test Selection<br/>(Run Only Semantically Impacted Tests)"]
+        UC7["UC-07: Co-Change Coupling & Mining<br/>(Detect Hidden Architectural Dependencies)"]
+        UC8["UC-08: Tamper-Proof Cryptographic Receipts<br/>(100/100 BLAKE3 Hash Verification)"]
+    end
+
+    Agent --> UC1
+    Agent --> UC2
+    DevOps --> UC3
+    DevOps --> UC6
+    Architect --> UC2
+    Architect --> UC4
+    Architect --> UC5
+    Architect --> UC7
+    Auditor --> UC8
+    Auditor --> UC3
+```
+
+---
+
+### C. Enterprise Business & Value Model (The "Why" & Deployment Topologies)
+
+#### The Problem: The AI Hallucination-Fragility Gap
+Frontier AI coding agents generate code with remarkable velocity, but suffer from three fatal weaknesses in enterprise codebases:
+1. **Believable Hallucinations:** AI agents cannot foresee non-local, transitive blast radius across deep dependency chains.
+2. **Silent Architectural Rot:** Agents introduce circular dependencies, layer violations, and contract drifts that compile cleanly but break production systems.
+3. **Non-Deterministic Flakiness:** Because LLM outputs fluctuate across runs, autonomous systems cannot serve as their own verification oracle.
+
+#### The SynEvid Value Stream: Mathematical Ground Truth
+SynEvid acts as an external, immutable **Flight Recorder & Forensic Oracle**:
+* **100/100 Repeatability:** Identical inputs yield byte-identical BLAKE3 receipts.
+* **Zero Subprocess / Zero Network Sockets:** Completely safe for air-gapped, zero-trust enterprise enclaves.
+* **Honest Semantic Coverage:** Dynamic constructs emit explicit `UNKNOWN` states—**`UNKNOWN` never silently passes**.
+
+```mermaid
+flowchart TD
+    subgraph Problem["Enterprise Fragility Gap"]
+        P1["Fast AI Code Synthesis"] --> P2["Silent Transitive Breakage"]
+        P2 --> P3["Circular Dependencies & Layer Drifts"]
+        P3 --> P4["Production Outages & Security Regressions"]
+    end
+
+    subgraph Solution["SynEvid Forensic Foundation"]
+        S1["Deterministic AST Multigraph"] --> S2["Bounded Blast Radius Closure"]
+        S2 --> S3["Declarative Architectural Invariants"]
+        S3 --> S4["Cryptographic BLAKE3 Evidence Receipts"]
+    end
+
+    subgraph Topologies["4 Production Deployment Topologies"]
+        D1["1. Local Developer / Agent CLI<br/>(Binary run on workstation)"]
+        D2["2. Stdio MCP Sidecar<br/>(Integrated into Claude Code, Cursor, Windsurf)"]
+        D3["3. Headless CI/CD PR Gate<br/>(GitHub Actions / GitLab Merge Gate)"]
+        D4["4. Air-Gapped Secure Enclave<br/>(Offline Defense, Zero Network Sockets)"]
+    end
+
+    Problem -.->|"Solved By"| Solution
+    Solution --> Topologies
+```
+
+---
+
+### D. Agent In-Session Verification Lifecycle Protocol (4.1 Ch.4.2)
+
+$$\text{Baseline Snapshot } A \xrightarrow[\text{autopsy impact}]{\text{Blast Radius}} \text{Agent Edit } A \to B \xrightarrow[\text{autopsy verify}]{\text{Policy Verification}} \begin{cases} \textbf{PASS (Exit 0):} & \text{BLAKE3 Tamper-Proof Evidence Receipt} \\ \textbf{FAIL (Exit 2):} & \text{Evidence Path Guidance} \to \text{Self-Repair Loop} \\ \textbf{UNKNOWN (Exit 4):} & \text{Strict Gate Enforcement (UNKNOWN } \ne \text{ PASS)} \end{cases}$$
 
 ```mermaid
 flowchart LR
@@ -94,13 +229,15 @@ flowchart LR
 ---
 
 ## 4. Foundation Command Interface
-```bash# Snapshot repository baseline state into SQLite & content-addressed cache
+
+```bash
+# 1. Snapshot repository baseline state into SQLite & content-addressed cache
 autopsy baseline --format json
 
-# Compute semantic change-set between a stored snapshot and the worktree
+# 2. Compute semantic change-set between a stored snapshot and the worktree
 autopsy diff --before <snapshot_id> --format json
 
-# Traverse bounded blast radius for a symbol with ranked shortest paths
+# 3. Traverse bounded blast radius for a symbol with ranked shortest paths
 autopsy impact -s "src/index.ts::main" --direction forward --max-depth 5
 # Narrow traversal to call edges only (operator precision control)
 autopsy impact -s "src/index.ts::main" --direction backward --edge-kinds calls
@@ -109,55 +246,69 @@ autopsy impact -s "src/index.ts::main" --profile callers --top-k 10
 # Incremental baseline: reuse cached per-file analyses for unchanged files
 autopsy baseline --incremental --baseline-id <snapshot_id>
 
-# Verify architectural policies and contract compatibility (exit: 0 pass, 2 fail, 4 unknown)
+# 4. Verify architectural policies and contract compatibility (exit: 0 pass, 2 fail, 4 unknown)
 autopsy verify --strict --invariants-file .autopsy/invariants.yml
 
-# Trace exact evidence derivation, line spans, and paths for a finding
+# 5. Bi-temporal Git commit DAG timeline & symbol lineage forensics
+autopsy timeline --limit 20 --format json
+autopsy lineage --symbol "src/core.ts::ProcessHandler" --format json
+
+# 6. Predictive test selection based on semantic code deltas
+autopsy test-impact --baseline <snapshot_id> --format json
+
+# 7. Trace exact evidence derivation, line spans, and paths for a finding
 autopsy explain <finding_id>
 
-# Run environment, storage integrity, adapter, and offline diagnostics
+# 8. Run environment, storage integrity, adapter, and offline diagnostics
 autopsy doctor
 
-# Print engine version and adapter capabilities
+# 9. Print engine version and adapter capabilities
 autopsy version
 ```
 
 ---
 
-## 5. Monorepo Crate Structure
+## 5. Monorepo Crate Substrate (21 Specialized Crates)
+
+The Synevid engine is organized into 21 modular Rust crates with strict compiler-enforced boundary isolation:
 
 ```
 SynEvid/
 ├── crates/
-│   ├── autopsy-domain/             # Core typed IDs, entities, BTreeMap canonical models
-│   ├── autopsy-repo/               # Discovery, ignore rules, BLAKE3 digest computation
-│   ├── autopsy-adapter-api/        # Extensible language AST & symbol parser traits
-│   ├── autopsy-adapter-typescript/ # TypeScript AST compiler & tree-sitter bridge
-│   ├── autopsy-symbols/            # Stable symbol identities across line shifts
-│   ├── autopsy-graph/              # Petgraph-backed typed multigraph with edge provenance
-│   ├── autopsy-diff/               # Semantic symbol, edge, and contract deltas
-│   ├── autopsy-impact/             # Bounded traversal, SCC cycle condensation, ranking
-│   ├── autopsy-contracts/          # Callable/interface normalized contract models
-│   ├── autopsy-invariants/         # Invariant YAML evaluators (layers, cycles, forbidden)
-│   ├── autopsy-evidence/           # Verifiable finding receipts & path sequences
-│   ├── autopsy-storage/            # SQLite & content-addressed local disk cache
-│   ├── autopsy-report/             # Canonical JSON, human text & SARIF reporting
-│   └── autopsy-cli/                # Deterministic CLI binary entrypoint
-├── benchmarks/                     # Phase 6 Enterprise Benchmark Evaluation Harness
-│   ├── corpus/                     # 5 TypeScript target repositories (repo-api, migration, relayer, etc.)
-│   ├── tasks/                      # 50 task definitions strictly matching benchmark-task.schema.json
-│   ├── engine/                     # Baselines A (grep), B (LSP), C (autopsy), metrics & gate evaluator
-│   ├── results/                    # Committed reproduction reports (reproduction_report.json / .md)
-│   ├── generate_tasks.py           # Deterministic task generation engine
-│   └── run_benchmarks.py           # Executable benchmark CLI harness
+│   ├── [Integration & CLI]
+│   │   └── autopsy-cli/                # Deterministic CLI binary entrypoint & dispatch
+│   ├── [Presentation & Diagnostics]
+│   │   ├── autopsy-report/             # Canonical JSON, human text & SARIF 2.1.0 reporting
+│   │   ├── autopsy-storage/            # SQLite & content-addressed local disk cache
+│   │   ├── autopsy-telemetry/          # OpenTelemetry trace ingestion & span correlation
+│   │   └── autopsy-catalog/            # Enterprise service catalog & asset registry
+│   ├── [Forensic Verification Core]
+│   │   ├── autopsy-impact/             # Bounded traversal, SCC cycle condensation, top-k ranking
+│   │   ├── autopsy-invariants/         # Invariant YAML evaluators (layers, cycles, forbidden)
+│   │   ├── autopsy-diff/               # Semantic symbol, edge, and contract deltas
+│   │   ├── autopsy-contracts/          # Callable/interface normalized contract models
+│   │   ├── autopsy-contracts-distributed/ # OpenAPI, AsyncAPI & Pact distributed contract diff
+│   │   ├── autopsy-temporal/           # Git object store, bi-temporal fact DAG & lineage
+│   │   ├── autopsy-test-impact/        # Predictive test impact & coverage mapping
+│   │   ├── autopsy-mining/             # Git co-change mining & implicit coupling detection
+│   │   └── autopsy-evidence/           # Verifiable finding receipts & path sequences
+│   ├── [Graph & Symbol Substrate]
+│   │   ├── autopsy-graph/              # Petgraph-backed typed multigraph with edge provenance
+│   │   ├── autopsy-symbols/            # Stable symbol identities across line shifts (ADR-0009)
+│   │   └── autopsy-domain/             # Core typed IDs, entities, BTreeMap canonical models
+│   └── [Polyglot Adapters & Infrastructure]
+│       ├── autopsy-adapter-api/        # Extensible language AST & symbol parser traits
+│       ├── autopsy-adapter-typescript/ # TypeScript AST compiler & tree-sitter bridge
+│       ├── autopsy-adapter-python/     # Python AST compiler & tree-sitter bridge
+│       └── autopsy-repo/               # Discovery, ignore rules, sandboxing & BLAKE3 digests
 ├── apps/
-│   ├── mcp-server/                 # Model Context Protocol adapter (read-only)
-│   └── web-inspector/              # Local evidence & dependency graph inspector
-├── tests/                          # End-to-end integration test harness (autopsy-tests)
-├── schemas/                        # Frozen public JSON Schemas (Draft-07)
-├── scripts/                        # Automated verification & determinism gates
-├── docs/                           # Architecture, ADRs, Traceability, and Evidence records
-└── assets/                         # Visual emblems, diagrams, and identity assets
+│   ├── mcp-server/                     # Model Context Protocol adapter (read-only, stdio)
+│   └── web-inspector/                  # Local evidence & dependency graph inspector
+├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
+├── schemas/                            # Frozen public JSON Schemas (Draft-07)
+├── scripts/                            # Automated verification & determinism gates
+├── docs/                               # 33 Verification Reports, ADRs, and Traceability
+└── assets/                             # Visual emblems, diagrams, and identity assets
 ```
 
 ---
@@ -403,28 +554,52 @@ To run SynEvid on a partner's historical change (base ref → worktree):
 
 ---
 
-## 9. Requirements Traceability & Evidence
+## 9. Requirements Traceability & Forensic Evidence Suite
 
-* **Requirements Matrix:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001 through FR-030).
-* **Engineering Evidence Log:**
-  - [`01-core-foundation-verification.md`](docs/evidence/01-core-foundation-verification.md)
-  - [`02-typescript-adapter-verification.md`](docs/evidence/02-typescript-adapter-verification.md)
-  - [`03-dependency-graph-and-diff.md`](docs/evidence/03-dependency-graph-and-diff.md)
-  - [`04-impact-contracts-and-invariants.md`](docs/evidence/04-impact-contracts-and-invariants.md)
-  - [`05-cli-and-storage-engine.md`](docs/evidence/05-cli-and-storage-engine.md)
-  - [`06-benchmark-harness-verification.md`](docs/evidence/06-benchmark-harness-verification.md) (Baseline-C figures superseded — see 13)
-  - [`07-cross-platform-hardening.md`](docs/evidence/07-cross-platform-hardening.md)
-  - [`08-hardware-and-multi-arch-determinism.md`](docs/evidence/08-hardware-and-multi-arch-determinism.md)
-  - [`09-dual-cicd-and-release-lifecycle.md`](docs/evidence/09-dual-cicd-and-release-lifecycle.md)
-  - [`10-enterprise-sandboxing-and-defense.md`](docs/evidence/10-enterprise-sandboxing-and-defense.md)
-  - [`11-mcp-server-and-web-inspector.md`](docs/evidence/11-mcp-server-and-web-inspector.md)
-  - [`12-agent-lifecycle-protocol.md`](docs/evidence/12-agent-lifecycle-protocol.md)
-  - [`13-forensic-benchmark-closure.md`](docs/evidence/13-forensic-benchmark-closure.md)
-  - [`14-precision-incremental-pr-gate.md`](docs/evidence/14-precision-incremental-pr-gate.md) (current: precision controls, incremental, PR gate)
-  - [`16-python-adapter-and-installer.md`](docs/evidence/16-python-adapter-and-installer.md) (landscape audit, Python adapter, universal install)
-  - [`15-security-and-compliance-audit.md`](docs/evidence/15-security-and-compliance-audit.md)
-* **AI Coding Agent Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
-* **Architecture Decision Records:** [`docs/adr/`](docs/adr/).
+Synevid enforces strict, verifiable evidence documentation for every subsystem and invariant. Complete documentation index is available at [`docs/README.md`](docs/README.md).
+
+* **Formal Requirements Traceability:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001 through FR-030).
+* **Specification Coverage Appendix:** [`docs/requirements/COVERAGE_APPENDIX.md`](docs/requirements/COVERAGE_APPENDIX.md).
+* **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0010).
+* **AI Coding Agent Engineering Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
+
+### Complete 33-Report Verification Evidence Suite
+
+| Phase / Pillar | Evidence Record | Focus Area & Verified Invariants |
+| :--- | :--- | :--- |
+| **Foundation & Core (01–06)** | [`01-core-foundation-verification.md`](docs/evidence/01-core-foundation-verification.md) | Domain types, canonical BTreeMap models, snapshot BLAKE3 hashing |
+| | [`02-typescript-adapter-verification.md`](docs/evidence/02-typescript-adapter-verification.md) | Tree-sitter TypeScript/JS grammar, normalized AST & contracts |
+| | [`03-dependency-graph-and-diff.md`](docs/evidence/03-dependency-graph-and-diff.md) | Petgraph multigraph, typed edge provenance & semantic diff |
+| | [`04-impact-contracts-and-invariants.md`](docs/evidence/04-impact-contracts-and-invariants.md) | Bounded BFS, SCC cycle condensation, invariant policy engine |
+| | [`05-cli-and-storage-engine.md`](docs/evidence/05-cli-and-storage-engine.md) | SQLite persistence, content-addressed cache, deterministic CLI |
+| | [`06-benchmark-harness-verification.md`](docs/evidence/06-benchmark-harness-verification.md) | 50 benchmark tasks across 5 repositories, recall & precision gates |
+| **Hardening & Defense (07–10)** | [`07-cross-platform-hardening.md`](docs/evidence/07-cross-platform-hardening.md) | Windows/Linux/macOS CRLF normalization & path determinism |
+| | [`08-hardware-and-multi-arch-determinism.md`](docs/evidence/08-hardware-and-multi-arch-determinism.md) | x86_64 and aarch64 cross-architecture hash repeatability |
+| | [`09-dual-cicd-and-release-lifecycle.md`](docs/evidence/09-dual-cicd-and-release-lifecycle.md) | Dual CI/CD pipeline, pre-commit enforcement, release matrix |
+| | [`10-enterprise-sandboxing-and-defense.md`](docs/evidence/10-enterprise-sandboxing-and-defense.md) | Air-gapped containment, symlink escape guard, zero network sockets |
+| **Protocol & Ecosystem (11–16)** | [`11-mcp-server-and-web-inspector.md`](docs/evidence/11-mcp-server-and-web-inspector.md) | Model Context Protocol stdio server & local web visualizer |
+| | [`12-agent-lifecycle-protocol.md`](docs/evidence/12-agent-lifecycle-protocol.md) | Autonomous agent verification lifecycle (Baseline → Edit → Verify) |
+| | [`13-forensic-benchmark-closure.md`](docs/evidence/13-forensic-benchmark-closure.md) | Real-binary Baseline-C execution & empirical recall advantage |
+| | [`14-precision-incremental-pr-gate.md`](docs/evidence/14-precision-incremental-pr-gate.md) | Callers profiling, top-k ranking, incremental baseline caching |
+| | [`15-security-and-compliance-audit.md`](docs/evidence/15-security-and-compliance-audit.md) | Fail-open config fix, graph pagination, deny audit, SBOM compliance |
+| | [`16-python-adapter-and-installer.md`](docs/evidence/16-python-adapter-and-installer.md) | Tree-sitter Python adapter, universal installer & host configurator |
+| **Advanced Verification (17–25)** | [`17-temporal-semantic-graph.md`](docs/evidence/17-temporal-semantic-graph.md) | Git object store, bi-temporal fact DAG & commit history walk |
+| | [`18-predictive-test-selection.md`](docs/evidence/18-predictive-test-selection.md) | Test impact analysis, coverage ingestion & targeted execution |
+| | [`19-openapi-contract-diff.md`](docs/evidence/19-openapi-contract-diff.md) | Distributed REST API contract drift & breaking change detection |
+| | [`20-asyncapi-contract-diff.md`](docs/evidence/20-asyncapi-contract-diff.md) | Event-driven schema compatibility & message payload drift |
+| | [`21-pact-contract-diff.md`](docs/evidence/21-pact-contract-diff.md) | Consumer-driven contract verification & consumer/provider safety |
+| | [`22-opentelemetry-trace-ingestion.md`](docs/evidence/22-opentelemetry-trace-ingestion.md) | Distributed OTLP trace ingestion & runtime call graph correlation |
+| | [`23-runtime-static-topology-fusion.md`](docs/evidence/23-runtime-static-topology-fusion.md) | Static AST graph fused with runtime observability topology |
+| | [`24-git-cochange-mining.md`](docs/evidence/24-git-cochange-mining.md) | Association rule mining, implicit coupling & co-change frequency |
+| | [`25-enterprise-service-catalog.md`](docs/evidence/25-enterprise-service-catalog.md) | Unified service registry, catalog schema conformance & metadata |
+| **Orchestration & Lineage (26–33)**| [`26-unified-cli-orchestration.md`](docs/evidence/26-unified-cli-orchestration.md) | CLI subcommand dispatch, exit codes & consolidated flags |
+| | [`27-blast-radius-visual-views.md`](docs/evidence/27-blast-radius-visual-views.md) | Mermaid, SVG, and interactive graph blast radius visualizers |
+| | [`28-msrv-and-schema-closure.md`](docs/evidence/28-msrv-and-schema-closure.md) | Rust 1.90+ MSRV guarantees & Draft-07 JSON schema closure |
+| | [`29-symbol-lineage-protocol.md`](docs/evidence/29-symbol-lineage-protocol.md) | Exact digest + token-set Jaccard rename detection protocol |
+| | [`30-version-consistency-audit.md`](docs/evidence/30-version-consistency-audit.md) | Workspace version synchronization & schema compatibility check |
+| | [`31-cochange-coupling-inspector.md`](docs/evidence/31-cochange-coupling-inspector.md) | Historical coupling forensics & unexpected correlation detection |
+| | [`32-storage-writeback-persistence.md`](docs/evidence/32-storage-writeback-persistence.md) | Write-through cache invariants & database compaction |
+| | [`33-verification-procedures.md`](docs/evidence/33-verification-procedures.md) | Canonical test suite execution & release sign-off checklist |
 
 ---
 
