@@ -13,6 +13,75 @@ export interface AutopsyExecutionResult {
   rawStderr: string;
 }
 
+/** The default kill switch, unchanged from the original 30 s contract. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Resolves the per-call timeout. `AUTOPSY_TIMEOUT_MS` lets a host raise the ceiling for
+ * large repositories without a code change; a tool-supplied `timeoutMs` always wins. A
+ * non-positive or non-numeric env value is ignored rather than trusted.
+ */
+export function resolveTimeoutMs(timeoutMs?: number): number {
+  if (timeoutMs && timeoutMs > 0) {
+    return timeoutMs;
+  }
+  const fromEnv = Number(process.env.AUTOPSY_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return fromEnv;
+  }
+  return DEFAULT_TIMEOUT_MS;
+}
+
+/**
+ * Snapshot pinning (Tier 1.4).
+ *
+ * Which CLI flag the given subcommand reads a stored snapshot ID from. Every pinned
+ * run re-derives its report from that exact stored state instead of re-parsing the
+ * worktree, which is what turns N sequential tool calls over the same baseline into
+ * one parse plus N cheap re-reads. Commands with no snapshot input return no flags.
+ */
+export function pinningFlags(subcommand: string, snapshotId: string): string[] {
+  switch (subcommand) {
+    // Impact against a stored graph state.
+    case 'impact':
+      return ['--snapshot-id', snapshotId];
+    // diff: the pinned snapshot is the *before* state; the after state stays the
+    // worktree so a pinned diff still answers "what changed since then".
+    case 'diff':
+      return ['--before', snapshotId];
+    // verify: invariants evaluated against the pinned baseline.
+    case 'verify':
+      return ['--baseline-id', snapshotId];
+    // baseline/status: incremental rebuild that reuses per-file cached artifacts for
+    // byte-identical files (falls back to full analysis when the cache cannot satisfy).
+    case 'baseline':
+      return ['--incremental', '--baseline-id', snapshotId];
+    // Browse family (Tier 2.4): symbols, edges, find, and the map all read the pinned
+    // graph state, so a pinned session browses one immutable snapshot end to end.
+    case 'symbols':
+    case 'edges':
+    case 'find':
+    case 'map':
+      return ['--snapshot-id', snapshotId];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The snapshot ID a call is pinned to, if any: the explicit tool argument wins over
+ * the `AUTOPSY_SNAPSHOT` environment variable, which is how a host pins one baseline
+ * across a whole agent session while a single call can still override it.
+ */
+export function pinnedSnapshotId(explicit?: string): string | undefined {
+  const trimmed = explicit?.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  const fromEnv = process.env.AUTOPSY_SNAPSHOT?.trim();
+  return fromEnv ? fromEnv : undefined;
+}
+
 /**
  * Resolves the path to the compiled `autopsy` CLI binary.
  */
@@ -48,14 +117,26 @@ export function resolveAutopsyBinary(): string {
 export async function runAutopsy(
   subcommand: string,
   args: string[] = [],
-  options: { repoRoot?: string; timeoutMs?: number } = {}
+  options: {
+    repoRoot?: string;
+    timeoutMs?: number;
+    /** Pin this call to a stored snapshot (Tier 1.4); wins over AUTOPSY_SNAPSHOT. */
+    snapshotId?: string;
+  } = {}
 ): Promise<AutopsyExecutionResult> {
   const binary = resolveAutopsyBinary();
   const repoRoot = options.repoRoot || '.';
-  const timeout = options.timeoutMs || 30_000;
+  const timeout = resolveTimeoutMs(options.timeoutMs);
+
+  // Snapshot pinning: the pin injects the subcommand-specific flag(s) BEFORE the
+  // caller's own args, so an explicit flag in `args` always wins over the pin (clap
+  // takes the last occurrence). A pin therefore acts as a session default, never as an
+  // override of what a caller asked for.
+  const snapshot = pinnedSnapshotId(options.snapshotId);
+  const pinned = snapshot ? pinningFlags(subcommand, snapshot) : [];
 
   // Build command arguments with JSON output format
-  const fullArgs = [subcommand, '-r', repoRoot, '-f', 'json', ...args];
+  const fullArgs = [subcommand, '-r', repoRoot, '-f', 'json', ...pinned, ...args];
 
   try {
     const { stdout, stderr } = await execFileAsync(binary, fullArgs, {

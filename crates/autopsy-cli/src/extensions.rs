@@ -93,6 +93,121 @@ fn coverage_exit(strict: bool, coverage: CoverageState) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// Compact projection (Tier 1.5: token budgets for agent context windows)
+// ---------------------------------------------------------------------------
+
+/// How a report is presented to a bounded context window.
+///
+/// `compact: false` is the engine's full canonical answer, unchanged. `compact: true`
+/// keeps every scalar (counts, coverage, digests, notes) exact and slices every
+/// top-level array that exceeds the top-k, recording the residual. Compaction is a
+/// presentation choice about **size**, never a change to the engine's answer or its
+/// coverage: a report that said `unknown` before compaction cannot read `verified`
+/// after it.
+#[derive(Debug, Clone, Copy)]
+pub struct CompactArgs {
+    pub compact: bool,
+    pub top_k: Option<usize>,
+}
+
+/// The neutral value for commands that do not offer compaction (`test-select`, whose
+/// plan is already bounded by the test inventory).
+pub const NO_COMPACT: CompactArgs = CompactArgs {
+    compact: false,
+    top_k: None,
+};
+
+/// The compact slice size a caller gets when it did not name one.
+const DEFAULT_COMPACT_TOP_K: usize = 20;
+
+/// Resolves the top-k a caller asked for, or the default, bounded to the pagination
+/// ceiling every browse command already uses.
+pub fn resolve_top_k(top_k: Option<usize>) -> usize {
+    top_k.unwrap_or(DEFAULT_COMPACT_TOP_K).clamp(1, 1000)
+}
+
+/// Rewrites an outcome's JSON through the compact projection when
+/// [`CompactArgs::compact`] is set. The text output is left untouched: it already speaks
+/// in counts, and an agent that asked for a small machine-readable view does not also
+/// want its prose cut.
+pub fn apply_compact(outcome: Outcome, args: &CompactArgs) -> Outcome {
+    if !args.compact {
+        return outcome;
+    }
+    let top_k = resolve_top_k(args.top_k);
+    let value = match serde_json::from_str::<serde_json::Value>(&outcome.json) {
+        Ok(value) => value,
+        // A report that is not JSON was the caller's bug and will be reproduced by
+        // `print`; compaction must never stand between an agent and its evidence.
+        Err(_) => return outcome,
+    };
+    let compacted = compact_projection(&value, top_k);
+    match serde_json::to_string_pretty(&compacted) {
+        Ok(json) => Outcome {
+            exit_code: outcome.exit_code,
+            json,
+            text: outcome.text,
+        },
+        // Same rule: if the projection cannot serialize, hand back the original rather
+        // than failing a report that was already produced.
+        Err(_) => outcome,
+    }
+}
+
+/// The projection itself: one rule, applied to the top level, in engine order.
+///
+/// * Scalars and small arrays pass through unchanged.
+/// * An array above the top-k keeps its first `top_k` elements **in the engine's own
+///   canonical order** (the engines already sort; the projection never re-sorts) and
+///   adds `<key>_omitted` naming the residual count.
+/// * `"compact": true` is added so a consumer can tell a compacted view from a full one
+///   without diffing against a second run.
+///
+/// Deterministic by construction: same input, same top-k, same output. Order inside the
+/// projection follows the engine's own, and no field is read speculatively.
+pub fn compact_projection(value: &serde_json::Value, top_k: usize) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, item) in map {
+                if let serde_json::Value::Array(arr) = item
+                    && arr.len() > top_k
+                {
+                    out.insert(
+                        key.clone(),
+                        serde_json::Value::Array(arr.iter().take(top_k).cloned().collect()),
+                    );
+                    out.insert(
+                        format!("{key}_omitted"),
+                        serde_json::Value::from(arr.len() - top_k),
+                    );
+                    continue;
+                }
+                out.insert(key.clone(), item.clone());
+            }
+            out.insert("compact".to_string(), serde_json::Value::from(true));
+            serde_json::Value::Object(out)
+        }
+        // A bare top-level array (a fact list handed straight through, for instance)
+        // cannot carry a sibling residual, so it is wrapped once, explicitly.
+        serde_json::Value::Array(arr) if arr.len() > top_k => {
+            let mut wrapped = serde_json::Map::new();
+            wrapped.insert(
+                "items".to_string(),
+                serde_json::Value::Array(arr.iter().take(top_k).cloned().collect()),
+            );
+            wrapped.insert(
+                "items_omitted".to_string(),
+                serde_json::Value::from(arr.len() - top_k),
+            );
+            wrapped.insert("compact".to_string(), serde_json::Value::from(true));
+            serde_json::Value::Object(wrapped)
+        }
+        other => other.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Repository plumbing
 // ---------------------------------------------------------------------------
 

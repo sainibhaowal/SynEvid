@@ -5,8 +5,15 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import { createAutopsyMcpServer } from '../dist/server.js';
-import { runAutopsy, resolveAutopsyBinary } from '../dist/cli.js';
-import { evidenceEnvelope } from '../dist/evidence.js';
+import {
+  runAutopsy,
+  resolveAutopsyBinary,
+  pinningFlags,
+  pinnedSnapshotId,
+  resolveTimeoutMs,
+} from '../dist/cli.js';
+import { evidenceEnvelope, refusedEnvelope, repairAdviceFromStderr } from '../dist/evidence.js';
+import { resolveAgainstRepoRoot } from '../dist/server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,7 +66,7 @@ test('runAutopsy executes verify command on repo-api', async () => {
   assert.equal(result.data.coverage.state, 'verified');
 });
 
-test('createAutopsyMcpServer registers all 9 read-only tools and resources', () => {
+test('createAutopsyMcpServer registers all 10 read-only tools and resources', () => {
   const server = createAutopsyMcpServer();
   assert.ok(server, 'McpServer instance must be created');
 
@@ -69,6 +76,7 @@ test('createAutopsyMcpServer registers all 9 read-only tools and resources', () 
   assert.ok(tools.includes('autopsy_diff'), 'Must register autopsy_diff');
   assert.ok(tools.includes('autopsy_verify'), 'Must register autopsy_verify');
   assert.ok(tools.includes('autopsy_explain'), 'Must register autopsy_explain');
+  assert.ok(tools.includes('autopsy_find'), 'Must register autopsy_find (Tier 1.1 symbol resolution)');
   for (const tool of [
     'autopsy_temporal',
     'autopsy_test_selection',
@@ -77,14 +85,339 @@ test('createAutopsyMcpServer registers all 9 read-only tools and resources', () 
   ]) {
     assert.ok(tools.includes(tool), `Must register ${tool}`);
   }
-  assert.equal(tools.length, 9, 'Must register exactly 5 mandatory plus 4 Phase 4.2 tools');
+  assert.equal(tools.length, 11, '5 mandatory + 4 Phase 4.2 + find + session');
 
   const resources = Object.keys(server._registeredResources);
-  assert.ok(resources.includes('autopsy://graph'), 'Must register autopsy://graph resource');
-
   const templates = Object.keys(server._registeredResourceTemplates || {});
+  assert.ok(
+    resources.includes('autopsy://graph') ||
+      templates.includes('autopsy_graph'),
+    'Must register the autopsy://graph resource (template or fixed URI)'
+  );
+
   assert.ok(templates.includes('autopsy_graph_symbols'), 'Must register paginated symbols template');
   assert.ok(templates.includes('autopsy_graph_edges'), 'Must register paginated edges template');
+  assert.ok(templates.includes('autopsy_graph_map'), 'Must register the bounded code-map template (Tier 1.3)');
+  assert.ok(
+    templates.includes('autopsy_workspace'),
+    'Must register the Tier 2.3 workspace registry resource'
+  );
+});
+
+// ---------------------------------------------------------------------------------------
+// Tier 2 — adapter languages, repair advice, session receipts, workspace registry
+// ---------------------------------------------------------------------------------------
+
+test('repairAdviceFromStderr parses the engine error advice exactly', () => {
+  const stderr = [
+    'Error: Analysis error: snapshot \'x\' not stored; capture one with `autopsy baseline --persist`',
+    'what_failed: analysis_snapshot_missing',
+    'why: the referenced snapshot is not present in the storage engine',
+    'next_action: capture one first: run `autopsy baseline --persist` and reuse its snapshot id',
+  ].join('\n');
+  const advice = repairAdviceFromStderr(stderr);
+  assert.ok(advice, 'the markers must parse');
+  assert.equal(advice.what_failed, 'analysis_snapshot_missing');
+  assert.match(advice.next_action, /baseline --persist/);
+});
+
+test('repairAdviceFromStderr stays null when the engine produced evidence, not an error', () => {
+  // An exit-2 policy failure with a report carries no advice markers.
+  assert.equal(repairAdviceFromStderr('{"coverage": "verified"}\n'), null);
+  assert.equal(repairAdviceFromStderr(''), null);
+});
+
+test('evidenceEnvelope attaches engine repair advice on failure and nothing on pass', async () => {
+  const empty = await runAutopsy('find', ['   '], {
+    repoRoot: path.resolve(__dirname, '../../../benchmarks/corpus/repo-api'),
+  });
+  assert.equal(empty.exitCode, 3, 'a blank pattern is a caller error at exit 3');
+  const envelope = evidenceEnvelope('find', empty);
+  assert.ok(envelope.repair, 'a failure with engine markers must carry repair advice');
+  assert.equal(envelope.repair.what_failed, 'analysis_empty_input');
+  assert.ok(envelope.repair.why);
+  assert.ok(envelope.repair.next_action);
+
+  const refused = refusedEnvelope('explain', 'missing target', 'pass a target');
+  assert.equal(refused.exit_code, 3);
+  assert.equal(refused.repair.next_action, 'pass a target');
+  assert.equal(refused.repair.what_failed, 'input_refused');
+});
+
+test('resolveAgainstRepoRoot resolves relative paths deterministically', () => {
+  assert.equal(
+    resolveAgainstRepoRoot('specs/checkout.json', '/work/app'),
+    '/work/app/specs/checkout.json'
+  );
+  assert.equal(
+    resolveAgainstRepoRoot('/abs/trace.json', '/work/app'),
+    '/abs/trace.json',
+    'absolute paths stay untouched'
+  );
+});
+
+test('pinningFlags covers the Tier 2.4 browse family with --snapshot-id', () => {
+  for (const subcommand of ['symbols', 'edges', 'find', 'map']) {
+    assert.deepEqual(pinningFlags(subcommand, 'abc123'), [
+      '--snapshot-id',
+      'abc123',
+    ], `${subcommand} must pin`);
+  }
+  assert.deepEqual(pinningFlags('session', 'abc123'), [], 'sessions do not take pin flags');
+});
+
+test('browse pinning reads a stored snapshot end to end', async () => {
+  const repoRoot = REPO_API_ROOT;
+  const stored = await runAutopsy('baseline', ['--persist'], { repoRoot });
+  assert.equal(stored.exitCode, 0, 'baseline must persist');
+  const snapshotId = stored.data?.snapshots?.[0]?.snapshot_id;
+  assert.ok(snapshotId, 'a stored snapshot id must exist');
+
+  const pinned = await runAutopsy('symbols', ['--snapshot-id', snapshotId], { repoRoot });
+  assert.equal(pinned.exitCode, 0, 'pinned browse must succeed');
+  assert.ok(Array.isArray(pinned.data.symbols));
+
+  const badPin = await runAutopsy('symbols', ['--snapshot-id', 'not-a-snapshot'], { repoRoot });
+  assert.equal(badPin.exitCode, 3, 'an unknown pin is an analysis error, not a silent reparse');
+  const envelope = evidenceEnvelope('symbols', badPin);
+  assert.ok(envelope.repair, 'the pinned miss carries repair advice');
+  assert.match(envelope.repair.next_action, /baseline --persist/);
+});
+
+test('autopsy_session runs the full repair-loop receipt lifecycle', async () => {
+  const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-session-'));
+  try {
+    const start = await runAutopsy('session', ['start'], { repoRoot: sessionRoot });
+    assert.equal(start.exitCode, 0, 'session start');
+    const sessionId = start.data.session_id;
+    assert.ok(sessionId, 'the session id is the receipt anchor');
+
+    const record = await runAutopsy(
+      'session',
+      [
+        'record',
+        '--session-id', sessionId,
+        '--exit-code', '2',
+        '--note', 'breaking change flagged',
+        '--',
+        'verify',
+        '--strict',
+      ],
+      { repoRoot: sessionRoot }
+    );
+    assert.equal(record.exitCode, 0, 'recording is a store write, not a verdict');
+
+    const close = await runAutopsy('session', ['close', '--session-id', sessionId], {
+      repoRoot: sessionRoot,
+    });
+    assert.equal(close.exitCode, 2, 'the close mirrors the failing evidence exit code');
+    assert.equal(close.data.verdict, 'fail');
+    assert.equal(close.data.evidence_step, 'verify');
+    assert.equal(close.data.evidence_exit_code, 2);
+    assert.equal(close.data.steps, 1);
+
+    const reclosed = await runAutopsy('session', ['close', '--session-id', sessionId], {
+      repoRoot: sessionRoot,
+    });
+    assert.equal(reclosed.exitCode, 3, 'a closed receipt is final');
+    assert.ok(reclosed.data?.error || reclosed.rawStderr, 'the second close refuses honestly');
+  } finally {
+    fs.rmSync(sessionRoot, { recursive: true, force: true });
+  }
+});
+
+test('autopsy_session schema exposes the lifecycle actions honestly', () => {
+  const server = createAutopsyMcpServer();
+  const tool = server._registeredTools.autopsy_session;
+  assert.ok(tool, 'the session tool must be registered');
+  const shape = tool.inputSchema.shape;
+  assert.ok(shape.action, 'the action enum must be in the schema');
+  const values =
+    shape.action.options ??
+    shape.action._def?.values ??
+    shape.action._def?.checks?.[0]?.values;
+  assert.deepEqual([...values], ['start', 'record', 'close', 'show', 'list']);
+});
+
+// ---------------------------------------------------------------------------------------
+// Tier 1 — agent-experience surface (find, map, envelope, pinning, compaction)
+// ---------------------------------------------------------------------------------------
+
+test('runAutopsy find resolves a partial name the way an agent asks', async () => {
+  const result = await runAutopsy('find', ['userservice', '--name-only'], { repoRoot: REPO_API_ROOT });
+  assert.equal(result.success, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.data.total >= 1, true, 'the corpus UserService must resolve');
+  assert.equal(
+    result.data.symbols.some((sym) => /userservice/i.test(sym.qualified_name)),
+    true,
+    'a case-insensitive partial name resolves the symbol'
+  );
+  const hit = result.data.symbols[0];
+  assert.ok(hit.stable_id, 'every hit carries the exact identity impact -s needs');
+  assert.ok(hit.qualified_name);
+});
+
+test('runAutopsy find is deterministic and paginates', async () => {
+  const first = await runAutopsy('find', ['a', '--limit', '2', '--offset', '0'], { repoRoot: REPO_API_ROOT });
+  const second = await runAutopsy('find', ['a', '--limit', '2', '--offset', '2'], { repoRoot: REPO_API_ROOT });
+  assert.equal(first.data.total, second.data.total, 'total is the population, not the page');
+  const ids1 = new Set(first.data.symbols.map((sym) => sym.stable_id));
+  for (const sym of second.data.symbols) {
+    assert.ok(!ids1.has(sym.stable_id), 'find pages must not overlap');
+  }
+  const rerun = await runAutopsy('find', ['a', '--limit', '2', '--offset', '0'], { repoRoot: REPO_API_ROOT });
+  assert.deepEqual(rerun.data.symbols, first.data.symbols, 'byte-identical rerun');
+});
+
+test('runAutopsy find refuses an empty pattern with exit 3, not an empty success', async () => {
+  const result = await runAutopsy('find', ['   '], { repoRoot: REPO_API_ROOT });
+  assert.equal(result.exitCode, 3, 'a blank pattern is a caller bug');
+  assert.equal(result.success, false);
+  const envelope = evidenceEnvelope('find', result);
+  assert.equal(envelope.actionable, false, 'the refusal is stated in the envelope');
+});
+
+test('runAutopsy map returns a bounded, deterministic whole-graph projection', async () => {
+  const first = await runAutopsy('map', ['--top', '3'], { repoRoot: REPO_API_ROOT });
+  assert.equal(first.success, true);
+  assert.equal(first.data.symbols_total > 0, true, 'the corpus has symbols to map');
+  assert.ok(first.data.kind_counts, 'kind counts are the map');
+  assert.ok(first.data.package_counts, 'package counts are the map');
+  assert.equal(first.data.top_symbols.length <= 3, true, 'top is bounded');
+  const top = first.data.top_symbols;
+  assert.equal(
+    top.every((n, i) => i === 0 || top[i - 1].degree >= n.degree),
+    true,
+    'the top list ranks by degree descending'
+  );
+  const second = await runAutopsy('map', ['--top', '3'], { repoRoot: REPO_API_ROOT });
+  assert.deepEqual(second.data, first.data, 'byte-identical rerun');
+});
+
+test('runAutopsy map scope narrows counts and states the scope', async () => {
+  const every = await runAutopsy('map', [], { repoRoot: REPO_API_ROOT });
+  const scoped = await runAutopsy('map', ['--under', 'src/components'], { repoRoot: REPO_API_ROOT });
+  assert.equal(scoped.data.under, 'src/components', 'a scoped map states its scope');
+  assert.equal(
+    scoped.data.symbols_total <= every.data.symbols_total,
+    true,
+    'a scoped population is a subset'
+  );
+});
+
+test('mandatory tools now speak the one envelope: exit code and actionable travel with every answer', async () => {
+  const impact = await runAutopsy('impact', ['-s', 'UserService'], { repoRoot: REPO_API_ROOT });
+  const envel = evidenceEnvelope('impact', impact);
+  assert.equal(envel.exit_code, 0);
+  assert.equal(envel.actionable, true);
+  assert.ok(envel.report.impact, 'the report rides inside the envelope');
+});
+
+test('pinningFlags map each subcommand to its stored-snapshot flag', () => {
+  assert.deepEqual(pinningFlags('impact', 'snap-1'), ['--snapshot-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('diff', 'snap-1'), ['--before', 'snap-1']);
+  assert.deepEqual(pinningFlags('verify', 'snap-1'), ['--baseline-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('baseline', 'snap-1'), ['--incremental', '--baseline-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('symbols', 'snap-1'), ['--snapshot-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('edges', 'snap-1'), ['--snapshot-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('find', 'snap-1'), ['--snapshot-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('map', 'snap-1'), ['--snapshot-id', 'snap-1']);
+  assert.deepEqual(pinningFlags('session', 'snap-1'), [], 'bookkeeping takes no pin');
+});
+
+test('pinnedSnapshotId: explicit argument wins over AUTOPSY_SNAPSHOT', () => {
+  const previous = process.env.AUTOPSY_SNAPSHOT;
+  process.env.AUTOPSY_SNAPSHOT = 'env-snapshot';
+  assert.equal(pinnedSnapshotId(), 'env-snapshot');
+  assert.equal(pinnedSnapshotId('explicit'), 'explicit', 'the tool argument wins');
+  assert.equal(
+    pinnedSnapshotId('  '),
+    'env-snapshot',
+    'a blank argument is not an explicit choice: the session pin still applies'
+  );
+  delete process.env.AUTOPSY_SNAPSHOT;
+  assert.equal(pinnedSnapshotId('  '), undefined, 'with no pin anywhere, there is no pin');
+  assert.equal(pinnedSnapshotId('  '), pinnedSnapshotId(), 'blank and absent resolve identically');
+  if (previous === undefined) {
+    delete process.env.AUTOPSY_SNAPSHOT;
+  } else {
+    process.env.AUTOPSY_SNAPSHOT = previous;
+  }
+});
+
+test('resolveTimeoutMs honors AUTOPSY_TIMEOUT_MS and keeps 30s default', () => {
+  const previous = process.env.AUTOPSY_TIMEOUT_MS;
+  delete process.env.AUTOPSY_TIMEOUT_MS;
+  assert.equal(resolveTimeoutMs(), 30_000);
+  assert.equal(resolveTimeoutMs(45_000), 45_000, 'an explicit tool timeout wins');
+  process.env.AUTOPSY_TIMEOUT_MS = '120000';
+  assert.equal(resolveTimeoutMs(), 120_000);
+  assert.equal(resolveTimeoutMs(45_000), 45_000);
+  process.env.AUTOPSY_TIMEOUT_MS = 'not-a-number';
+  assert.equal(resolveTimeoutMs(), 30_000, 'a garbage env value is ignored, not trusted');
+  process.env.AUTOPSY_TIMEOUT_MS = '0';
+  assert.equal(resolveTimeoutMs(), 30_000, 'a zero timeout is no timeout');
+  if (previous === undefined) {
+    delete process.env.AUTOPSY_TIMEOUT_MS;
+  } else {
+    process.env.AUTOPSY_TIMEOUT_MS = previous;
+  }
+});
+
+test('snapshot pinning reuses a stored baseline: N impact calls, one parse', async () => {
+  // Build the stored state once.
+  const baseline = await runAutopsy('baseline', [], { repoRoot: REPO_API_ROOT });
+  assert.equal(baseline.exitCode, 0);
+  const snapshotId = baseline.data.snapshots[0].snapshot_id;
+
+  const unpinned = await runAutopsy('impact', ['-s', 'UserService'], { repoRoot: REPO_API_ROOT });
+  const pinned = await runAutopsy('impact', ['-s', 'UserService'], {
+    repoRoot: REPO_API_ROOT,
+    snapshotId,
+  });
+  assert.equal(pinned.exitCode, 0);
+  assert.deepEqual(
+    pinned.data.impact,
+    unpinned.data.impact,
+    'a pinned analysis must be the byte-identical answer of the worktree analysis at the same revision'
+  );
+
+  // Unknown snapshot IDs refuse loudly rather than silently re-parsing the worktree.
+  const ghost = await runAutopsy('impact', ['-s', 'UserService'], {
+    repoRoot: REPO_API_ROOT,
+    snapshotId: '00000000-ghost',
+  });
+  assert.equal(ghost.exitCode, 3, 'unresolvable pin is an analysis error, not one that lies');
+  assert.equal(ghost.success, false);
+});
+
+test('compact keeps counts and verdicts exact while naming the residual', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autopsy-mcp-compact-'));
+  const head = 'openapi: 3.2.1\ninfo:\n  title: shop\n  version: 1.0.0\npaths:\n';
+  const routes = ['  /a:\n', '  /b:\n', '  /c:\n', '  /d:\n', '  /e:\n']
+    .map((p) => p + "    get:\n      responses:\n        '200':\n          description: ok\n")
+    .join('');
+  // Removing /a /b /c /d /e gives five breaking changes — comfortably above top_k 2.
+  const from = writeFile('from.yaml', head + routes, dir);
+  const to = writeFile('to.yaml', head, dir);
+  const full = await runAutopsy('contract-dist', [from, to, '--protocol', 'openapi'], { repoRoot: dir });
+  assert.equal(full.exitCode, 2);
+  const compact = await runAutopsy(
+    'contract-dist',
+    [from, to, '--protocol', 'openapi', '--compact', '--top-k', '2'],
+    { repoRoot: dir }
+  );
+  assert.equal(compact.exitCode, 2, 'compaction must not move the verdict');
+  assert.equal(compact.data.verdict, 'breaking');
+  assert.equal(compact.data.compact, true, 'a compacted view is labelled');
+  const primary = Array.isArray(compact.data.changes) ? 'changes' : null;
+  assert.notEqual(primary, null, 'the change list is the primary list of the report');
+  if (primary) {
+    assert.equal(compact.data[primary].length, 2, 'the slice honors top_k');
+    assert.equal(compact.data[`${primary}_omitted`], 3, 'the residual is named: 5 changes - 2 shown');
+    assert.equal(Array.isArray(full.data.changes) && full.data.changes.length, 5);
+  }
 });
 
 test('runAutopsy paginates symbols deterministically', async () => {

@@ -302,6 +302,7 @@ pub fn is_text_language(lang: &str) -> bool {
         "typescript"
             | "javascript"
             | "rust"
+            | "go"
             | "python"
             | "json"
             | "toml"

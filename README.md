@@ -102,6 +102,8 @@ flowchart TD
         API["autopsy-adapter-api<br/>(Extensible Language Parser Traits)"]
         ATS["autopsy-adapter-typescript<br/>(Tree-Sitter TypeScript/JS Compiler)"]
         APY["autopsy-adapter-python<br/>(Tree-Sitter Python Compiler)"]
+        AGO["autopsy-adapter-go<br/>(Tree-Sitter Go Compiler)"]
+        ARS["autopsy-adapter-rust<br/>(Tree-Sitter Rust Compiler)"]
         REP_SCAN["autopsy-repo<br/>(Ignore Scanner, Path Sanitization, Symlink Guard, BLAKE3)"]
     end
 
@@ -300,6 +302,8 @@ SynEvid/
 │       ├── autopsy-adapter-api/        # Extensible language AST & symbol parser traits
 │       ├── autopsy-adapter-typescript/ # TypeScript AST compiler & tree-sitter bridge
 │       ├── autopsy-adapter-python/     # Python AST compiler & tree-sitter bridge
+│       ├── autopsy-adapter-go/         # Go AST compiler & tree-sitter bridge (Tier 2)
+│       ├── autopsy-adapter-rust/       # Rust AST compiler & tree-sitter bridge (Tier 2)
 │       └── autopsy-repo/               # Discovery, ignore rules, sandboxing & BLAKE3 digests
 ├── apps/
 │   ├── mcp-server/                     # Model Context Protocol adapter (read-only, stdio)
@@ -477,7 +481,7 @@ prompt (never blocks an edit).
 your repository. Every PR then gets: invariant verdict (fails the merge on
 exit 2), per-file caller blast radius, and JSON + SARIF artifacts.
 
-**Language coverage:** TypeScript/JavaScript and Python adapters (both
+**Language coverage:** TypeScript/JavaScript, Python, **Go, and Rust** adapters (all
 deterministic, tree-sitter, conformance-tested). Others land only when a
 design partner requires one — breadth deliberately follows demand.
 

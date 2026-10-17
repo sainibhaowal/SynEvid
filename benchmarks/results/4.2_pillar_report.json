@@ -1,0 +1,56 @@
+{
+  "not_measured": [
+    "RQ6 temporal lineage precision/recall: requires a curated ground-truth set of 50 refactoring commits (trpc, zod, chalk); not present in the committed corpus. Engine-level unit tests (step31) verify the rules but no end-to-end corpus evaluation exists.",
+    "RQ7 test-impact 0.00% false-negative rate: requires 200 real PR commits with recorded test failure logs; not present. Engine conservativeness is proven by construction in unit tests, not measured on a corpus.",
+    "RQ8 distributed contract drift 100% accuracy: requires 120 synthetic/industrial OpenAPI/AsyncAPI evolutions; not present.",
+    "RQ9 runtime-static fusion: requires instrumented microservices with sampled OTel traces; not present.",
+    "RQ10 co-change: correctness is not measurable from co-change alone (no causal labels possible); only stability and stated uncertainty are measured here."
+  ],
+  "notes": [],
+  "pillars": {
+    "catalog": {
+      "coverage": "partial",
+      "dependencies": 200,
+      "entities": 0,
+      "exit_code": 0,
+      "manifests": 28
+    },
+    "cochange": {
+      "claim": "temporal_co_occurrence_only",
+      "commits_considered": 44,
+      "commits_seen": 51,
+      "coverage": "partial",
+      "edges": 260,
+      "exit_code": 0,
+      "pairs_truncated": false
+    },
+    "temporal": {
+      "active": 347,
+      "coverage": "verified",
+      "digest_present": true,
+      "exit_code": 0,
+      "facts": 813,
+      "partial": 0,
+      "retired": 466,
+      "unknown": 0
+    },
+    "test_select": {
+      "coverage": null,
+      "exit_code": 3,
+      "fallback": null,
+      "selected_suites": 0,
+      "selected_tests": 0,
+      "total_suites": null,
+      "total_tests": null
+    }
+  },
+  "promotion_claim": "No promotion is claimed. This report records engine behaviour and explicit non-measurement; capabilities remain in their current (implemented, non-promoted-as-gate) state per the Phase 4.5 doctrine.",
+  "temporal_journal_stability_3_runs": {
+    "all_equal": true,
+    "digests": [
+      "43e3e3fa6462d8bbe7d727bf18a4e93f9992a383156e09335b243433332f66b0",
+      "43e3e3fa6462d8bbe7d727bf18a4e93f9992a383156e09335b243433332f66b0",
+      "43e3e3fa6462d8bbe7d727bf18a4e93f9992a383156e09335b243433332f66b0"
+    ]
+  }
+}

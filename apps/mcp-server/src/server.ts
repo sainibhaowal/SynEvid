@@ -1,15 +1,30 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import path from 'node:path';
 import { runAutopsy } from './cli.js';
-import { asText, evidenceEnvelope } from './evidence.js';
+import { asText, evidenceEnvelope, refusedEnvelope } from './evidence.js';
+
+/**
+ * Resolves a caller-supplied file argument against the tool's repo root (Tier 2.3).
+ *
+ * Subcommand file arguments (contract documents, trace exports, catalog roots, LCOV
+ * reports) are interpreted by the engine relative to its own process CWD, not the
+ * `-r` root, so the server resolves them to absolute paths here — one deterministic
+ * place, POSIX-normalized, before they ever reach the CLI.
+ */
+export function resolveAgainstRepoRoot(input: string, repoRoot: string): string {
+  return path.isAbsolute(input) ? input : path.resolve(repoRoot, input).split(path.sep).join('/');
+}
 
 /**
  * Creates and configures the Code Autopsy Model Context Protocol (MCP) server.
- * Implements the 5 mandatory read-only tools defined in CA-TECH-001 Chapter 4.1, plus the
- * 4 Phase 4.2 evidence tools (temporal, test selection, distributed contract diff, and the
- * organisational blast radius). Every one of them is read-only: they run the `autopsy` CLI
- * with the flags the caller supplied and return what the engine said, including the exit
- * code that says whether the answer is actionable.
+ * Implements the 5 mandatory read-only tools defined in CA-TECH-001 Chapter 4.1, the
+ * 4 Phase 4.2 evidence tools (temporal, test selection, distributed contract diff, and
+ * the organisational blast radius), and the Tier-1 agent-experience additions (`find`
+ * for symbol resolution, `map` as a graph resource). Every one of them is read-only:
+ * they run the `autopsy` CLI with the flags the caller supplied and return what the
+ * engine said — always inside one envelope, with the exit code that says whether the
+ * answer is actionable.
  */
 export function createAutopsyMcpServer(): McpServer {
   const server = new McpServer({
@@ -28,23 +43,23 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Target repository root directory (defaults to current directory)'),
+        snapshot_id: z
+          .string()
+          .optional()
+          .describe(
+            'Pin this status call to a stored snapshot ID: the baseline reuses cached ' +
+              'per-file artifacts for byte-identical files instead of re-parsing (also ' +
+              'settable for the whole session via the AUTOPSY_SNAPSHOT environment variable)'
+          ),
       }),
     },
     async (args) => {
       const repoRoot = args.repo_root || '.';
       // Runs baseline to capture current immutable snapshot and coverage
-      const result = await runAutopsy('baseline', [], { repoRoot });
+      const result = await runAutopsy('baseline', [], { repoRoot, snapshotId: args.snapshot_id });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: asText(evidenceEnvelope('baseline', result)) }],
       };
     }
   );
@@ -97,6 +112,14 @@ export function createAutopsyMcpServer(): McpServer {
           .positive()
           .optional()
           .describe('Ranked shortlist size by shortest-path distance (full evidence set stays in the report)'),
+        snapshot_id: z
+          .string()
+          .optional()
+          .describe(
+            'Analyze this stored snapshot ID instead of the current worktree (also ' +
+              'settable for the whole session via the AUTOPSY_SNAPSHOT environment variable; ' +
+              'an explicit argument always wins over the pin)'
+          ),
       }),
     },
     async (args) => {
@@ -122,18 +145,10 @@ export function createAutopsyMcpServer(): McpServer {
         cliArgs.push('--top-k', args.top_k.toString());
       }
 
-      const result = await runAutopsy('impact', cliArgs, { repoRoot });
+      const result = await runAutopsy('impact', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: asText(evidenceEnvelope('impact', result)) }],
       };
     }
   );
@@ -185,18 +200,10 @@ export function createAutopsyMcpServer(): McpServer {
         cliArgs.push('--after', head);
       }
 
-      const result = await runAutopsy('diff', cliArgs, { repoRoot });
+      const result = await runAutopsy('diff', cliArgs, { repoRoot, snapshotId: args.base || args.before });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: asText(evidenceEnvelope('diff', result)) }],
       };
     }
   );
@@ -245,18 +252,10 @@ export function createAutopsyMcpServer(): McpServer {
         cliArgs.push('--strict');
       }
 
-      const result = await runAutopsy('verify', cliArgs, { repoRoot });
+      const result = await runAutopsy('verify', cliArgs, { repoRoot, snapshotId: base });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: asText(evidenceEnvelope('verify', result)) }],
       };
     }
   );
@@ -290,7 +289,13 @@ export function createAutopsyMcpServer(): McpServer {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ error: 'Missing target or finding_id argument' }),
+              text: asText(
+                refusedEnvelope(
+                  'explain',
+                  'missing target or finding_id argument',
+                  'call autopsy_explain with `target` set to a stable ID from find/symbols or a finding ID from a verify report'
+                )
+              ),
             },
           ],
         };
@@ -298,15 +303,78 @@ export function createAutopsyMcpServer(): McpServer {
       const result = await runAutopsy('explain', [targetId], { repoRoot });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text:
-              typeof result.data === 'string'
-                ? result.data
-                : JSON.stringify(result.data, null, 2),
-          },
-        ],
+        content: [{ type: 'text', text: asText(evidenceEnvelope('explain', result)) }],
+      };
+    }
+  );
+
+  // 6. autopsy_find: a partial name -> the symbols it resolves to (Tier 1.1).
+  // `impact` resolves an *exact* identity, which is the right contract for traversal;
+  // resolution from what an agent actually types — a partial, case-insensitive fragment
+  // — belongs here, and its stable IDs are what feed `impact -s`.
+  server.registerTool(
+    'autopsy_find',
+    {
+      description:
+        'Resolve a pattern against the analyzed graph: case-insensitive substring over ' +
+        'qualified names, declaring paths, and stable IDs, returning stable IDs an agent can ' +
+        'route straight into the impact tool. An empty result set is an honest "no such ' +
+        'symbol" with the population searched, never an error (read-only).',
+      inputSchema: z.object({
+        pattern: z
+          .string()
+          .min(1)
+          .describe('The text to match, case-insensitively (a substring of a symbol, path, or stable ID)'),
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Target repository root directory'),
+        kind: z
+          .string()
+          .optional()
+          .describe('Restrict matches to one symbol kind (function, method, class, interface, type, enum, variable)'),
+        name_only: z
+          .boolean()
+          .optional()
+          .describe(
+            'Match qualified names and paths only. Stable IDs remain in the output but do ' +
+              'not widen the match — a hash fragment the caller did not type is not a hit.'
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Maximum entries to return (default 50, capped at 1000)'),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe('Zero-based offset into the deterministic stable-id order'),
+        snapshot_id: z
+          .string()
+          .optional()
+          .describe(
+            'Resolve the pattern against a stored snapshot ID instead of the current ' +
+              "worktree: pins one immutable graph so 'find then impact' addresses the " +
+              'same evidence (the AUTOPSY_SNAPSHOT environment variable pins a whole ' +
+              'session; an explicit argument always wins over the pin)'
+          ),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const cliArgs: string[] = [args.pattern];
+      if (args.kind) cliArgs.push('--kind', args.kind);
+      if (args.name_only) cliArgs.push('--name-only');
+      if (args.limit) cliArgs.push('--limit', String(args.limit));
+      if (args.offset) cliArgs.push('--offset', String(args.offset));
+
+      const result = await runAutopsy('find', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
+
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('find', result)) }],
       };
     }
   );
@@ -378,6 +446,20 @@ export function createAutopsyMcpServer(): McpServer {
           .positive()
           .optional()
           .describe('Fewest joint commits before a path pair is reported at all'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Compact the report for a context window: every count and the coverage stay ' +
+              'exact, arrays above top_k are sliced and the residual is named in the report ' +
+              '(never silent). Storage-format digests still describe the full report.'
+          ),
+        top_k: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('The compact slice size (default 20, capped at 1000); only with compact'),
         strict: z
           .boolean()
           .optional()
@@ -388,6 +470,8 @@ export function createAutopsyMcpServer(): McpServer {
       const repoRoot = args.repo_root || '.';
       const view = args.view || 'timeline';
       const cliArgs: string[] = [];
+      if (args.compact) cliArgs.push('--compact');
+      if (args.top_k) cliArgs.push('--top-k', String(args.top_k));
 
       if (view === 'co_change') {
         if (args.max_commits) cliArgs.push('--max-commits', String(args.max_commits));
@@ -450,7 +534,7 @@ export function createAutopsyMcpServer(): McpServer {
         cliArgs.push('--changed', changed);
       }
       for (const report of args.lcov || []) {
-        cliArgs.push('--lcov', report);
+        cliArgs.push('--lcov', resolveAgainstRepoRoot(report, repoRoot));
       }
       if (args.fail_if_all_tests_required) cliArgs.push('--fail-if-all-tests-required');
       if (args.strict) cliArgs.push('--strict');
@@ -473,12 +557,29 @@ export function createAutopsyMcpServer(): McpServer {
         'coverage. A `compatible` verdict is only ever returned with verified coverage ' +
         '(read-only).',
       inputSchema: z.object({
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Base directory for relative `from`/`to` document paths (defaults to the current directory)"),
         from: z.string().describe('The earlier document: the previous revision, the Pact, or the flows document'),
         to: z.string().describe('The later document: the current revision, or the provider OpenAPI spec'),
         protocol: z
           .enum(['openapi', 'asyncapi', 'asyncapi-flows', 'pact'])
           .optional()
           .describe('Which contract protocol to compare (default: openapi)'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Compact the change list for a context window: counts and the verdict stay ' +
+              'exact, and the truncated residual is named in the report (never silent)'
+          ),
+        top_k: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('The compact slice size (default 20, capped at 1000); only with compact'),
         strict: z
           .boolean()
           .optional()
@@ -486,11 +587,17 @@ export function createAutopsyMcpServer(): McpServer {
       }),
     },
     async (args) => {
-      const cliArgs: string[] = [args.from, args.to];
+      const repoRoot = args.repo_root || '.';
+      const cliArgs: string[] = [
+        resolveAgainstRepoRoot(args.from, repoRoot),
+        resolveAgainstRepoRoot(args.to, repoRoot),
+      ];
       if (args.protocol) cliArgs.push('--protocol', args.protocol);
+      if (args.compact) cliArgs.push('--compact');
+      if (args.top_k) cliArgs.push('--top-k', String(args.top_k));
       if (args.strict) cliArgs.push('--strict');
 
-      const result = await runAutopsy('contract-dist', cliArgs, { repoRoot: '.' });
+      const result = await runAutopsy('contract-dist', cliArgs, { repoRoot });
 
       return {
         content: [{ type: 'text', text: asText(evidenceEnvelope('contract-dist', result)) }],
@@ -542,6 +649,19 @@ export function createAutopsyMcpServer(): McpServer {
           .positive()
           .optional()
           .describe('Minimum observation windows a dead-code claim needs (default: 3)'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Compact the dependents list for a context window: counts and coverage stay ' +
+              'exact, and the truncated residual is named in the report (never silent)'
+          ),
+        top_k: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('The compact slice size (default 20, capped at 1000); only with compact'),
         strict: z
           .boolean()
           .optional()
@@ -555,25 +675,38 @@ export function createAutopsyMcpServer(): McpServer {
           content: [
             {
               type: 'text',
-              text: asText({
-                error:
+              text: asText(
+                refusedEnvelope(
+                  'blast-radius',
                   'the trace export requires salt_hex: telemetry has no default salt, and a ' +
-                  'default would make pseudonyms comparable across repositories',
-              }),
+                    'default would make pseudonyms comparable across repositories',
+                  'supply salt_hex (exactly 64 hex characters) together with traces, or run blast radius without telemetry',
+                )
+              ),
             },
           ],
         };
       }
 
       const radiusArgs: string[] = [args.component];
-      if (args.catalog_root) radiusArgs.push('--root', args.catalog_root);
+      if (args.catalog_root) {
+        radiusArgs.push('--root', resolveAgainstRepoRoot(args.catalog_root, repoRoot));
+      }
+      if (args.compact) radiusArgs.push('--compact');
+      if (args.top_k) radiusArgs.push('--top-k', String(args.top_k));
       if (args.strict) radiusArgs.push('--strict');
       const radius = await runAutopsy('blast-radius', radiusArgs, { repoRoot });
 
       let topology: ReturnType<typeof evidenceEnvelope> | null = null;
       if (args.traces) {
-        const telemetryArgs: string[] = [args.traces, '--salt', args.salt_hex as string];
-        if (args.surface) telemetryArgs.push('--surface', args.surface);
+        const telemetryArgs: string[] = [
+          resolveAgainstRepoRoot(args.traces, repoRoot),
+          '--salt',
+          args.salt_hex as string,
+        ];
+        if (args.surface) {
+          telemetryArgs.push('--surface', resolveAgainstRepoRoot(args.surface, repoRoot));
+        }
         if (args.windows) telemetryArgs.push('--windows', String(args.windows));
         if (args.strict) telemetryArgs.push('--strict');
         topology = evidenceEnvelope('telemetry', await runAutopsy('telemetry', telemetryArgs, { repoRoot }));
@@ -590,17 +723,153 @@ export function createAutopsyMcpServer(): McpServer {
     }
   );
 
+  // 10. autopsy_session (Tier 2.5): deterministic repair-loop receipts. The store
+  // records every evidence step as the CLI wrote it — no wall-clock time, verdicts
+  // derived only from recorded exit codes.
+  server.registerTool(
+    'autopsy_session',
+    {
+      description:
+        'Open, record, close, show, or list a repair-loop session. Closing derives an honest ' +
+        'verdict (pass/fail/unknown) from the last recorded evidence step — never invented — ' +
+        'and mirrors its exit code. The exit_code field is 0 for pass, 2 for fail, 3 for unknown.',
+      inputSchema: z.object({
+        action: z
+          .enum(['start', 'record', 'close', 'show', 'list'])
+          .describe('Which session lifecycle operation to run'),
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Workspace whose `.autopsy/sessions.json` holds the store'),
+        session_id: z
+          .string()
+          .optional()
+          .describe('The session id (from start/list); required for record/close/show'),
+        invoked: z
+          .array(z.string())
+          .optional()
+          .describe('The command argv as invoked (record only), e.g. ["verify", "--strict"]'),
+        exit_code: z
+          .number()
+          .int()
+          .optional()
+          .describe('The engine exit code of the recorded command (record only)'),
+        snapshot_id: z
+          .string()
+          .optional()
+          .describe('Optional snapshot id the recorded step is pinned to (record only)'),
+        note: z
+          .string()
+          .optional()
+          .describe('Optional verbatim note: what changed and why (record only)'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const cliArgs: string[] = [args.action];
+      if (args.action === 'record') {
+        if (!args.session_id || !args.invoked || args.exit_code === undefined) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: asText(
+                  refusedEnvelope(
+                    'session',
+                    'recording needs session_id, the invoked argv, and exit_code',
+                    'open one with action "start", then record each step with the command argv and the exit code the engine returned'
+                  )
+                ),
+              },
+            ],
+          };
+        }
+        cliArgs.push('--session-id', args.session_id, '--exit-code', String(args.exit_code));
+        if (args.snapshot_id) cliArgs.push('--snapshot-id', args.snapshot_id);
+        if (args.note) cliArgs.push('--note', args.note);
+        cliArgs.push('--', ...args.invoked);
+      } else if (args.action !== 'start' && args.action !== 'list') {
+        if (!args.session_id) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: asText(
+                  refusedEnvelope(
+                    'session',
+                    `action "${args.action}" needs session_id`,
+                    'pass session_id from a previous start (or use action "list")'
+                  )
+                ),
+              },
+            ],
+          };
+        }
+        cliArgs.push('--session-id', args.session_id);
+      }
+
+      const result = await runAutopsy('session', cliArgs, { repoRoot });
+      // A failing close is a verdict, not a broken engine: if the process emitted
+      // no repair advice, the envelope carries none and stays exactly the receipt.
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('session', result)) }],
+      };
+    }
+  );
+
   // Register paginated / on-demand multigraph resource (CA-TECH-001 Ch.4.1)
+  // Bounded code map: autopsy://graph/map{?under,top} (Tier 1.3).
+  //
+  // A projection an agent can read in one screen — kind counts, package counts, and the
+  // top-N nodes by degree — served by the engine's own `map` command, so its scoping and
+  // ranking rules are the engine's, tested ones, not re-derived here in TypeScript. It is
+  // deliberately NOT the full graph: browsing belongs to /symbols and /edges, and any
+  // window that fit the whole graph would not need a map.
+  server.registerResource(
+    'autopsy_graph_map',
+    new ResourceTemplate('autopsy://graph/map{?under,top,repo_root,snapshot}', { list: undefined }),
+    {
+      title: 'Code Map (bounded projection)',
+      description:
+        'Deterministic whole-graph projection: symbol-kind counts, package counts, and the ' +
+        'top-N symbols by degree (in + out), optionally scoped to a path prefix. Counts are ' +
+        'exact; the map is never the full graph.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const cliArgs: string[] = [];
+      if (v.under !== undefined) cliArgs.push('--under', String(v.under));
+      if (v.top !== undefined) cliArgs.push('--top', String(v.top));
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('map', cliArgs, { repoRoot, snapshotId: v.snapshot === undefined ? undefined : String(v.snapshot) });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: asText(
+              evidenceEnvelope('map', result)
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // The graph resource proper keeps its cheap summary contract: an index-state answer,
+  // not a graph dump. The usable projections live in /graph/symbols, /graph/edges, and
+  // /graph/map above.
   server.registerResource(
     'autopsy_graph',
-    'autopsy://graph',
+    new ResourceTemplate('autopsy://graph{?repo_root}', { list: undefined }),
     {
       title: 'Symbol Dependency Multigraph',
       description: 'On-demand dependency multigraph resource to avoid dumping full graph into agent context',
       mimeType: 'application/json',
     },
-    async (uri) => {
-      const result = await runAutopsy('baseline', [], { repoRoot: '.' });
+    async (uri, _variables) => {
+      const repoRoot = new URL(uri.href).searchParams.get('repo_root') || '.';
+      const result = await runAutopsy('baseline', [], { repoRoot });
       return {
         contents: [
           {
@@ -626,7 +895,7 @@ export function createAutopsyMcpServer(): McpServer {
   // stable-id-ordered symbols instead (CA-TECH-001 Ch.4.1).
   server.registerResource(
     'autopsy_graph_symbols',
-    new ResourceTemplate('autopsy://graph/symbols{?limit,offset,kind}', { list: undefined }),
+    new ResourceTemplate('autopsy://graph/symbols{?limit,offset,kind,repo_root,snapshot}', { list: undefined }),
     {
       title: 'Symbol Index (paginated)',
       description: 'Cursor-paginated symbol listing in stable-id order. Never dumps the full graph.',
@@ -638,7 +907,8 @@ export function createAutopsyMcpServer(): McpServer {
       if (v.limit !== undefined) cliArgs.push('--limit', String(v.limit));
       if (v.offset !== undefined) cliArgs.push('--offset', String(v.offset));
       if (v.kind !== undefined) cliArgs.push('--kind', String(v.kind));
-      const result = await runAutopsy('symbols', cliArgs, { repoRoot: '.' });
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('symbols', cliArgs, { repoRoot, snapshotId: v.snapshot === undefined ? undefined : String(v.snapshot) });
       return {
         contents: [
           {
@@ -656,7 +926,7 @@ export function createAutopsyMcpServer(): McpServer {
   // Paginated 1-hop neighborhood: autopsy://graph/edges?source=&direction=&kind=&limit=&offset=
   server.registerResource(
     'autopsy_graph_edges',
-    new ResourceTemplate('autopsy://graph/edges{?source,direction,kind,limit,offset}', {
+    new ResourceTemplate('autopsy://graph/edges{?source,direction,kind,limit,offset,repo_root,snapshot}', {
       list: undefined,
     }),
     {
@@ -672,7 +942,13 @@ export function createAutopsyMcpServer(): McpServer {
           contents: [
             {
               uri: uri.href,
-              text: JSON.stringify({ error: 'Missing source symbol ID for edge browsing' }),
+              text: asText(
+                refusedEnvelope(
+                  'edges',
+                  'missing source symbol ID for edge browsing',
+                  'page `autopsy://graph/symbols` first and pass one of its stable_id values as `source`'
+                )
+              ),
             },
           ],
         };
@@ -682,7 +958,8 @@ export function createAutopsyMcpServer(): McpServer {
       if (v.kind !== undefined) cliArgs.push('--kind', String(v.kind));
       if (v.limit !== undefined) cliArgs.push('--limit', String(v.limit));
       if (v.offset !== undefined) cliArgs.push('--offset', String(v.offset));
-      const result = await runAutopsy('edges', cliArgs, { repoRoot: '.' });
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('edges', cliArgs, { repoRoot, snapshotId: v.snapshot === undefined ? undefined : String(v.snapshot) });
       return {
         contents: [
           {
@@ -691,6 +968,33 @@ export function createAutopsyMcpServer(): McpServer {
               typeof result.data === 'string'
                 ? result.data
                 : JSON.stringify(result.data, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // Workspace registry resource (Tier 2.3): the multi-repo view with honest
+  // per-repo accessibility and analysis status, served by the engine's own
+  // `workspace list` command.
+  server.registerResource(
+    'autopsy_workspace',
+    new ResourceTemplate('autopsy://workspace{?repo_root}', { list: undefined }),
+    {
+      title: 'Workspace Registry',
+      description:
+        'Registered repositories with live accessibility and analysis status, coverage counts, and the workspace digest.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('workspace', ['list'], { repoRoot });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: asText(evidenceEnvelope('workspace', result)),
           },
         ],
       };

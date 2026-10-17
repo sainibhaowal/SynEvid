@@ -6,6 +6,8 @@ members = [
     "crates/autopsy-adapter-api",
     "crates/autopsy-adapter-typescript",
     "crates/autopsy-adapter-python",
+    "crates/autopsy-adapter-go",
+    "crates/autopsy-adapter-rust",
     "crates/autopsy-symbols",
     "crates/autopsy-graph",
     "crates/autopsy-diff",
@@ -22,6 +24,11 @@ members = [
     "crates/autopsy-telemetry",
     "crates/autopsy-mining",
     "crates/autopsy-catalog",
+    "crates/autopsy-hidden-coupling",
+    "crates/autopsy-incidents",
+    "crates/autopsy-behavior-research",
+    "crates/autopsy-schema-registry",
+    "crates/autopsy-workspace-registry",
     "tests"
 ]
 

@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Tier 2 agent quality (2026-10-17)
+
+Implements all five Tier-2 items from `Resource/Agent_Advancement_Roadmap.md`; see
+`docs/evidence/36-tier2-agent-quality.md`.
+
+### Added
+- **Go adapter (`AGENT-T2.2`):** `autopsy-adapter-go` — full symbol graph
+  (functions, receiver-typed methods, structs/interfaces/type aliases, package
+  vars/consts, uppercase-rune export visibility), struct + interface embedding
+  inheritance edges, filesystem-anchored import resolution (`go_import:` provenance)
+  with honest name-level `Partial` edges for unresolvable imports, package-qualified
+  call resolution through an import-alias map that degrades ambiguities to name-level partials, and honest coverage
+  (`Unknown` for cgo/plugin/reflect, `Partial` for `unsafe`/`//go:generate`).
+- **Rust adapter (`AGENT-T2.2`):** `autopsy-adapter-rust` — module bridge
+  (`crate::`/`super::`/`self::` file probes preferring `<path>.rs`, nested
+  `use` flattening with alias bindings), struct/enum/trait/alias symbols with impl
+  method scopes, `Implements`/`Inherits` trait edges, bare + qualified call
+  resolution with honest name-level method calls, `unsafe`/`async` contract
+  effects, and `Unknown` for `include!` inlining.
+- **Repair advice (`AGENT-T2.1`):** every CLI error (execution and argument-parse
+  alike) prints a deterministic `what_failed` / `why` / `next_action` triple; the MCP
+  envelope carries it as `repair` exactly when the engine emitted its markers.
+- **Session receipts (`AGENT-T2.5`):** `autopsy session start/record/show/close/list`
+  — deterministic BLAKE3 session ids, no timestamps, honest close verdicts
+  (`pass`/`fail`/`unknown`) derived only from recorded steps; `autopsy_session`
+  MCP tool; opt-in `agents/hooks/autopsy-session.sh` pre-commit wiring.
+- **Workspace registry CLI (`AGENT-T2.3`):** `autopsy workspace register/list/remove`
+  over `.autopsy/workspace.json` with live honest status; `autopsy://workspace`
+  resource.
+- **Pinned browse (`AGENT-T2.4`):** `--snapshot-id` on `symbols`, `edges`, `find`,
+  and `map`; MCP pinning extends to the whole browse family, `find` gains a
+  `snapshot_id` field, and the graph resources accept `snapshot` + `repo_root`.
+
+### Changed
+- MCP tools with file arguments (`contract-dist` documents, blast-radius
+  catalog/trace/surface, test-selection LCOV) now resolve against the tool's
+  `repo_root` in one deterministic place; `repo_root` is consistent on every
+  path-taking tool and resource.
+
+---
+
+## [Unreleased] - Tier 1 Agent Experience (2026-10-17)
+
+Implements all five Tier-1 gaps from `Resource/Agent_Advancement_Roadmap.md`; see
+`docs/evidence/35-tier1-agent-experience.md`.
+
+### Added
+- **`autopsy find` (AGENT-T1.1):** case-insensitive symbol resolution over qualified
+  names, declaring paths, and stable IDs, with `--kind`, `--name-only`, `--limit`
+  (ceiling 1000), `--offset`. Deterministic stable-id order and honest `total`; an empty
+  result is an answer, an empty pattern refuses with exit 3 before any repository read.
+  `autopsy_find` MCP tool added (10 tools).
+- **`autopsy map` + `autopsy://graph/map` (AGENT-T1.3):** bounded whole-graph projection —
+  symbol-kind, package (first two path segments), and edge-kind counts in `BTreeMap`
+  serialization order, plus top-N nodes by degree (in+out), degree-descending with
+  stable-id tie-break, `--under` prefix scope that narrows every count and rank and is
+  stated in the report. Never a full graph dump.
+- **Snapshot pinning (AGENT-T1.4):** `AUTOPSY_SNAPSHOT` session pin +
+  per-call `snapshotId` on the MCP `baseline/impact/diff/verify` tools, mapped to
+  `--baseline-id`/`--snapshot-id`/`--before`; explicit arguments always win over the pin.
+  `AUTOPSY_TIMEOUT_MS` raises the kill-switch ceiling for large repositories (garbage and
+  zero values are ignored).
+- **`--compact` / `--top-k` token budgets (AGENT-T1.5):** on `temporal`, `lineage`,
+  `contract-dist`, `telemetry`, `cochange`, `catalog`, `blast-radius` and the MCP temporal /
+  contract-diff / blast-radius tools. Slice respects each engine's canonical order,
+  names `_omitted` residuals, flags `"compact": true`, keeps counts, coverage, digests,
+  and exit codes exact, never alters the text summary, and is applied after persistence
+  so storage always keeps the full report.
+
+### Changed
+- **One envelope for answering (AGENT-T1.2):** Phase 4.1 MCP tools return
+  `{command, exit_code, actionable, report}` like the Phase 4.2 tools; bare `{error}`
+  JSON is gone (`refusedEnvelope` covers missing-target and missing-salt refusals with
+  unchanged exit-code 3 semantics).
+
 ## [Unreleased] - Phase 4.2 (Steps 28–45, all six pillars) (2026-10-16)
 
 Steps 28–45 of the 4.2 implementation sequence — the sequence's last step is

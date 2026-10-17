@@ -35,7 +35,7 @@ This skill encodes the mandatory standards, non-negotiable boundaries, and verif
 
 ## 2. Language Adapter Implementation & Conformance Standards (Phase 2)
 
-All language adapters (starting with TypeScript in `crates/autopsy-adapter-typescript`) must satisfy the following invariants:
+All language adapters (TypeScript, Python, Go in `crates/autopsy-adapter-go`, Rust in `crates/autopsy-adapter-rust`) must satisfy the following invariants:
 1. **Trait Conformance:** Must implement [`LanguageAdapter`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/lib.rs) and pass the reusable test suite [`verify_adapter_conformance`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/conformance.rs).
 2. **Grammar & Tree-Sitter Bootstrap:** Use tree-sitter 0.24+ with official language grammar parsers (e.g. `tree-sitter-typescript` for `.ts` and `.tsx`).
 3. **Resilient Symbol Identifiers (FR-005, ADR-0009):** `SymbolId` must be derived from canonical namespace hierarchy, file path, and symbol kind—**never from transient line numbers**. Line shifts and comment additions must produce identical `SymbolId`s.
@@ -61,6 +61,7 @@ All graph and diff operations must satisfy the following invariants:
 6. **Breaking Contract Detection (FR-007, FR-009):** Contract modifications must explicitly flag `is_breaking: true` when public visibility is narrowed, input parameter types/counts change, or return types change.
 7. **Changed Frontier:** Diff outputs must calculate both the directly changed symbols (`direct_symbols`) and the 1-hop dependent boundary (`impacted_boundary`).
 8. **Golden Diff Fixture Gate:** Diff calculations on frozen fixture repositories must produce exact byte-for-byte JSON matches.
+   - Go specifics (T2.2): cgo/plugin/reflect produce `Unknown` (code outside the analyzed bytes), `unsafe`/`//go:generate` produce `Partial`; imports anchor package dirs via `go_import:` provenance and unresolved imports emit name-level Partial edges; pointer receivers assert `mutates-receiver`; the Rust bridge prefers `<path>.rs` over `<path>/mod.rs` for `crate::` probes and `include!` is `Unknown`.
 9. **Two-State Honesty (FR-007, FR-010):** `diff` and `verify --baseline-id` must rebuild the genuine before-state graph/contracts from content-addressed snapshot bytes — never compare a state against itself. Unknown baseline ids are hard errors, never silent fallbacks. Compatibility with an empty before-map reports `Unknown`, never a vacuous `Pass`.
 10. **Precision-First Impact (FR-008):** Default (`full`) traversal preserves maximum recall. The `callers` preset (backward + Calls/References, `traverse_file_nodes=false`, top-k shortlist) is the recommended reviewer workflow. `ranked_top` is presentation only — `impacted_entities` always carries the complete evidence set. Never tune ranking weights against the benchmark corpus.
 11. **Incremental Soundness (FR-020):** Per-file artifacts key by content hash. Edge reuse additionally requires an identical global symbol-id set; otherwise recompute all edges. Any cache miss degrades to full analysis, never to a partial answer.

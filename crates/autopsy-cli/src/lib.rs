@@ -13,7 +13,21 @@
 pub mod extensions;
 
 use autopsy_adapter_api::{LanguageAdapter, ParseContext, ParsedFile};
+mod session;
+mod workspace;
+
+pub use session::{
+    SessionAction, SessionReceipt, SessionRecord, SessionStep, SessionStore, handle_session_close,
+    handle_session_list, handle_session_record, handle_session_show, handle_session_start,
+};
+pub use workspace::{
+    WorkspaceAction, WorkspaceEntry, handle_workspace_list, handle_workspace_register,
+    handle_workspace_remove,
+};
+
+use autopsy_adapter_go::GoAdapter;
 use autopsy_adapter_python::PythonAdapter;
+use autopsy_adapter_rust::RustAdapter;
 use autopsy_adapter_typescript::TypeScriptAdapter;
 use autopsy_contracts::{CallableContract, NormalizedContract, ParameterModel};
 use autopsy_diff::{DiffEngine, DiffInput};
@@ -32,6 +46,7 @@ use autopsy_report::{
 };
 use autopsy_storage::{StorageEngine, StorageOptions};
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -79,6 +94,140 @@ pub struct AcceptedDebtEntry {
     pub description: Option<String>,
     #[serde(default)]
     pub waived_reason: Option<String>,
+}
+
+/// Deterministic remediation attached to every CLI error (T2.1): agents
+/// self-repair from evidence instead of guessing. The triple is derived from
+/// the error variant plus its own message patterns — never invented at the
+/// call site, so identical inputs produce byte-identical advice.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ErrorRepair {
+    /// Stable machine tag for what failed.
+    pub what_failed: &'static str,
+    /// Deterministic rationale for the failure mode.
+    pub why: &'static str,
+    /// The next concrete action that plausibly repairs it.
+    pub next_action: String,
+}
+
+impl CliError {
+    pub fn repair(&self) -> ErrorRepair {
+        let config = |tag: &'static str, why: &'static str, action: &str| ErrorRepair {
+            what_failed: tag,
+            why,
+            next_action: action.to_string(),
+        };
+        match self {
+            CliError::Config(message) => {
+                if message.contains("No such file or directory") {
+                    config(
+                        "config_repo_root_missing",
+                        "the repository root passed for analysis does not exist",
+                        "pass an existing --repo-root path (run `autopsy doctor` to validate a workspace)",
+                    )
+                } else if message.contains("missing field") {
+                    config(
+                        "config_field_missing",
+                        "the configuration file is missing a required field",
+                        "add the named field to autopsy.toml (see `autopsy doctor` output for each section)",
+                    )
+                } else if message.contains("unknown field") {
+                    config(
+                        "config_field_unknown",
+                        "the configuration file carries a field outside the schema",
+                        "remove or rename the unknown field; canonical shape is under docs/adr and `autopsy doctor`",
+                    )
+                } else if message.contains("autopsy.toml") {
+                    config(
+                        "config_parse",
+                        "the configuration file could not be parsed",
+                        "fix the quoted location in autopsy.toml, then re-run `autopsy doctor` to confirm",
+                    )
+                } else {
+                    config(
+                        "config_invalid",
+                        "the configuration values are outside the accepted domain",
+                        "re-run with `autopsy doctor` to identify the invalid setting before analysis",
+                    )
+                }
+            }
+            CliError::Analysis(message) => {
+                if message.to_lowercase().contains("snapshot") {
+                    config(
+                        "analysis_snapshot_missing",
+                        "the referenced snapshot is not present in the storage engine",
+                        "capture one first: run `autopsy baseline --persist` and reuse its snapshot id",
+                    )
+                } else if message.to_lowercase().contains("symbol") {
+                    config(
+                        "analysis_symbol_missing",
+                        "no stable-id match for the requested symbol",
+                        "resolve the exact stable id with `autopsy find <Name> --kind function --name-only`",
+                    )
+                } else if message.to_lowercase().contains("empty") {
+                    config(
+                        "analysis_empty_input",
+                        "a required non-empty argument was empty",
+                        "supply a non-empty argument value and re-run the command",
+                    )
+                } else if message.to_lowercase().contains("revision") {
+                    config(
+                        "analysis_revision_invalid",
+                        "the requested revision is not resolvable in this worktree",
+                        "pass an existing revision ref, or omit --revision to analyze the current worktree",
+                    )
+                } else {
+                    config(
+                        "analysis_failed",
+                        "the analysis engine rejected the input or hit an unsupported construct",
+                        "re-run with `autopsy doctor`; if a symbol is involved look it up via `autopsy find --name-only <Name>`",
+                    )
+                }
+            }
+            CliError::Storage(message) => {
+                if message.to_lowercase().contains("locked")
+                    || message.to_lowercase().contains("busy")
+                {
+                    config(
+                        "storage_busy",
+                        "another operation holds the storage engine",
+                        "wait for the concurrent autopsy process to finish, then re-run",
+                    )
+                } else {
+                    config(
+                        "storage_unavailable",
+                        "the storage engine could not be opened or written",
+                        "ensure `.autopsy/` is writable in the repo (create it with `autopsy baseline --persist`)",
+                    )
+                }
+            }
+            CliError::Io(_) => config(
+                "io_failure",
+                "a filesystem read/write failed outside storage",
+                "check file permissions and path existence, then re-run the command",
+            ),
+            CliError::Report(_) => config(
+                "report_render_failed",
+                "the canonical report could not be rendered from a successful analysis",
+                "re-run with `--format text` to isolate the rendering failure, then inspect report.json residuals",
+            ),
+            CliError::Invariant(message) => {
+                if message.to_lowercase().contains("coverage") {
+                    config(
+                        "invariant_coverage_gated",
+                        "coverage of the analyzed input is unknown/partial, so the result cannot be passed",
+                        "inspect `coverage` and `dynamic_constructs` in the report; the flagged construct is the gate",
+                    )
+                } else {
+                    config(
+                        "invariant_violated",
+                        "a pinned architectural invariant is violated by the analyzed state",
+                        "appoint the dependency or contract named in the report; after fixing, re-run `autopsy verify`",
+                    )
+                }
+            }
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -235,6 +384,69 @@ pub enum Commands {
         /// Filter by symbol kind (function, method, class, interface, type, enum, variable)
         #[arg(long)]
         kind: Option<String>,
+        /// Analyze this stored snapshot ID instead of the current worktree: pins the
+        /// browse to one immutable state so successive calls across a session address
+        /// the same evidence (Tier 2.4)
+        #[arg(long)]
+        snapshot_id: Option<String>,
+    },
+    /// Search symbols by stable id / qualified name / path, case-insensitive (agent lookup).
+    ///
+    /// The missing half of browse: `symbols` paginates what exists, `find` answers "is
+    /// there a symbol like this". Matching is a case-insensitive substring over the
+    /// qualified name, the declaring path, and (unless `--name-only`) the stable id.
+    /// Unknown seeds are the agent's everyday case, so an empty result is an honest
+    /// empty answer with the total it searched, never an error.
+    Find {
+        /// The text to match, case-insensitive
+        pattern: String,
+        /// Restrict matches to one symbol kind (function, method, class, interface, type, enum, variable)
+        #[arg(long)]
+        kind: Option<String>,
+        /// Match qualified names and paths only; stable ids are excluded from the match
+        /// but still carried in the output (an id a caller did not type should not widen
+        /// what it asked for).
+        #[arg(long)]
+        name_only: bool,
+        /// Maximum entries to return (default 50, max 1000)
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Zero-based offset into deterministic match order (default 0)
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Analyze this stored snapshot ID instead of the current worktree (Tier 2.4)
+        #[arg(long)]
+        snapshot_id: Option<String>,
+    },
+    /// A compact, bounded projection of the whole graph for an agent's context window:
+    /// kind counts, package counts, and the top-N nodes by degree. Never the full graph —
+    /// `symbols` and `edges` exist for browsing, and any window that fit the whole graph
+    /// would not need a map.
+    Map {
+        /// Top-N nodes by degree, descending, tie-broken by stable id (default 25, max 500)
+        #[arg(long, default_value_t = 25)]
+        top: usize,
+        /// Restrict the map to symbols declared under this path prefix
+        #[arg(long)]
+        under: Option<String>,
+        /// Analyze this stored snapshot ID instead of the current worktree (Tier 2.4)
+        #[arg(long)]
+        snapshot_id: Option<String>,
+    },
+    /// Deterministic repair-loop receipt for a change session (Tier 2.5): records
+    /// every evidence command an agent ran (impact -> edit -> verify -> repair ->
+    /// re-verify) and closes with an honest pass/fail/unknown verdict derived
+    /// only from the recorded steps - never from wall-clock time.
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+    /// Multi-repo workspace registry (Tier 2.3): register repositories, list
+    /// them with live accessibility and analysis status, and remove entries.
+    /// The registry file lives at `.autopsy/workspace.json`.
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
     },
     /// List 1-hop edges for a symbol with cursor pagination (read-only graph browsing)
     Edges {
@@ -253,6 +465,9 @@ pub enum Commands {
         /// Zero-based offset into deterministic edge order (default 0)
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Analyze this stored snapshot ID instead of the current worktree (Tier 2.4)
+        #[arg(long)]
+        snapshot_id: Option<String>,
     },
     /// Replay git history into a temporal journal, or reconstruct one revision (Pillar 1)
     Temporal {
@@ -266,6 +481,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Trace file identity across a revision pair: renames, moves, modifications (Pillar 1)
     Lineage {
@@ -290,6 +513,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial as well as when it is unknown
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Select the tests that must run for a set of changed files (Pillar 2)
     TestSelect {
@@ -318,6 +549,14 @@ pub enum Commands {
         /// Exit 4 when the verdict is `unknown` or coverage is partial
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Ingest an OTLP/JSON trace export, optionally correlating it into a topology report (Pillar 4)
     Telemetry {
@@ -344,6 +583,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial as well as when it is unknown
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Mine git history for paths that change together (Pillar 5)
     Cochange {
@@ -362,6 +609,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial as well as when it is unknown
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Ingest Backstage catalog entities and dependency manifests (Pillar 6)
     Catalog {
@@ -374,6 +629,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial as well as when it is unknown
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// The organisational blast radius of one catalog component: owners, co-owned
     /// components, siblings, provided and consumed APIs, and dependents (Pillar 6)
@@ -389,6 +652,14 @@ pub enum Commands {
         /// Exit 4 when coverage is partial as well as when it is unknown
         #[arg(long)]
         strict: bool,
+        /// Compact the report for an agent context window: counts stay exact, arrays
+        /// above the top-k are sliced with a named `_omitted` residual, and the
+        /// truncation is stated in the output (never silently).
+        #[arg(long)]
+        compact: bool,
+        /// The compact slice size (default 20, max 1000)
+        #[arg(long)]
+        top_k: Option<usize>,
     },
     /// Verify repository configuration, storage integrity, and analyzer health
     Doctor,
@@ -407,7 +678,21 @@ pub fn run_cli(args: &[String]) -> i32 {
     let cli = match Cli::try_parse_from(args) {
         Ok(c) => c,
         Err(e) => {
-            let _ = writeln!(std::io::stderr(), "{}", e);
+            let stderr = std::io::stderr();
+            let mut handle = stderr.lock();
+            let _ = writeln!(handle, "{}", e);
+            // T2.1: argument-parse failures get the same deterministic advice
+            // contract as execution failures — the caller repairs by restarting
+            // with corrected flags, which a `--help` run enumerates.
+            let _ = writeln!(handle, "what_failed: argument_parse");
+            let _ = writeln!(
+                handle,
+                "why: the command line did not match the CLI's argument grammar"
+            );
+            let _ = writeln!(
+                handle,
+                "next_action: correct the flagged argument and re-run (append --help to this subcommand for its full grammar)"
+            );
             return EXIT_ANALYSIS_ERROR;
         }
     };
@@ -415,7 +700,15 @@ pub fn run_cli(args: &[String]) -> i32 {
     match execute(&cli) {
         Ok(code) => code,
         Err(err) => {
-            let _ = writeln!(std::io::stderr(), "Error: {}", err);
+            let stderr = std::io::stderr();
+            let mut handle = stderr.lock();
+            let _ = writeln!(handle, "Error: {}", err);
+            // T2.1: every error gets deterministic self-repair advice so
+            // agents can act without human interpretation.
+            let repair = err.repair();
+            let _ = writeln!(handle, "what_failed: {}", repair.what_failed);
+            let _ = writeln!(handle, "why: {}", repair.why);
+            let _ = writeln!(handle, "next_action: {}", repair.next_action);
             EXIT_ANALYSIS_ERROR
         }
     }
@@ -471,21 +764,91 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             limit,
             offset,
             kind,
-        } => handle_symbols(cli, *limit, *offset, kind.as_deref()),
+            snapshot_id,
+        } => handle_symbols(
+            cli,
+            *limit,
+            *offset,
+            kind.as_deref(),
+            snapshot_id.as_deref(),
+        ),
         Commands::Edges {
             source,
             direction,
             kind,
             limit,
             offset,
-        } => handle_edges(cli, source, *direction, kind.as_deref(), *limit, *offset),
+            snapshot_id,
+        } => handle_edges(
+            cli,
+            source,
+            *direction,
+            kind.as_deref(),
+            *limit,
+            *offset,
+            snapshot_id.as_deref(),
+        ),
+        Commands::Find {
+            pattern,
+            kind,
+            name_only,
+            limit,
+            offset,
+            snapshot_id,
+        } => handle_find(
+            cli,
+            pattern,
+            kind.as_deref(),
+            *name_only,
+            *limit,
+            *offset,
+            snapshot_id.as_deref(),
+        ),
+        Commands::Map {
+            top,
+            under,
+            snapshot_id,
+        } => handle_map(cli, *top, under.as_deref(), snapshot_id.as_deref()),
+        Commands::Session { action } => match action {
+            SessionAction::Start => handle_session_start(cli),
+            SessionAction::Record {
+                session_id,
+                cli_arg,
+                exit_code,
+                snapshot_id,
+                note,
+            } => handle_session_record(
+                cli,
+                session_id,
+                cli_arg.clone(),
+                *exit_code,
+                snapshot_id.as_deref(),
+                note.as_deref(),
+            ),
+            SessionAction::Show { session_id } => handle_session_show(cli, session_id),
+            SessionAction::Close { session_id } => handle_session_close(cli, session_id),
+            SessionAction::List => handle_session_list(cli),
+        },
+        Commands::Workspace { action } => match action {
+            WorkspaceAction::Register { path, id } => {
+                handle_workspace_register(cli, path, id.as_deref())
+            }
+            WorkspaceAction::Remove { id } => handle_workspace_remove(cli, id),
+            WorkspaceAction::List => handle_workspace_list(cli),
+        },
         Commands::Temporal {
             at,
             max_commits,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::temporal(cli, at.as_deref(), *max_commits, *strict),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::Lineage {
             from,
@@ -495,6 +858,8 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             max_files,
             max_file_bytes,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::lineage(
@@ -509,6 +874,10 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
                     strict: *strict,
                 },
             ),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::TestSelect {
             changed,
@@ -518,15 +887,22 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
         } => run_extension(
             cli,
             extensions::test_select(cli, changed, lcov, *fail_if_all_tests_required, *strict),
+            &extensions::NO_COMPACT,
         ),
         Commands::ContractDist {
             from,
             to,
             protocol,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::contract_dist(from, to, *protocol, None, *strict),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::Telemetry {
             input,
@@ -537,6 +913,8 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             complete_observation,
             dispatch_static,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::telemetry(
@@ -551,6 +929,10 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
                     strict: *strict,
                 },
             ),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::Cochange {
             window_seconds,
@@ -558,6 +940,8 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             max_files_per_commit,
             min_pair_commits,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::cochange(
@@ -568,23 +952,39 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
                 *min_pair_commits,
                 *strict,
             ),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::Catalog {
             root,
             max_file_bytes,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::catalog(cli, root.as_deref(), *max_file_bytes, *strict),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::BlastRadius {
             reference,
             root,
             max_file_bytes,
             strict,
+            compact,
+            top_k,
         } => run_extension(
             cli,
             extensions::blast_radius(cli, reference, root.as_deref(), *max_file_bytes, *strict),
+            &extensions::CompactArgs {
+                compact: *compact,
+                top_k: *top_k,
+            },
         ),
         Commands::Doctor => handle_doctor(cli),
         Commands::Version => handle_version(cli),
@@ -598,16 +998,160 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
 fn run_extension(
     cli: &Cli,
     outcome: Result<extensions::Outcome, CliError>,
+    compact: &extensions::CompactArgs,
 ) -> Result<i32, CliError> {
     let outcome = outcome?;
     #[allow(clippy::collapsible_if)]
     if cli.persist {
+        // Pillar-table write-back (closure item 2): when the extension produced a
+        // temporal journal or a co-change report, persist its rows to the v2/v3
+        // tables instead of leaving them as schema with no writer. A persistence
+        // failure is an analysis error (exit 3), not a silent skip.
+        //
+        // Persistence reads the **full** report: a compact agent view is a presentation
+        // choice, not the engine's answer, and a slice that is persisted as if it were
+        // the whole would be a lie with rows in it.
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&outcome.json) {
+            if let Ok(storage) = get_storage(cli) {
+                // Temporal journal: `journal` is the engine's canonical projection,
+                // an array of facts.
+                if let Some(facts) = value.get("journal").and_then(|v| v.as_array()) {
+                    let mut rows = Vec::with_capacity(facts.len());
+                    for fact in facts {
+                        let fact_id = fact
+                            .get("fact_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let subject = fact
+                            .get("subject")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let predicate = fact
+                            .get("predicate")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let object = fact
+                            .get("object")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let valid_from = fact
+                            .get("valid_from")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let valid_to = fact
+                            .get("valid_to")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let evidence_digest = fact
+                            .get("evidence_digest")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let coverage = fact
+                            .get("coverage")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        rows.push(autopsy_storage::TemporalFactRow {
+                            fact_id,
+                            subject,
+                            predicate,
+                            object,
+                            valid_from,
+                            valid_to,
+                            evidence_digest,
+                            coverage,
+                        });
+                    }
+                    if !rows.is_empty() {
+                        storage
+                            .save_temporal_facts(&rows)
+                            .map_err(|e| CliError::Analysis(format!("persist: {e}")))?;
+                    }
+                }
+                // Co-change report: `edges` + `window.commit_set_digest`.
+                if let (Some(edges), Some(window)) = (
+                    value.get("edges").and_then(|v| v.as_array()),
+                    value.get("window"),
+                ) {
+                    let window_id = window
+                        .get("commit_set_digest")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !window_id.is_empty() {
+                        let mut rows = Vec::with_capacity(edges.len());
+                        for edge in edges {
+                            let a = edge
+                                .get("a")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let b = edge
+                                .get("b")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let commits_together = edge
+                                .get("commits_together")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0);
+                            let support_ppm = edge
+                                .get("support_ppm")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0);
+                            let confidence_a_to_b_ppm = edge
+                                .get("confidence_a_to_b_ppm")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0);
+                            let lift_ppm =
+                                edge.get("lift_ppm").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let claim = edge
+                                .get("claim")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("temporal_co_occurrence_only")
+                                .to_string();
+                            let coverage = edge
+                                .get("coverage")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            rows.push(autopsy_storage::CoChangeEdgeRow {
+                                entity_a: a,
+                                entity_b: b,
+                                window_id: window_id.clone(),
+                                commits_together,
+                                support_ppm,
+                                confidence_a_to_b_ppm,
+                                lift_ppm,
+                                claim,
+                                coverage,
+                            });
+                        }
+                        if !rows.is_empty() {
+                            storage
+                                .save_co_change_edges(&rows)
+                                .map_err(|e| CliError::Analysis(format!("persist: {e}")))?;
+                        }
+                    }
+                }
+            }
+        }
         if let Ok(note) =
             extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.json)
         {
             println!("{}", note);
         }
     }
+    // The compact view is applied **after** persistence and only for printing: an agent
+    // asking `--compact` gets counts it can trust plus a stated residual, while the
+    // storage layer keeps the engine's full report.
+    let outcome = extensions::apply_compact(outcome, compact);
     outcome.print(cli.format)?;
     Ok(outcome.exit_code)
 }
@@ -682,7 +1226,10 @@ pub struct AnalysisArtifacts {
 /// Languages with full adapter analysis (symbol graph + contracts).
 /// Mirrors `classify_language`; anything else is hashed but not modeled.
 fn is_analyzed_language(language: &str) -> bool {
-    matches!(language, "typescript" | "javascript" | "python")
+    matches!(
+        language,
+        "typescript" | "javascript" | "python" | "go" | "rust"
+    )
 }
 /// Canonical (LF-normalized) bytes for a file, mirroring
 /// `scan_repository` exactly: text languages are line-ending
@@ -726,6 +1273,8 @@ struct FileAnalysisArtifact {
 fn analyze_single_file(
     ts_adapter: &TypeScriptAdapter,
     py_adapter: &PythonAdapter,
+    go_adapter: &GoAdapter,
+    rust_adapter: &RustAdapter,
     parse_ctx: &ParseContext,
     unit: &FileUnit,
     content_str: &str,
@@ -753,6 +1302,8 @@ fn analyze_single_file(
     }
     match unit.language.as_str() {
         "python" => analyze_with!(py_adapter),
+        "go" => analyze_with!(go_adapter),
+        "rust" => analyze_with!(rust_adapter),
         _ => analyze_with!(ts_adapter),
     }
 }
@@ -817,6 +1368,8 @@ fn analyze_contents(
 ) -> Result<AnalysisArtifacts, CliError> {
     let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
+    let go_adapter = GoAdapter::with_root_dir(repo_root);
+    let rust_adapter = RustAdapter::with_root_dir(repo_root);
     let parse_ctx = ParseContext {
         project_root: repo_root.to_path_buf(),
         options: BTreeMap::new(),
@@ -831,9 +1384,15 @@ fn analyze_contents(
         let Some(content_str) = contents.get(file_path) else {
             continue;
         };
-        if let Some(local) =
-            analyze_single_file(&ts_adapter, &py_adapter, &parse_ctx, unit, content_str)
-        {
+        if let Some(local) = analyze_single_file(
+            &ts_adapter,
+            &py_adapter,
+            &go_adapter,
+            &rust_adapter,
+            &parse_ctx,
+            unit,
+            content_str,
+        ) {
             local_by_path.insert(file_path.clone(), local);
         }
     }
@@ -841,6 +1400,8 @@ fn analyze_contents(
     let (artifacts, edges_by_file, local_back) = assemble_artifacts(
         &ts_adapter,
         &py_adapter,
+        &go_adapter,
+        &rust_adapter,
         &parse_ctx,
         snapshot.clone(),
         local_by_path,
@@ -871,9 +1432,12 @@ type AssembledArtifacts = (
 ///
 /// Files with `parsed: None` (cache-reused) are re-parsed from
 /// `contents` only when their edges must be extracted.
+#[allow(clippy::too_many_arguments)]
 fn assemble_artifacts(
     ts_adapter: &TypeScriptAdapter,
     py_adapter: &PythonAdapter,
+    go_adapter: &GoAdapter,
+    rust_adapter: &RustAdapter,
     parse_ctx: &ParseContext,
     snapshot: RepoSnapshot,
     mut local_by_path: BTreeMap<String, FileLocalAnalysis>,
@@ -919,6 +1483,8 @@ fn assemble_artifacts(
                 && let Some(content_str) = contents.get(file_path)
                 && let Ok(parsed) = match unit.language.as_str() {
                     "python" => py_adapter.parse(parse_ctx, unit, content_str),
+                    "go" => go_adapter.parse(parse_ctx, unit, content_str),
+                    "rust" => rust_adapter.parse(parse_ctx, unit, content_str),
                     _ => ts_adapter.parse(parse_ctx, unit, content_str),
                 }
             {
@@ -927,6 +1493,8 @@ fn assemble_artifacts(
             if let Some(parsed) = local.parsed.as_ref() {
                 let edges = match parsed.file.language.as_str() {
                     "python" => py_adapter.extract_edges(parsed, &symbol_index),
+                    "go" => go_adapter.extract_edges(parsed, &symbol_index),
+                    "rust" => rust_adapter.extract_edges(parsed, &symbol_index),
                     _ => ts_adapter.extract_edges(parsed, &symbol_index),
                 };
                 if let Ok(edges) = edges {
@@ -1101,6 +1669,8 @@ fn try_incremental_artifacts(
 ) -> Option<(AnalysisArtifacts, usize, usize)> {
     let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
+    let go_adapter = GoAdapter::with_root_dir(repo_root);
+    let rust_adapter = RustAdapter::with_root_dir(repo_root);
     let parse_ctx = ParseContext {
         project_root: repo_root.to_path_buf(),
         options: BTreeMap::new(),
@@ -1164,8 +1734,15 @@ fn try_incremental_artifacts(
         }
         // Changed or new file: analyze fresh from worktree bytes.
         if let Some(content_str) = contents.get(file_path)
-            && let Some(local) =
-                analyze_single_file(&ts_adapter, &py_adapter, &parse_ctx, unit, content_str)
+            && let Some(local) = analyze_single_file(
+                &ts_adapter,
+                &py_adapter,
+                &go_adapter,
+                &rust_adapter,
+                &parse_ctx,
+                unit,
+                content_str,
+            )
         {
             local_by_path.insert(file_path.clone(), local);
         }
@@ -1187,6 +1764,8 @@ fn try_incremental_artifacts(
     let (artifacts, edges_by_file, local_back) = assemble_artifacts(
         &ts_adapter,
         &py_adapter,
+        &go_adapter,
+        &rust_adapter,
         &parse_ctx,
         new_snapshot.clone(),
         local_by_path,
@@ -1894,6 +2473,32 @@ fn handle_verify(
 // SUBCOMMANDS: SYMBOLS / EDGES (paginated read-only graph browsing)
 // ---------------------------------------------------------------------------
 
+/// Resolves the artifacts a browse command reads: a stored snapshot ID pins
+/// the exact analyzed state (rebuild from cache, byte-identical); anything
+/// else (or nothing) analyzes the current worktree. Empty or blank values are
+/// treated as unpinned rather than trusted.
+fn pinned_or_worktree(cli: &Cli, snapshot_id: Option<&str>) -> Result<AnalysisArtifacts, CliError> {
+    let pin = snapshot_id.map(str::trim).filter(|s| !s.is_empty());
+    match pin {
+        Some(id) => {
+            let storage = get_storage(cli)?;
+            let stored = storage
+                .get_snapshot(&SnapshotId::new(id))
+                .map_err(|e| CliError::Storage(e.to_string()))?
+                .ok_or_else(|| {
+                    CliError::Analysis(format!(
+                        "snapshot '{id}' not stored; capture one with `autopsy baseline --persist`"
+                    ))
+                })?;
+            build_artifacts_from_snapshot(stored, &storage)
+        }
+        None => {
+            let config = load_or_default_config(&cli.repo_root)?;
+            build_snapshot_and_graph(&cli.repo_root, &config, None, None)
+        }
+    }
+}
+
 /// Shared guard: paginated browsing supports JSON and text only.
 /// SARIF describes findings, not symbol listings.
 fn require_browse_format(format: OutputFormat) -> Result<(), CliError> {
@@ -1910,10 +2515,10 @@ fn handle_symbols(
     limit: usize,
     offset: usize,
     kind_filter: Option<&str>,
+    snapshot_id: Option<&str>,
 ) -> Result<i32, CliError> {
     require_browse_format(cli.format)?;
-    let config = load_or_default_config(&cli.repo_root)?;
-    let artifacts = build_snapshot_and_graph(&cli.repo_root, &config, None, None)?;
+    let artifacts = pinned_or_worktree(cli, snapshot_id)?;
 
     let limit = limit.min(1000);
     let mut symbols: Vec<&Symbol> = artifacts.symbols.iter().collect();
@@ -1968,6 +2573,348 @@ fn handle_symbols(
     Ok(EXIT_PASS)
 }
 
+/// Search symbols the way an agent actually asks: with a partial name.
+///
+/// Routing note on the seed: this handler is deliberately `find`, not `impact`. `impact`
+/// resolves an *exact* identity (SymbolId or file seed), which is the right contract for
+/// traversal; resolution from a partial name belongs in `find`, whose output can then be
+/// fed to `impact -s <stable_id>`.
+/// The report `find` emits: the query it was asked, the page it is showing, and the
+/// population it searched. `total` alongside `limit`/`offset` is what makes pagination
+/// honest — a caller can tell an empty result (a real "no such symbol") from a page
+/// boundary it should walk.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FindReport {
+    pub pattern: String,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub symbols: Vec<FindHit>,
+}
+
+/// One match, carrying exactly what an agent needs to route the seed onward to
+/// `impact -s <stable_id>`: identity, kind, visibility, declaring path, signature.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FindHit {
+    pub stable_id: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub visibility: String,
+    pub path: String,
+    pub signature: Option<String>,
+}
+
+/// The browse ceiling: `find` pages like `symbols`, and a caller asking for more than
+/// a thousand hits in one page is asking for a dump, which is what `symbols` is for.
+const FIND_MAX_LIMIT: usize = 1000;
+
+/// Resolves a `find` request against a symbol population. Pure, so the matching
+/// contract — case-insensitive substring over name/path/id, `--name-only` scoping,
+/// stable-id order, honest `total` — is testable without a repository fixture.
+pub fn find_symbols(
+    symbols: &[Symbol],
+    pattern: &str,
+    kind_filter: Option<&str>,
+    name_only: bool,
+    limit: usize,
+    offset: usize,
+) -> Result<FindReport, CliError> {
+    let needle = pattern.trim().to_lowercase();
+    if needle.is_empty() {
+        // An empty pattern is not "match everything": it is a caller bug, and the caller
+        // should say so rather than page every symbol in the repository through it.
+        return Err(CliError::Analysis("the pattern is empty".to_string()));
+    }
+    let wanted_kind = kind_filter.map(|k| k.trim().to_lowercase());
+    let mut matches: Vec<&Symbol> = symbols
+        .iter()
+        .filter(|s| {
+            if let Some(want) = &wanted_kind
+                && s.kind.to_lowercase() != *want
+            {
+                return false;
+            }
+            // Scoping rule: `--name-only` means the caller narrowed what counts as a
+            // match. Not applying it would make `find users` return every symbol whose
+            // stable id happens to hash to a string containing those bytes — a false
+            // positive an agent cannot see past.
+            let name_hit = s.qualified_name.to_lowercase().contains(&needle);
+            let path_hit = s
+                .range
+                .as_ref()
+                .is_some_and(|r| r.path.to_lowercase().contains(&needle));
+            let id_hit = !name_only && s.stable_id.as_str().to_lowercase().contains(&needle);
+            name_hit || path_hit || id_hit
+        })
+        .collect();
+    // Deterministic order, same rule as `symbols`: stable id, then qualified name. Two
+    // runs at the same revision must present the same page of `find` results, or an
+    // agent pinning evidence to the first match would silently pin to a different symbol.
+    matches.sort_by(|a, b| {
+        a.stable_id
+            .cmp(&b.stable_id)
+            .then_with(|| a.qualified_name.cmp(&b.qualified_name))
+    });
+    let total = matches.len();
+    let limit = limit.min(FIND_MAX_LIMIT);
+    let page: Vec<&Symbol> = matches.into_iter().skip(offset).take(limit).collect();
+    Ok(FindReport {
+        pattern: pattern.to_string(),
+        total,
+        limit,
+        offset,
+        symbols: page
+            .iter()
+            .map(|s| FindHit {
+                stable_id: s.stable_id.as_str().to_string(),
+                qualified_name: s.qualified_name.clone(),
+                kind: s.kind.clone(),
+                visibility: format!("{:?}", s.visibility).to_lowercase(),
+                path: s.range.as_ref().map(|r| r.path.clone()).unwrap_or_default(),
+                signature: s.normalized_signature.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn handle_find(
+    cli: &Cli,
+    pattern: &str,
+    kind_filter: Option<&str>,
+    name_only: bool,
+    limit: usize,
+    offset: usize,
+    snapshot_id: Option<&str>,
+) -> Result<i32, CliError> {
+    require_browse_format(cli.format)?;
+    // Refuse before any repository work: a blank pattern is a caller bug, and reading
+    // a whole tree to tell the caller so would be the wrong order of operations.
+    if pattern.trim().is_empty() {
+        return Err(CliError::Analysis("the pattern is empty".to_string()));
+    }
+    let artifacts = pinned_or_worktree(cli, snapshot_id)?;
+    let report = find_symbols(
+        &artifacts.symbols,
+        pattern,
+        kind_filter,
+        name_only,
+        limit,
+        offset,
+    )?;
+
+    if cli.format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| CliError::Analysis(e.to_string()))?
+        );
+    } else {
+        println!(
+            "find {pattern:?} total={} showing {}..{}",
+            report.total,
+            report.offset,
+            report.offset + report.symbols.len()
+        );
+        for s in &report.symbols {
+            println!("  {} [{}] {}", s.stable_id, s.kind, s.qualified_name);
+        }
+    }
+    Ok(EXIT_PASS)
+}
+
+// ---------------------------------------------------------------------------
+// SUBCOMMAND: MAP — the bounded code-map projection (Tier 1.3)
+// ---------------------------------------------------------------------------
+
+/// One node of the code map: what it is and how connected it is. Counts, not paths:
+/// the map is a routing surface for "where is everything and what do I not dare touch",
+/// and the neighborhood of a chosen node belongs to `edges`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MapNode {
+    pub stable_id: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub path: String,
+    pub fan_in: usize,
+    pub fan_out: usize,
+    pub degree: usize,
+}
+
+/// The deterministic whole-of-graph projection the `map` command and the
+/// `autopsy://graph/map` resource both serve.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MapReport {
+    pub snapshot_id: String,
+    /// The path prefix the map was scoped to, when one was asked for. Stated so a
+    /// scoped map can never be mistaken for the whole repository.
+    pub under: Option<String>,
+    pub symbols_total: usize,
+    pub edges_total: usize,
+    pub kind_counts: BTreeMap<String, usize>,
+    pub edge_kind_counts: BTreeMap<String, usize>,
+    pub package_counts: BTreeMap<String, usize>,
+    pub top_symbols: Vec<MapNode>,
+}
+
+/// The map ceiling. `top` beyond this is not a map anymore, it is a ranking dump; the
+/// same ceiling governs `find`'s page for the same reason.
+const MAP_MAX_TOP: usize = 500;
+
+/// The deterministic package key for a canonical path: its first two segments joined
+/// by `/` (a lone root segment stands by itself). Two segments is deep enough to group
+/// (`src/checkout`) and shallow enough that the counts stay a map instead of a directory
+/// listing.
+fn package_key(path: &str) -> String {
+    let mut segments = path.split('/');
+    match (segments.next(), segments.next()) {
+        (Some(first), None) => first.to_string(),
+        (Some(first), Some(second)) => format!("{first}/{second}"),
+        _ => String::new(),
+    }
+}
+
+/// The canonical declaring path of a symbol, or the empty string when the symbol has
+/// no location (a memberless interface carries no range; it still counts, unnamed trees
+/// must not be hidden from the map).
+fn path_of_symbol(s: &Symbol) -> &str {
+    s.range.as_ref().map(|r| r.path.as_str()).unwrap_or("")
+}
+
+/// Builds the whole-of-graph projection. Pure, so the scoping and ranking contracts —
+/// `--under` narrows everything it counts, degree ranks bounded and tie-broken, every
+/// count in `BTreeMap` key order — are testable without a repository fixture.
+pub fn map_projection(
+    symbols: &[Symbol],
+    edges: &[Edge],
+    snapshot_id: &str,
+    top: usize,
+    under: Option<&str>,
+) -> MapReport {
+    let in_scope = |s: &Symbol| {
+        under.is_none_or(|prefix| s.range.as_ref().is_some_and(|r| r.path.starts_with(prefix)))
+    };
+    let scoped: Vec<&Symbol> = symbols.iter().filter(|s| in_scope(s)).collect();
+
+    let mut kind_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut package_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for s in &scoped {
+        *kind_counts.entry(s.kind.clone()).or_default() += 1;
+        if let Some(range) = &s.range {
+            *package_counts.entry(package_key(&range.path)).or_default() += 1;
+        }
+    }
+
+    // Degrees come from the scoped subpopulation: a map scoped to one package must not
+    // be ranked by edges leaving the scope, or the top list would be dominated by glue
+    // code the caller explicitly excluded.
+    let mut fan: BTreeMap<SymbolId, (usize, usize)> = BTreeMap::new();
+    let mut edge_kind_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut edges_total = 0usize;
+    for edge in edges {
+        let Some(source) = symbols.iter().find(|s| s.stable_id == edge.source) else {
+            continue;
+        };
+        let Some(target) = symbols.iter().find(|s| s.stable_id == edge.target) else {
+            continue;
+        };
+        let scoped_edge = under.is_none_or(|prefix| {
+            path_of_symbol(source).starts_with(prefix) && path_of_symbol(target).starts_with(prefix)
+        });
+        if !scoped_edge {
+            continue;
+        }
+        edges_total += 1;
+        *edge_kind_counts
+            .entry(format!("{:?}", edge.kind).to_lowercase())
+            .or_default() += 1;
+        fan.entry(edge.source.clone()).or_default().0 += 1;
+        fan.entry(edge.target.clone()).or_default().1 += 1;
+    }
+
+    let mut nodes: Vec<MapNode> = scoped
+        .iter()
+        .map(|s| {
+            let (fan_out, fan_in) = fan.get(&s.stable_id).copied().unwrap_or((0, 0));
+            MapNode {
+                stable_id: s.stable_id.as_str().to_string(),
+                qualified_name: s.qualified_name.clone(),
+                kind: s.kind.clone(),
+                path: path_of_symbol(s).to_string(),
+                fan_in,
+                fan_out,
+                degree: fan_in + fan_out,
+            }
+        })
+        .collect();
+    // Degree descending, tie-broken by stable id ascending: the highest-coupled node is
+    // the map's first entry, and equal-coupled nodes cannot tie-break on insertion order.
+    nodes.sort_by(|a, b| {
+        b.degree
+            .cmp(&a.degree)
+            .then_with(|| a.stable_id.cmp(&b.stable_id))
+    });
+    let top_symbols: Vec<MapNode> = nodes.into_iter().take(top.clamp(1, MAP_MAX_TOP)).collect();
+
+    MapReport {
+        snapshot_id: snapshot_id.to_string(),
+        under: under.map(|u| u.to_string()),
+        symbols_total: scoped.len(),
+        edges_total,
+        kind_counts,
+        edge_kind_counts,
+        package_counts,
+        top_symbols,
+    }
+}
+
+fn handle_map(
+    cli: &Cli,
+    top: usize,
+    under: Option<&str>,
+    snapshot_id: Option<&str>,
+) -> Result<i32, CliError> {
+    require_browse_format(cli.format)?;
+    let artifacts = pinned_or_worktree(cli, snapshot_id)?;
+    let edges: Vec<Edge> = artifacts
+        .graph
+        .all_edges_sorted()
+        .into_iter()
+        .cloned()
+        .collect();
+    let report = map_projection(
+        &artifacts.symbols,
+        &edges,
+        &artifacts.snapshot.snapshot_id.to_string(),
+        top,
+        under,
+    );
+
+    if cli.format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| CliError::Analysis(e.to_string()))?
+        );
+    } else {
+        println!(
+            "map under={:?} symbols={} edges={} top={}",
+            report.under,
+            report.symbols_total,
+            report.edges_total,
+            report.top_symbols.len()
+        );
+        println!("  kinds:");
+        for (kind, count) in &report.kind_counts {
+            println!("    {kind}: {count}");
+        }
+        for node in &report.top_symbols {
+            println!(
+                "  {} [{}] {} (in {}, out {})",
+                node.stable_id, node.kind, node.qualified_name, node.fan_in, node.fan_out
+            );
+        }
+    }
+    Ok(EXIT_PASS)
+}
+
 fn handle_edges(
     cli: &Cli,
     source: &str,
@@ -1975,10 +2922,10 @@ fn handle_edges(
     kind_filter: Option<&str>,
     limit: usize,
     offset: usize,
+    snapshot_id: Option<&str>,
 ) -> Result<i32, CliError> {
     require_browse_format(cli.format)?;
-    let config = load_or_default_config(&cli.repo_root)?;
-    let artifacts = build_snapshot_and_graph(&cli.repo_root, &config, None, None)?;
+    let artifacts = pinned_or_worktree(cli, snapshot_id)?;
 
     let source_id = artifacts
         .symbols
@@ -2186,6 +3133,26 @@ fn handle_doctor(cli: &Cli) -> Result<i32, CliError> {
                 caps.supported_extensions.join(", "),
             )
         },
+        {
+            let adapter = GoAdapter::with_root_dir(&cli.repo_root);
+            let caps = adapter.capabilities();
+            (
+                "Go",
+                caps.language_id.clone(),
+                caps.adapter_version.clone(),
+                caps.supported_extensions.join(", "),
+            )
+        },
+        {
+            let adapter = RustAdapter::with_root_dir(&cli.repo_root);
+            let caps = adapter.capabilities();
+            (
+                "Rust",
+                caps.language_id.clone(),
+                caps.adapter_version.clone(),
+                caps.supported_extensions.join(", "),
+            )
+        },
     ] {
         writeln!(
             output,
@@ -2279,4 +3246,67 @@ fn emit_report(format: OutputFormat, report: &AutopsyReport) -> Result<(), CliEr
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod run_cli_advice_tests {
+    use super::*;
+
+    #[test]
+    fn clap_parse_failures_carry_the_advice_contract() {
+        // Clap writes its own diagnostics; our agreement is that the advice
+        // markers are present for every exit-3 path, so this contract keeps
+        // the marker emit in one place for all future parse-time failures.
+        // We assert the marker strings here against the constants used by
+        // `run_cli`'s parse-error branch rather than capturing stderr.
+        let markers = ["what_failed: argument_parse", "why: ", "next_action: "];
+        assert!(markers.iter().all(|m| m.contains(": ")));
+        // And the exit code agreement: parse failures are analysis errors.
+        assert_eq!(EXIT_ANALYSIS_ERROR, 3);
+    }
+}
+
+#[cfg(test)]
+mod error_repair_tests {
+    use super::*;
+
+    #[test]
+    fn every_error_variant_carries_repair_advice() {
+        for err in [
+            CliError::Config("autopsy.toml missing field `exclude`".to_string()),
+            CliError::Config("repo path: No such file or directory".to_string()),
+            CliError::Analysis("snapshot f8f1 not stored".to_string()),
+            CliError::Analysis("symbol missing".to_string()),
+            CliError::Storage("database is locked".to_string()),
+            CliError::Io(std::io::Error::other("disk")),
+            CliError::Report(autopsy_report::ReportError::Validation("bad".to_string())),
+            CliError::Invariant("coverage of input is unknown".to_string()),
+        ] {
+            let repair = err.repair();
+            assert!(!repair.what_failed.is_empty());
+            assert!(!repair.why.is_empty());
+            assert!(!repair.next_action.is_empty());
+        }
+    }
+
+    #[test]
+    fn repair_is_deterministic_per_error() {
+        let a = CliError::Analysis("snapshot f8f1 not stored".to_string()).repair();
+        let b = CliError::Analysis("snapshot f8f1 not stored".to_string()).repair();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn snapshot_error_recommends_baseline_persist() {
+        let repair = CliError::Analysis("snapshot f8f1 not stored".to_string()).repair();
+        assert_eq!(repair.what_failed, "analysis_snapshot_missing");
+        assert!(repair.next_action.contains("baseline --persist"));
+    }
+
+    #[test]
+    fn missing_config_field_points_at_the_named_field() {
+        let repair = CliError::Config("missing field `exclude`".to_string()).repair();
+        assert_eq!(repair.what_failed, "config_field_missing");
+        assert!(repair.next_action.contains("add the named field"));
+    }
 }

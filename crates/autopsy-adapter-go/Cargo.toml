@@ -1,0 +1,14 @@
+[package]
+name = "autopsy-adapter-go"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-adapter-api = { path = "../autopsy-adapter-api" }
+autopsy-symbols = { path = "../autopsy-symbols" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = "0.24"
+tree-sitter-go = "0.23.4"

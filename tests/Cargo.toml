@@ -11,6 +11,8 @@ autopsy-repo = { path = "../crates/autopsy-repo" }
 autopsy-adapter-api = { path = "../crates/autopsy-adapter-api" }
 autopsy-adapter-typescript = { path = "../crates/autopsy-adapter-typescript" }
 autopsy-adapter-python = { path = "../crates/autopsy-adapter-python" }
+autopsy-adapter-go = { path = "../crates/autopsy-adapter-go" }
+autopsy-adapter-rust = { path = "../crates/autopsy-adapter-rust" }
 autopsy-graph = { path = "../crates/autopsy-graph" }
 autopsy-diff = { path = "../crates/autopsy-diff" }
 autopsy-impact = { path = "../crates/autopsy-impact" }

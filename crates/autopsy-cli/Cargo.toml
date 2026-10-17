@@ -19,6 +19,8 @@ autopsy-repo = { path = "../autopsy-repo" }
 autopsy-adapter-api = { path = "../autopsy-adapter-api" }
 autopsy-adapter-typescript = { path = "../autopsy-adapter-typescript" }
 autopsy-adapter-python = { path = "../autopsy-adapter-python" }
+autopsy-adapter-go = { path = "../autopsy-adapter-go" }
+autopsy-adapter-rust = { path = "../autopsy-adapter-rust" }
 autopsy-symbols = { path = "../autopsy-symbols" }
 autopsy-graph = { path = "../autopsy-graph" }
 autopsy-diff = { path = "../autopsy-diff" }
@@ -27,6 +29,7 @@ autopsy-contracts = { path = "../autopsy-contracts" }
 autopsy-invariants = { path = "../autopsy-invariants" }
 autopsy-evidence = { path = "../autopsy-evidence" }
 autopsy-storage = { path = "../autopsy-storage" }
+autopsy-workspace-registry = { path = "../autopsy-workspace-registry" }
 autopsy-report = { path = "../autopsy-report" }
 # Phase 4.2 engines (Pillar 1–6), reached only through their public APIs.
 autopsy-temporal = { path = "../autopsy-temporal" }

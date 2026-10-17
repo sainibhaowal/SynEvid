@@ -82,3 +82,64 @@ Steps 28–45 of `04_4.2_IMPLEMENTATION_SEQUENCE.md` are implemented: Phase 4.2 
 | **Step 45 closure (co-change view)** | Web Inspector Co-Change Coupling tab: the mined coupling report renders with the engine's own claim (`temporal_co_occurrence_only`, association never causation), truncation as a stated lower bound, and the three empty situations (below-threshold counted / nothing to couple / coverage-unknown refusal) as three different statements | `apps/web-inspector/index.html`; `apps/web-inspector/test/inspector.test.js`; `docs/evidence/31-cochange-coupling-inspector.md` | `a co-change report renders its edges, its accounting and its claim`, `a truncated co-change pair set is a stated lower bound, and an empty report is not an empty pass`, `excluded commits are named with their reason`, `the refusal message now names the co-change artifact too`, `the page stays read-only and offline` | **VERIFIED** |
 
 
+
+## Phase 4.2 — Closure Items (28, 30, 32)
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **MSRV-001** | Measured MSRV is 1.90 (let-chains + tree-sitter-language 0.1.8); declaration, CI job and docs updated | `Cargo.toml`, `AGENTS.md`, `.github/workflows/ci.yml` | `cargo +1.88.0 check` refused; `cargo +1.90.0 check --workspace --all-targets` green; evidence `28-msrv-and-schema-closure.md` | **VERIFIED** |
+| **SCHEMA-TEMPORAL-001** | `schemas/temporal.schema.json` closed against the `autopsy temporal` envelope; conformance checks every fact both ways | `schemas/temporal.schema.json`, `crates/autopsy-cli/tests/step44_cli_extensions.rs` | `gate_the_temporal_schema_declares_exactly_what_the_envelope_carries`; evidence `28-msrv-and-schema-closure.md` | **VERIFIED** |
+| **VERSION-001** | App version bumped to 0.1.0 across Cargo, CLI, MCP, inspector; format versions (0.0.1) deliberately unchanged | `Cargo.toml`, `crates/autopsy-cli/src/lib.rs`, `apps/mcp-server/package.json`, `apps/web-inspector/*` | `autopsy version` prints `v0.1.0` / `Schema Version: 0.0.1`; evidence `30-version-consistency-audit.md` | **VERIFIED** |
+| **STORAGE-WRITEBACK-001** | v2/v3 pillar tables have a production writer; `--persist` saves temporal facts and co-change edges; idempotent on natural keys | `crates/autopsy-storage/src/rows.rs`, `crates/autopsy-cli/src/lib.rs` (`run_extension`) | `cargo test -p autopsy-storage`; live `--persist` wrote 813 temporal facts + 260 co-change edges; evidence `32-storage-writeback-persistence.md` | **VERIFIED** |
+
+## Phase 4.3 — Advanced Requirements (FR-ADV-001..028)
+
+Implemented (Pillars 1–4 + 6): temporal lineage, test impact, cross-repo federation, distributed contracts, runtime-static fusion, co-change mining, catalog & ownership — see Phase 4.2 rows above.
+Not implemented (by design / research / conditional): FR-ADV-021 hidden-coupling extractors (config/env/queue/DB), FR-ADV-023/024 behavioral sandbox, FR-ADV-025/026 incident correlation, FR-ADV-028 GUI-as-required (GUI remains optional per ADR). FR-ADV-009 predictive ranking is advisory only.
+
+## Phase 4.4 — Advanced Architecture
+
+Implemented: temporal store, test-impact, distributed contracts, runtime-static fusion, co-change, catalog. Deferred per ADR-F001..F007: external graph DB, raw telemetry storage, behavioral promotion to hard gates, cloud control plane.
+
+## Phase 4.5 — Research
+
+RQ1–RQ5 measured in foundation (evidence `13`). RQ6–RQ11 not measured on held-out corpora; `benchmarks/results/4.2_pillar_report.*` records engine behaviour and explicit non-measurement. No promotion claimed.
+
+## Phase 4.6 — Enterprise
+
+Build-vs-integrate per `00_4.6`: Synevid owns semantic impact/contracts/evidence; security scanning, raw telemetry, catalog authority, automated transforms are integrated, not reimplemented. Enterprise control plane, RBAC, shared cache are conditional on proven local correctness (ADR-F007).
+
+## Phase 4.3/4.4/4.5 — Implemented Capability Crates (no deferral)
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **FR-ADV-021** | Hidden-coupling extractors for env vars, config keys, queue topics, DB tables (text-based, conservative, partial coverage, non-causality disclaimer) | `crates/autopsy-hidden-coupling` | 3 tests: shared env var, empty root unknown, deterministic digest | **VERIFIED** |
+| **FR-ADV-023/024** | Behavioral differential comparator (research-only, confidence-scored, never hard PASS) | `crates/autopsy-behavior-research` | 3 tests: divergence, length mismatch, deterministic digest | **VERIFIED** |
+| **FR-ADV-025/026** | Incident correlation: deployment/window candidate ranking with mandatory non-causality disclaimer | `crates/autopsy-incidents` | 3 tests: in-window, empty unknown, invalid window | **VERIFIED** |
+
+## Phase 4.4 — Additional Capability
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **FR-ADV-015** | Pluggable schema compatibility policies (Strict/Backward/Forward/Full) over field sets | `crates/autopsy-schema-registry` | 4 tests: backward allows addition, backward rejects removal, strict requires exact, deterministic digest | **VERIFIED** |
+
+## Tier 1 — Agent Experience (Roadmap `Resource/Agent_Advancement_Roadmap.md`)
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **AGENT-T1.1** | Symbol resolution from partial names: `autopsy find` CLI + `autopsy_find` MCP tool (case-insensitive substring over qname/path/id, `--name-only` scoping, stable-id-ordered honest pagination) | `crates/autopsy-cli/src/lib.rs` (`find_symbols`), `apps/mcp-server` | `step46_find_and_compact.rs` (7 find tests incl. exit-3 empty-pattern refusal + determinism), `server.test.js` find/pin suite (27 tests, 0 fail) | **VERIFIED** |
+| **AGENT-T1.2** | One MCP answer envelope for all tools: `{command, exit_code, actionable, report}`; no bare error JSON anywhere (`refusedEnvelope`) | `apps/mcp-server/src/{evidence,server}.ts` | `server.test.js` envelope + registry tests | **VERIFIED** |
+| **AGENT-T1.3** | Bounded whole-graph projection `autopsy map` + `autopsy://graph/map` resource (kind/package/edge-kind counts in `BTreeMap`, top-N by degree, `--under` full-scope narrowing, stated scope, top ≤ 500) | `crates/autopsy-cli/src/lib.rs` (`map_projection`), `apps/mcp-server` | `step46_find_and_compact.rs` map tests (counts, ranking, scope, clamp, determinism), `server.test.js` map tests | **VERIFIED** |
+| **AGENT-T1.4** | Cross-call snapshot pinning: `AUTOPSY_SNAPSHOT` env + `snapshotId` tool option with per-subcommand flag mapping (impact/diff/verify/baseline); explicit arg wins; `AUTOPSY_TIMEOUT_MS` bounded timeout override (`AUTOPSY_TIMEOUT_MS` garbage ignored) | `apps/mcp-server/src/cli.ts` | `server.test.js` pinning suite (flag mapping, precedence, pinned-equals-worktree byte equality, ghost-pin exit 3) | **VERIFIED** |
+| **AGENT-T1.5** | Token budgets on evidence commands: `--compact`/`--top-k` (7 CLI commands + MCP temporal/contract-diff/blast-radius). Counts/coverage/digests exact, arrays sliced in engine order with `_omitted` residual + `compact:true`, exit codes unmoved, persistence stores the full report | `crates/autopsy-cli/src/{lib,extensions}.rs` | `step46_find_and_compact.rs` compact tests, `server.test.js` compact test (verdict unmoved at exit 2) | **VERIFIED** |
+| **AGENT-T2.2** | Go and Rust language adapters behind `adapter-api`: honest `Unknown` for code-inclusion constructs (cgo/plugin/reflect, `include!`), `Partial` for run-time behavior (`unsafe`, `dyn`, `env!`, `//go:generate`); receiver-typed method scopes, embedding/impl/supertrait edges, package- and module-qualified call resolution; collision resolution total via `overload_id` | `crates/autopsy-adapter-go`, `crates/autopsy-adapter-rust` | 15 adapter unit tests + `e2e_adapter_go_rust_conformance.rs` (6 tests: conformance incl. syntax-error diagnostics, real Go package import binding through the workspace index, `crate::billing::ledger` module bridge, mixed Go/Rust/TS engine determinism) | **VERIFIED** |
+| **AGENT-T2.1** | Next-best-action on every error: deterministic `{what_failed, why, next_action}` on stderr for execution AND clap-parse failures in the CLI; MCP envelope `repair` parsed from the engine's markers only (never invented for policy failures with evidence); every `refusedEnvelope` carries an explicit `next_action` | `crates/autopsy-cli/src/lib.rs` (`ErrorRepair`), `apps/mcp-server/src/{evidence,server}.ts` | `error_repair_tests` (4), `server.test.js` repair suite (marker parse, evidence-no-advice, refusal triple), ghost-pin advice assertion | **VERIFIED** |
+| **AGENT-T2.3** | Multi-repo workspace binding: `autopsy workspace register/list/remove` via the workspace-registry crate (honest `accessible`/`analyzed` re-detection, `autopsy://workspace` resource) and `repo_root` on every path-taking MCP tool with `resolveAgainstRepoRoot` for document/trace/LCOV arguments | `crates/autopsy-cli/src/workspace.rs`, `apps/mcp-server/src/{cli,server}.ts` | `workspace::tests` (deterministic registry live-status suite), `server.test.js` template registrations | **VERIFIED** |
+| **AGENT-T2.4** | Snapshot pinning on the browse family: `--snapshot-id` on symbols/edges/find/map (stored-snapshot rebuild, miss = exit 3 + advice), MCP `pinningFlags` covers the four browse commands + explicit `snapshot_id` on find + `snapshot` template vars | `crates/autopsy-cli/src/lib.rs` (`pinned_or_worktree`), `apps/mcp-server/src/cli.ts` | e2e pinned-impact cycle in `e2e_adapter_go_rust_conformance.rs`, `server.test.js` browse-pinning suite (pinned read, ghost-pin refusal + advice) | **VERIFIED** |
+| **AGENT-T2.5** | Lifecycle receipts as a tool: `autopsy session start/record/show/close/list` — deterministic BLAKE3 session ids from repo root + counter, no timestamps, close verdict derived only from recorded evidence steps with mirrored exit codes; MCP `autopsy_session` tool + opt-in `agents/hooks/autopsy-session.sh` pre-commit wiring | `crates/autopsy-cli/src/session.rs`, `apps/mcp-server/src/server.ts` | `session::tests` lifecycle (fail-verdict close at exit 2, double-close refusal), `server.test.js` full lifecycle through runAutopsy + schema registration | **VERIFIED** |
+
+## Phase 4.6 — Workspace Registry (no cloud tenancy)
+
+| Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
+|---|---|---|---|---|
+| **FR-ADV-010/011/012** | Multi-repo workspace registry with authorization scoping and coverage counts (known/accessible/analyzed/excluded) | `crates/autopsy-workspace-registry` | 4 tests: register/summary, duplicate rejected, empty unknown, deterministic digest | **VERIFIED** |

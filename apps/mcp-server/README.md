@@ -23,11 +23,20 @@ Official Model Context Protocol (MCP) Server implementing the **2026-07-28 MCP s
 | `autopsy_diff` | `repo_root?: string`, `base?/before?/base_snapshot?: string`, `head?/after?: string` | Computes semantic delta between a stored baseline snapshot and the worktree (or two stored snapshots). IDs are engine snapshot IDs, not git revisions. | Symbol deltas (added, removed, modified), signature breaks. |
 | `autopsy_verify` | `repo_root?: string`, `base?/baseline_id?: string`, `invariants_file?: string`, `strict?: boolean` | Evaluates architectural and contract invariants against the target codebase, optionally two-state via `base`. | Findings (`pass`/`fail`/`unknown`), cryptographic receipt, exit code telemetry. |
 | `autopsy_explain` | `target?/finding_id?: string`, `repo_root?: string` | Derives the full causal path and evidence receipt for a specific finding. | Exact source locations, multigraph edges, evidence bundle. |
+| `autopsy_find` | `pattern: string`, `repo_root?: string`, `kind?: string`, `name_only?: boolean`, `limit?: number`, `offset?: number` | Resolves a partial, case-insensitive name against the analyzed graph (qualified names, declaring paths, stable IDs). The stable IDs it returns route straight into `autopsy_impact`. | `total`/`limit`/`offset` plus `symbols[]` (`stable_id`, `qualified_name`, `kind`, `visibility`, `path`, `signature`). |
+
+One answer envelope for every tool: `{command, exit_code, actionable, report}` — `actionable`
+is exactly `exit_code === 0`; refusals (exit 4) and policy gates (exit 2) travel with their
+evidence rather than as transport errors.
 
 Paginated graph resources (never full dumps): `autopsy://graph` (index
 summary), `autopsy://graph/symbols{?limit,offset,kind}` (stable-id-ordered
 symbol pages), `autopsy://graph/edges{?source,direction,kind,limit,offset}`
-(1-hop neighborhood pages). CLI equivalents: `autopsy symbols --limit 50`
+(1-hop neighborhood pages), `autopsy://graph/map{?under,top}` — a bounded
+whole-graph projection (kind/package counts, top-N nodes by degree) for
+"where is everything and what do I not dare touch" without a dump. CLI
+equivalents: `autopsy symbols --limit 50`, `autopsy edges --source <id>`,
+`autopsy map --top 25 --under src/checkout`.
 and `autopsy edges --source <id>`.
 
 ---
