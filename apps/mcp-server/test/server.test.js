@@ -11,6 +11,7 @@ import {
   pinningFlags,
   pinnedSnapshotId,
   resolveTimeoutMs,
+  resolveMaxBufferBytes,
 } from '../dist/cli.js';
 import { evidenceEnvelope, refusedEnvelope, repairAdviceFromStderr } from '../dist/evidence.js';
 import { resolveAgainstRepoRoot } from '../dist/server.js';
@@ -365,6 +366,23 @@ test('resolveTimeoutMs honors AUTOPSY_TIMEOUT_MS and keeps 30s default', () => {
   }
 });
 
+test('resolveMaxBufferBytes honors AUTOPSY_MAX_BUFFER_BYTES and keeps 20MB default', () => {
+  const previous = process.env.AUTOPSY_MAX_BUFFER_BYTES;
+  delete process.env.AUTOPSY_MAX_BUFFER_BYTES;
+  assert.equal(resolveMaxBufferBytes(), 20 * 1024 * 1024);
+  assert.equal(resolveMaxBufferBytes(1024), 1024, 'an explicit maxBuffer wins');
+  process.env.AUTOPSY_MAX_BUFFER_BYTES = '1048576';
+  assert.equal(resolveMaxBufferBytes(), 1048576);
+  process.env.AUTOPSY_MAX_BUFFER_BYTES = 'not-a-number';
+  assert.equal(resolveMaxBufferBytes(), 20 * 1024 * 1024, 'a garbage env value is ignored, not trusted');
+  process.env.AUTOPSY_MAX_BUFFER_BYTES = '0';
+  assert.equal(resolveMaxBufferBytes(), 20 * 1024 * 1024, 'a zero maxBuffer is no maxBuffer');
+  if (previous === undefined) {
+    delete process.env.AUTOPSY_MAX_BUFFER_BYTES;
+  } else {
+    process.env.AUTOPSY_MAX_BUFFER_BYTES = previous;
+  }
+});
 test('snapshot pinning reuses a stored baseline: N impact calls, one parse', async () => {
   // Build the stored state once.
   const baseline = await runAutopsy('baseline', [], { repoRoot: REPO_API_ROOT });

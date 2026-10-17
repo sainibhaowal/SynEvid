@@ -33,6 +33,25 @@ export function resolveTimeoutMs(timeoutMs?: number): number {
 }
 
 /**
+ * Resolves the per-call maxBuffer. `AUTOPSY_MAX_BUFFER_BYTES` lets a host raise the
+ * ceiling for large repositories without a code change; a tool-supplied maxBufferBytes
+ * always wins. A non-positive or non-numeric env value is ignored rather than trusted.
+ * Default: 20 MB (unchanged from the original contract).
+ */
+export const DEFAULT_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
+
+export function resolveMaxBufferBytes(maxBufferBytes?: number): number {
+  if (maxBufferBytes && maxBufferBytes > 0) {
+    return maxBufferBytes;
+  }
+  const fromEnv = Number(process.env.AUTOPSY_MAX_BUFFER_BYTES);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return fromEnv;
+  }
+  return DEFAULT_MAX_BUFFER_BYTES;
+}
+
+/**
  * Snapshot pinning (Tier 1.4).
  *
  * Which CLI flag the given subcommand reads a stored snapshot ID from. Every pinned
@@ -120,6 +139,7 @@ export async function runAutopsy(
   options: {
     repoRoot?: string;
     timeoutMs?: number;
+    maxBufferBytes?: number;
     /** Pin this call to a stored snapshot (Tier 1.4); wins over AUTOPSY_SNAPSHOT. */
     snapshotId?: string;
   } = {}
@@ -141,7 +161,7 @@ export async function runAutopsy(
   try {
     const { stdout, stderr } = await execFileAsync(binary, fullArgs, {
       timeout,
-      maxBuffer: 20 * 1024 * 1024, // 20 MB buffer
+      maxBuffer: resolveMaxBufferBytes(options.maxBufferBytes), // 20 MB default, env-overridable
       env: {
         ...process.env,
         RUST_BACKTRACE: '0',

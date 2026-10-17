@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Tier 3 polish/productization (2026-10-17)
+
+Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
+`docs/evidence/37-tier3-polish.md`.
+
+### Added
+- **Machine-readable toolspec (`AGENT-T3.1`):** `autopsy tools --format json` emits a
+  deterministic JSON document (21 subcommands, args, pinning surfaces, coverage semantics,
+  global flags, exit-code contract, envelope, error advice, feedback channel); served as
+  MCP resource `autopsy://tools`. `docs/agents/TOOLS.md` is the human rendering.
+- **Agent feedback channel (`AGENT-T3.3`):** `--suggestion <TEXT>` / `--disable-suggestion`
+  global flags. Correction receipts stored deterministically in `.autopsy/suggestions.json`
+  (BLAKE3 id over normalized root + counter, no timestamps). Hint line on failures; echo on
+  success; opt-out suppresses storage and hints.
+- **Performance env vars (`AGENT-T3.5`):** `AUTOPSY_MAX_BUFFER_BYTES` (default 20 MB) alongside
+  existing `AUTOPSY_TIMEOUT_MS` (default 30 s). `resolveMaxBufferBytes()` in MCP cli.ts.
+- **Agent docs (`AGENT-T3.4`):** `docs/agents/TOOLS.md` + `agents/recipes/` (repair-loop,
+  pinned-evidence, pr-gate, multi-repo).
+
+### Changed
+- MCP `cli.ts` maxBuffer now env-overridable via `AUTOPSY_MAX_BUFFER_BYTES`.
+
+---
+
 ## [Unreleased] - Tier 2 agent quality (2026-10-17)
 
 Implements all five Tier-2 items from `Resource/Agent_Advancement_Roadmap.md`; see

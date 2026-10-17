@@ -14,6 +14,8 @@ pub mod extensions;
 
 use autopsy_adapter_api::{LanguageAdapter, ParseContext, ParsedFile};
 mod session;
+mod suggestions;
+mod toolspec;
 mod workspace;
 
 pub use session::{
@@ -25,6 +27,7 @@ pub use workspace::{
     handle_workspace_remove,
 };
 
+use crate::toolspec::handle_tools;
 use autopsy_adapter_go::GoAdapter;
 use autopsy_adapter_python::PythonAdapter;
 use autopsy_adapter_rust::RustAdapter;
@@ -260,6 +263,16 @@ pub struct Cli {
     /// Persist analysis results to the SQLite storage engine (`.autopsy/storage.db`)
     #[arg(long, global = true)]
     pub persist: bool,
+
+    /// Attach a correction receipt to this run (Tier 3.3): the agent's verbatim note
+    /// about what actually repaired the problem, stored deterministically in
+    /// `.autopsy/suggestions.json` (no timestamps, BLAKE3 id)
+    #[arg(long, global = true, value_name = "TEXT")]
+    pub suggestion: Option<String>,
+
+    /// Suppress repair hints and suggestion storage entirely (Tier 3.3 opt-out)
+    #[arg(long, global = true)]
+    pub disable_suggestion: bool,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -663,6 +676,9 @@ pub enum Commands {
     },
     /// Verify repository configuration, storage integrity, and analyzer health
     Doctor,
+    /// Emit the machine-readable tool specification: every subcommand, its flags,
+    /// exit-code contract, pinning surface, and envelope semantics (Tier 3.1)
+    Tools,
     /// Display engine version and adapter capabilities
     Version,
 }
@@ -675,6 +691,11 @@ pub fn run_from_env() -> i32 {
 
 /// Executes the CLI with the provided argument list and returns exit code.
 pub fn run_cli(args: &[String]) -> i32 {
+    // Clone the original argv before clap parsing so we can preserve it
+    // for suggestion receipt recording (Tier 3.3) — the receipt stores the
+    // exact invocation that the agent attached the correction to.
+    let args_owned: Vec<String> = args.to_vec();
+
     let cli = match Cli::try_parse_from(args) {
         Ok(c) => c,
         Err(e) => {
@@ -698,7 +719,19 @@ pub fn run_cli(args: &[String]) -> i32 {
     };
 
     match execute(&cli) {
-        Ok(code) => code,
+        Ok(code) => {
+            // --- T3.3: record suggestion receipt on successful runs ---
+            if cli
+                .suggestion
+                .as_deref()
+                .is_some_and(|_| !cli.disable_suggestion)
+            {
+                // Record the deterministic receipt into .autopsy/suggestions.json
+                // and echo the id line to stderr so JSON stdout stays clean.
+                let _ = suggestions::emit_feedback(&cli, &args_owned, code);
+            }
+            code
+        }
         Err(err) => {
             let stderr = std::io::stderr();
             let mut handle = stderr.lock();
@@ -709,6 +742,14 @@ pub fn run_cli(args: &[String]) -> i32 {
             let _ = writeln!(handle, "what_failed: {}", repair.what_failed);
             let _ = writeln!(handle, "why: {}", repair.why);
             let _ = writeln!(handle, "next_action: {}", repair.next_action);
+            // --- T3.3: record suggestion on failures, and print hint ---
+            if !cli.disable_suggestion {
+                let _ = suggestions::emit_feedback(&cli, &args_owned, EXIT_ANALYSIS_ERROR);
+                // Print the one-line hint that invites an agent to leave a correction.
+                if let Some(hint) = suggestions::failure_hint(&cli) {
+                    let _ = writeln!(handle, "{}", hint);
+                }
+            }
             EXIT_ANALYSIS_ERROR
         }
     }
@@ -987,6 +1028,7 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             },
         ),
         Commands::Doctor => handle_doctor(cli),
+        Commands::Tools => handle_tools(cli),
         Commands::Version => handle_version(cli),
     }
 }
