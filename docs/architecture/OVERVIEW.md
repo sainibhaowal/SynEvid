@@ -45,11 +45,32 @@ SynEvid enforces a strict **Architectural Inversion** principle: presentation, i
 +-------------------------------------------------------------------------------------------------+
 ```
 
+### 1.1 Agent Plane at a Glance (Tier 1–3)
+
+The layer above the engine is exercised the way agents exercise it — over the MCP
+stdio wire protocol — by the acceptance-gate tests in
+`apps/mcp-server/test/` (`e2e_agent_find_and_envelope.test.js`,
+`e2e_agent_session.test.js`). Every answer, CLI and MCP alike, travels in the same
+envelope: `{command, exit_code, actionable, report, repair?}`.
+
+| Surface | What ships | Where |
+|---|---|---|
+| **MCP server** | 11 read-only tools (`status`, `impact`, `diff`, `verify`, `explain`, `find`, `temporal`, `test_selection`, `contract_diff`, `distributed_blast_radius`, `session`) + 6 resources (`graph`, `graph/map`, `graph/symbols`, `graph/edges`, `workspace`, `tools`) | `apps/mcp-server` |
+| **CLI agent commands** | `find` (symbol resolution), `map` (bounded whole-graph projection), `tools` (self-description), `session` (repair-loop receipts), `workspace` (multi-repo registry) | `crates/autopsy-cli` |
+| **Editor surface** | `synevid-lsp` — hover returns signature, declaration, callers/callees, 1-hop impact, and coverage | `apps/synevid-lsp` |
+| **Repair advice** | every error carries `{what_failed, why, next_action}` parsed from the engine's own stderr markers | `autopsy-cli` → MCP envelope |
+| **Determinism & budget knobs** | `AUTOPSY_SNAPSHOT` pin · `--snapshot-id` per call · `--compact`/`--top-k` · `AUTOPSY_TIMEOUT_MS` · `AUTOPSY_MAX_BUFFER_BYTES` | CLI + MCP |
+
+Full contract: [`docs/agents/TOOLS.md`](../agents/TOOLS.md). Verification:
+[`docs/evidence/38-agent-gate-closure.md`](../evidence/38-agent-gate-closure.md)
+and the `AGENT-T1.*`–`AGENT-GATE-1` rows in
+[`docs/requirements/TRACEABILITY.md`](../requirements/TRACEABILITY.md).
+
 ---
 
 ## 2. Core Invariants & Boundaries
 
-Every crate within `crates/*` is bound by four non-negotiable architectural axioms:
+Every crate within `crates/*` is bound by five non-negotiable architectural axioms:
 
 1. **Zero LLM in Correctness Crates (`crates/*`):**
    - Correctness, blast-radius calculation, invariant evaluation, and test selection are 100% deterministic code. Core crates never import or make calls to LLM APIs.
@@ -75,7 +96,7 @@ Every crate within `crates/*` is bound by four non-negotiable architectural axio
 
 ## 3. Crate Topology & Responsibilities
 
-The monorepo contains 21 core Rust crates organized by strict layered dependency:
+The monorepo contains 28 core Rust crates (plus the `synevid-lsp` presentation app and the workspace integration-test crate `tests/`), organized by strict layered dependency:
 
 ### Core Foundation Layer
 - **`autopsy-domain`**: Canonical domain types (`SnapshotId`, `SymbolId`, `CoverageState`, `GlobalEntityId`, `EvidenceReceipt`).
@@ -87,6 +108,8 @@ The monorepo contains 21 core Rust crates organized by strict layered dependency
 - **`autopsy-adapter-api`**: Language-agnostic adapter trait definitions and capability declarations.
 - **`autopsy-adapter-typescript`**: Tree-sitter powered TypeScript/JavaScript AST visitor and contract extractor.
 - **`autopsy-adapter-python`**: Tree-sitter powered Python module, class, function, and import extractor.
+- **`autopsy-adapter-go`**: Tree-sitter powered Go extractor — receiver-typed methods, struct/interface embedding, filesystem-anchored imports, honest `Unknown` for cgo/plugin/reflect (Tier 2.2).
+- **`autopsy-adapter-rust`**: Tree-sitter powered Rust extractor — module bridge, impl/trait edges, `unsafe`/`async` contract effects, honest `Unknown` for `include!` inlining (Tier 2.2).
 
 ### Graph & Verification Layer
 - **`autopsy-graph`**: Directed multigraph with edge provenance, cycle detection (Tarjan's SCC), and reachability traversals.
@@ -103,7 +126,14 @@ The monorepo contains 21 core Rust crates organized by strict layered dependency
 - **`autopsy-contracts-distributed`**: OpenAPI 3.2.1, AsyncAPI 3.1.0, and Pact 4.0.0 breaking change diff engine.
 - **`autopsy-telemetry`**: OpenTelemetry SemConv 1.44 trace sanitizer, PII redaction, and runtime service topology graph.
 - **`autopsy-mining`**: Sliding-window Git co-change miner calculating support, confidence, and lift without claiming causation.
+- **`autopsy-hidden-coupling`**: Conservative extractors for environment variables, config keys, message-queue topics, and database table names — every report carries `CoverageState::Partial` and a non-causality disclaimer.
 - **`autopsy-catalog`**: Backstage `catalog-info.yaml` and multi-ecosystem package manifest ingestion engine.
+
+### Research & Federation Layer
+- **`autopsy-behavior-research`**: Confidence-scored behavioral research analyzers (FR-ADV-023/024); never emits a hard PASS without a formal proof.
+- **`autopsy-incidents`**: Read-only incident correlation with candidate ranking only — never claims root cause (FR-ADV-025/026).
+- **`autopsy-schema-registry`**: Pluggable schema-registry compatibility policies over field sets (FR-ADV-015).
+- **`autopsy-workspace-registry`**: Read-only multi-repo / tenant federation metadata and honest live accessibility status (FR-ADV-010..012).
 - **`autopsy-cli`**: Unified CLI application orchestrating all core engine commands and deterministic exit codes.
 
 ---

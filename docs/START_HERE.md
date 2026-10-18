@@ -2,7 +2,7 @@
 
 Welcome to **SynEvid (Code Autopsy)**, an offline, mathematically deterministic software verification and change-impact engine engineered in pure Rust.
 
-This document is the **canonical public starting point** for developers, platform architects, security auditors, and AI agent engineers exploring the repository and its documentation.
+This document is the **canonical public starting point** for developers, platform architects, security auditors, and AI agent engineers exploring the repository and its documentation. The agent-facing surface — one evidence envelope, `autopsy find`/`map`/`session`, snapshot pinning, the machine-readable toolspec, the MCP server, and the `synevid-lsp` editor surface — is summarized in [Agent Tool Reference](agents/TOOLS.md) and verified tier-by-tier in [Evidence 35–38](evidence/38-agent-gate-closure.md).
 
 ---
 
@@ -17,7 +17,7 @@ Depending on your role and interest, follow the designated reading path below:
         |                       |               |                       |
         v                       v               v                       v
 [Architecture & Design]   [Requirements & Trace] [Safety & Invariants]  [Evidence & Receipts]
-docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..33
+docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..38
         |                       |               |                       |
         v                       v               v                       v
    ADR-0001..0009         schemas/*.json   scripts/verify-arch-*.sh  docs/benchmark/PROTOCOL.md
@@ -47,7 +47,13 @@ docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/
 
 ### Path D: Empirical Benchmarks & Production Evidence
 1. [**Benchmark Protocol**](benchmark/PROTOCOL.md): Pre-registered evaluation methodology across 50 refactoring tasks and 5 TypeScript target repositories.
-2. [**Evidence Dossier (33 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 to Phase 4.6 (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md)).
+2. [**Evidence Dossier (38 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md)).
+
+### Path E: AI Agent Surfaces & Integration
+1. [**Agent Tool Reference**](agents/TOOLS.md): the one envelope, the exit-code contract, all 22 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 6 resources, environment variables, and the `synevid-lsp` editor surface (Tier 1–3).
+2. [**Agent recipes**](../agents/recipes/repair-loop.md): step-by-step playbooks — [repair loop](../agents/recipes/repair-loop.md), [pinned evidence](../agents/recipes/pinned-evidence.md), [PR gate](../agents/recipes/pr-gate.md), [multi-repo](../agents/recipes/multi-repo.md).
+3. [**Agent skill & hooks**](../agents/skills/synevid-forensics.md): opt-in host guidance, session-receipt hook ([`autopsy-session.sh`](../agents/hooks/autopsy-session.sh)), and the advisory fail-open [safe-edit hook](../agents/hooks/safe-edit.sh). Index: [Agent Documentation](agents/README.md).
+4. [**Tier evidence & gate closure**](evidence/38-agent-gate-closure.md): what each tier added and how it is verified (35–38), including the protocol-level MCP agent-loop tests.
 
 ---
 
@@ -88,8 +94,8 @@ Verifies that 100 consecutive full snapshot calculations produce byte-identical 
 ./scripts/verify-determinism.sh
 ```
 
-### Step 4: Run the Complete Test Suite (830+ Tests)
-Runs all unit, integration, fuzz, and schema conformance test suites:
+### Step 4: Run the Complete Test Suite (924 workspace tests)
+Runs all unit, integration, fuzz, and schema conformance suites (the MCP server adds 42 protocol-level tests via `npm test`):
 ```bash
 cargo test --workspace --all-targets
 ```
@@ -116,3 +122,9 @@ SynEvid operates via a unified CLI (`autopsy`):
 | `autopsy lineage` | Traces a symbol's identity across file renames and moves over Git history. | `0` (Verified), `4` (Ambiguous) |
 | `autopsy catalog` | Discovers Backstage components, team ownership, and dependency manifests. | `0` (Verified), `4` (Unregistered) |
 | `autopsy explain` | Provides an evidence trace and recommended agent repair strategy for any finding. | `0` (Informational) |
+| `autopsy find` | Resolves a partial name/path/ID to ranked stable symbol IDs (Tier 1.1). | `0` (Verified), `3` (Blank pattern) |
+| `autopsy map` | Bounded whole-graph projection: counts plus top-N ranked nodes (Tier 1.3). | `0` (Verified), `4` (`--strict`, unknown coverage) |
+| `autopsy session` | Repair-loop receipts: `start` / `record` / `show` / `close` / `list` (Tier 2.5). | `0` (Pass), `2` (Fail), `3` (Refused) |
+| `autopsy tools` | Emits the machine-readable toolspec for agents (Tier 3.1). | `0` (Success) |
+
+All 22 subcommands — including `symbols`, `edges`, `workspace`, `temporal`, `test-select`, `contract-dist`, `telemetry`, `cochange`, `blast-radius`, `doctor`, and `version` — are documented in [Agent Tool Reference](agents/TOOLS.md) and emitted by `autopsy tools --format json`.

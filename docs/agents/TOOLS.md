@@ -144,7 +144,28 @@ Every evidence command supports `--compact` and `--top-k <N>`. Counts stay exact
 arrays are sliced with a named `_omitted` residual so the truncation is stated,
 never silent.
 
-## 10. MCP resources
+## 10. MCP tools (11, read-only)
+
+| Tool | Purpose |
+|---|---|
+| `autopsy_status` | Index status, snapshot identity, coverage, adapter capabilities |
+| `autopsy_impact` | Bounded blast radius for one symbol |
+| `autopsy_diff` | Semantic symbol delta between a baseline and a state |
+| `autopsy_verify` | Invariant and contract evaluation (exit 2 blocks CI) |
+| `autopsy_explain` | Evidence trace for one finding or symbol |
+| `autopsy_find` | Partial-name resolution to ranked stable IDs (Tier 1.1) |
+| `autopsy_temporal` | Revision journal or mined co-change replay |
+| `autopsy_test_selection` | Conservative test selection for a changed file set |
+| `autopsy_contract_diff` | OpenAPI / AsyncAPI / Pact breaking-change diff |
+| `autopsy_distributed_blast_radius` | Organisational blast radius of one catalog component |
+| `autopsy_session` | Repair-loop receipts: `start` / `record` / `close` / `show` / `list` (Tier 2.5) |
+
+Every tool returns the one envelope of §1. Every path-taking tool accepts `repo_root` and
+`snapshot_id`, and honours `AUTOPSY_SNAPSHOT`. The canonical golden-path loop is exactly
+three calls — `autopsy_find` → `autopsy_impact` → `autopsy_verify` — pinned by
+`apps/mcp-server/test/e2e_agent_find_and_envelope.test.js`.
+
+## 11. MCP resources
 
 | URI | Description |
 |---|---|
@@ -155,7 +176,7 @@ never silent.
 | `autopsy://workspace{?repo_root}` | Multi-repo registry |
 | `autopsy://tools` | This specification (Tier 3.1, fixed URI) |
 
-## 11. Environment variables
+## 12. Environment variables
 
 | Variable | Purpose |
 |---|---|
@@ -164,12 +185,12 @@ never silent.
 | `AUTOPSY_MAX_BUFFER_BYTES` | MCP maxBuffer ceiling (default 20 MB) |
 | `AUTOPSY_BIN` | Path to the `autopsy` binary (MCP tests) |
 
-## 12. Machine-readable spec
+## 13. Machine-readable spec
 
 Run `autopsy tools --format json` for the full contract. The MCP server exposes it
 as the `autopsy://tools` resource.
 
-## 13. IDE surface — `synevid-lsp` (Tier 3.2)
+## 14. IDE surface — `synevid-lsp` (Tier 3.2)
 
 `synevid-lsp` is a Language Server Protocol server that answers hover requests with
 the engine's impact analysis. It is a presentation layer over the same library API
@@ -204,4 +225,16 @@ vim.lsp.start({
   root_dir = vim.fn.getcwd(),
 })
 ```
+
+## 15. Related agent material
+
+- [`agents/recipes/repair-loop.md`](../../agents/recipes/repair-loop.md) — impact → edit → verify → repair → re-verify with session receipts.
+- [`agents/recipes/pinned-evidence.md`](../../agents/recipes/pinned-evidence.md) — pin one immutable snapshot for a whole session.
+- [`agents/recipes/pr-gate.md`](../../agents/recipes/pr-gate.md) — wire the PR forensic gate into CI.
+- [`agents/recipes/multi-repo.md`](../../agents/recipes/multi-repo.md) — workspace registration and cross-repo queries.
+- [`agents/skills/synevid-forensics.md`](../../agents/skills/synevid-forensics.md) — the host-agnostic skill file installed by `scripts/setup-agent-hosts.py`.
+- [`agents/hooks/autopsy-session.sh`](../../agents/hooks/autopsy-session.sh) — opt-in pre-commit session-receipt hook; [`agents/hooks/safe-edit.sh`](../../agents/hooks/safe-edit.sh) — advisory fail-open pre-edit blast-radius prompt.
+- [`docs/evidence/12-agent-lifecycle-protocol.md`](../evidence/12-agent-lifecycle-protocol.md) — the documented lifecycle these tools automate.
+- [`docs/evidence/38-agent-gate-closure.md`](../evidence/38-agent-gate-closure.md) — protocol-level verification of this surface through the MCP server.
+
 

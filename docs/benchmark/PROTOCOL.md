@@ -32,13 +32,41 @@ The evaluation suite exercises realistic, ground-truth refactoring tasks across 
 
 ## 4. Pre-Registered Success Gates & Empirical Results
 
-To prevent subjective evaluation bias, three falsification gates were pre-registered before running benchmarks:
+To prevent subjective evaluation bias, the promotion gate was pre-registered before running benchmarks:
+pass = (ΔRecall ≥ +10pp) ∨ (ΔCost ≥ 40% at equal accuracy) ∨ (New Failure Class > 0).
 
-| Success Gate | Pre-Registered Target Threshold | Measured Ground-Truth Outcome | Gate Status |
+| Gate Criterion | Pre-Registered Threshold | Committed Measurement | Gate Status |
 | :--- | :--- | :--- | :---: |
-| **Gate 1: Impact Recall Lift** | $\ge +10.00\text{pp}$ lift over best ordinary baseline | **+28.33pp to +31.73pp** (100.00% vs 71.67%) | **PASSED** |
-| **Gate 2: Zero False-Negative Invariant** | $0.00\%$ missed breaking regressions | **0.00% missed regressions** on ground-truth corpus | **PASSED** |
-| **Gate 3: Deterministic Repeatability** | $100/100$ runs with identical BLAKE3 digests | **100/100 byte-identical receipts** across all platforms | **PASSED** |
+| **Recall Lift** | ≥ +10.00pp over best baseline | **+28.33pp** (100.00% vs 71.67% mean recall) | **PASS** |
+| **Cost Reduction** | ≥ 40% token cut at equal accuracy | **−246.44%** (2338 vs 675 tokens) | **FAIL** |
+| **New Failure Class** | Discovery of structural failure classes | **0** (task vocabulary gap) | **FAIL** |
+
+Promotion therefore rests on the recall leg alone — the pre-registered OR gate. The
+committed artifacts are [`benchmarks/results/reproduction_report.md`](../../benchmarks/results/reproduction_report.md)
+and `.json`.
+
+Two further project invariants are tracked as standing gates (not promotion criteria):
+
+| Standing Gate | Threshold | Status |
+| :--- | :--- | :---: |
+| **Zero false-negative invariant** | 0 missed breaking regressions on the ground-truth corpus | **PASSED** (follows from 100% task recall) |
+| **Deterministic repeatability** | 100/100 runs with identical BLAKE3 digests | **PASSED** across all platforms |
+
+### 4.1 Honest limits — what is measured and what is not
+
+- **Tool calls (measured):** Baseline A = 2.50, Baseline B = 1.50, Baseline C = 3.00.
+  The reading "fewer tool calls to reach a passing verify" does **not** hold on this
+  corpus: Autopsy uses more calls and more tokens than the baselines, and wins on
+  recall (100% vs 71.67%). Promotion passed on the pre-registered OR gate via the
+  recall leg — never on cost.
+- **Feature-level counterfactual (not measured):** there is no A/B measurement for the
+  Tier 1–3 agent tooling itself (find/pinning/compact versus their absence); it is
+  recorded as not measured in `docs/evidence/38-agent-gate-closure.md`.
+- **RQ6–RQ10 (not measured):** temporal lineage precision/recall, test-impact
+  false-negative rate, and related questions require curated corpora that are not
+  present in the committed tree. They are recorded as *not measured* in
+  [`benchmarks/results/4.2_pillar_report.md`](../../benchmarks/results/4.2_pillar_report.md)
+  rather than approximated.
 
 ---
 

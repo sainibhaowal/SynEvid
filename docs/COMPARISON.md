@@ -4,6 +4,10 @@
 **built and executed locally** on one identical fixture, with one identical
 question. Nothing here is a vendor claim.
 
+**Updated 2026-10-18:** competitor measurements are unchanged; SynEvid-side
+evolution since the measurement (Go/Rust adapters, agent surfaces) is annotated
+inline and leads each changed section with the date.
+
 - **MEASURED** = we cloned it, built it, ran it, and read its output.
 - **VENDOR** = taken from its public README, labelled as unverified.
 
@@ -118,12 +122,14 @@ re-verified.
 | **ripwire** | ~19 (C/C++/ObjC/Metal/CUDA/TS/JS/Python/Java/Ruby/PHP/Lua/Elixir/Dart/Kotlin/Bash/Go/Rust/Swift/C#/GDScript) — read from `--help` |
 | **codanna** | 15 (VENDOR) |
 | **blastcode** | multi (VENDOR) |
-| **SynEvid** | **2 deep** (TypeScript/JavaScript, Python) |
+| **SynEvid** | **4 deep** (TypeScript/JavaScript, Python, Go, Rust) — *updated 2026-10-17:* Go and Rust adapters landed with conformance suites behind the same `adapter-api` trait, honest per-language coverage states, and benchmark corpus unchanged; see `docs/evidence/36-tier2-agent-quality.md` |
 
-**We are far behind on breadth and it is not close.** ripwire's list is
+**We are behind on breadth and it shows in the scoring.** ripwire's list is
 impressive and cheap for them to have; ours is deliberately deep-per-language
 (conformance suites, identity/shape split, honest per-edge coverage) because
-our rule is one-deep-first.
+our rule is one-deep-first. The 2026-10-17 adapter additions follow that rule:
+each new language ships with conformance tests and explicit `Unknown`/`Partial`
+states rather than silent approximation.
 
 ---
 
@@ -144,7 +150,8 @@ our rule is one-deep-first.
 
 ## 8. Where SynEvid is genuinely worse
 
-1. **Breadth.** 2 vs ~19. If you need Go/Rust/C++ tomorrow, ripwire is there.
+1. **Breadth.** 4 vs ~19 (updated 2026-10-17; was 2 at measurement time). If you need
+   C++ or Java tomorrow, ripwire is there and we are not.
 2. **Token discipline.** ripwire's `--token-budget` *withholds* output before
    emitting; we emit verbose JSON receipts and rely on `--top-k` after the fact.
 3. **Graceful degradation.** ripwire ships `counts_floor` and

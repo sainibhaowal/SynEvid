@@ -28,6 +28,7 @@ SynEvid is engineered with a **defense-in-depth offline containment model** that
 | **Remote Code Execution** | Triggering compilers, `npm install`, or subprocesses during parsing. | **`INV-SANDBOX-004`**: In-memory Tree-sitter parsers only; core crates prohibit `std::process::Command` and `libc::exec`. | `test_e2e_zero_code_execution_in_memory_only` |
 | **Resource Exhaustion** | Huge generated bundles, Minified code (>100MB), circular AST depth. | Explicit file cap `max_file_bytes` (10MB default); oversize files recorded in metadata rather than read into memory. | `test_e2e_oversize_file_cap_never_reads_huge_files` |
 | **Cache Poisoning** | Concurrent agent processes attempting to corrupt shared SQLite state. | **`ATOMIC-CACHE-001`**: Content-addressed cache writes use unique temporary files and atomic filesystem renames. | `test_e2e_storage_concurrent_atomic_write_resilience` |
+| **Agent-Surface Input Abuse** | MCP tool arguments or LSP document URIs attempting path traversal, workspace escape, or command injection through the agent loop. | **MCP/LSP never shell out**: the MCP server passes arguments as discrete argv entries via `execFile` (no shell); `synevid-lsp` calls the engine as an in-process library (no subprocess at all). Paths are normalized via `sanitize_relative_path`; engine-state writes (session receipts, suggestions) stay inside the configured `.autopsy/` store; the analyzer remains read-only by contract (FR-026). | `e2e_agent_find_and_envelope.test.js`, `e2e_agent_session.test.js`, `synevid-lsp` crate tests, `test_e2e_path_traversal_sanitization` |
 | **Telemetry PII Leakage** | OpenTelemetry spans containing authorization headers, passwords, or query tokens. | **Pillar 4 Redaction**: Automated pattern stripping for bearer tokens, credentials, and salted BLAKE3 span hashing. | `test_step40_otlp.rs` (17 tests) |
 
 ---
@@ -51,7 +52,7 @@ All file identifiers, snapshot keys, and URNs pass through strict lexical normal
 - Leading `/` and relative `..` tokens are strictly forbidden and trigger an analysis error.
 
 ### Invariant INV-SANDBOX-004: In-Memory AST Analysis (Zero Subprocess Spawning)
-Language extraction (TypeScript, Python) is conducted strictly via statically linked in-memory Tree-sitter grammars.
+Language extraction (TypeScript/JavaScript, Python, Go, Rust) is conducted strictly via statically linked in-memory Tree-sitter grammars.
 - No Node.js runtime, Python interpreter, or external compiler is executed during core verification.
 - Static semantic graphs are built entirely within safe Rust memory space.
 

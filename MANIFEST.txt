@@ -284,6 +284,7 @@ docs/adr/0006-gui-later.md
 docs/adr/0007-one-language-first.md
 docs/adr/0008-sarif-export.md
 docs/adr/0009-symbol-identity-shape-split.md
+docs/agents/README.md
 docs/agents/TOOLS.md
 docs/architecture/OVERVIEW.md
 docs/benchmark/PROTOCOL.md

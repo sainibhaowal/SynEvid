@@ -25,8 +25,8 @@
   <a href="#deterministic-pipeline"><img src="https://img.shields.io/badge/Determinism-100%2F100%20BLAKE3-00f0ff?style=for-the-badge&logo=rust" alt="100/100 Determinism"></a>
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.90%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
-  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-831%2F831%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
-  <a href="#7-benchmark-harness--empirical-evaluation-architecture"><img src="https://img.shields.io/badge/Gate%20(Ch.12)-PASSED%20on%20recall%20(%2B31.73pp)-00e676?style=for-the-badge" alt="Pre-Registered Gate: PASSED on recall"></a>
+  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-924%2F924%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
+  <a href="#7-benchmark-harness--empirical-evaluation-architecture"><img src="https://img.shields.io/badge/Gate%20(Ch.12)-PASSED%20on%20recall%20(%2B28.33pp)-00e676?style=for-the-badge" alt="Pre-Registered Gate: PASSED on recall"></a>
 </p>
 
 ---
@@ -267,13 +267,19 @@ autopsy doctor
 
 # 9. Print engine version and adapter capabilities
 autopsy version
+
+# 10. Agent surfaces: resolve symbols, project the graph, self-describe, record the loop
+autopsy find "UserService.create" --format json          # partial name -> ranked stable IDs (Tier 1.1)
+autopsy map --top 25 --format json                       # bounded whole-graph counts + top-N (Tier 1.3)
+autopsy tools --format json                              # machine-readable toolspec for agents (Tier 3.1)
+autopsy session start --format json                      # repair-loop receipts (Tier 2.5)
 ```
 
 ---
 
-## 5. Monorepo Crate Substrate (21 Specialized Crates)
+## 5. Monorepo Crate Substrate (28 Specialized Crates)
 
-The Synevid engine is organized into 21 modular Rust crates with strict compiler-enforced boundary isolation:
+The Synevid engine is organized into 28 modular Rust crates with strict compiler-enforced boundary isolation:
 
 ```
 SynEvid/
@@ -294,11 +300,17 @@ SynEvid/
 │   │   ├── autopsy-temporal/           # Git object store, bi-temporal fact DAG & lineage
 │   │   ├── autopsy-test-impact/        # Predictive test impact & coverage mapping
 │   │   ├── autopsy-mining/             # Git co-change mining & implicit coupling detection
+│   │   ├── autopsy-hidden-coupling/    # Conservative env/config/topic/table extractors (partial coverage, non-causal)
 │   │   └── autopsy-evidence/           # Verifiable finding receipts & path sequences
 │   ├── [Graph & Symbol Substrate]
 │   │   ├── autopsy-graph/              # Petgraph-backed typed multigraph with edge provenance
 │   │   ├── autopsy-symbols/            # Stable symbol identities across line shifts (ADR-0009)
 │   │   └── autopsy-domain/             # Core typed IDs, entities, BTreeMap canonical models
+│   ├── [Research & Federation]
+│   │   ├── autopsy-behavior-research/  # Confidence-scored behavioral analyzers (FR-ADV-023/024)
+│   │   ├── autopsy-incidents/          # Read-only incident correlation, candidate ranking only (FR-ADV-025/026)
+│   │   ├── autopsy-schema-registry/    # Schema registry compatibility policies (FR-ADV-015)
+│   │   └── autopsy-workspace-registry/ # Multi-repo / tenant federation metadata (FR-ADV-010..012)
 │   └── [Polyglot Adapters & Infrastructure]
 │       ├── autopsy-adapter-api/        # Extensible language AST & symbol parser traits
 │       ├── autopsy-adapter-typescript/ # TypeScript AST compiler & tree-sitter bridge
@@ -307,13 +319,13 @@ SynEvid/
 │       ├── autopsy-adapter-rust/       # Rust AST compiler & tree-sitter bridge (Tier 2)
 │       └── autopsy-repo/               # Discovery, ignore rules, sandboxing & BLAKE3 digests
 ├── apps/
-│   ├── mcp-server/                     # Model Context Protocol adapter (read-only, stdio)
+│   ├── mcp-server/                     # Model Context Protocol adapter (11 read-only tools, stdio)
 │   ├── synevid-lsp/                    # LSP stdio server: inline impact hovers (Tier 3.2)
 │   └── web-inspector/                  # Local evidence & dependency graph inspector
 ├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
 ├── schemas/                            # Frozen public JSON Schemas (Draft-07)
 ├── scripts/                            # Automated verification & determinism gates
-├── docs/                               # 33 Verification Reports, ADRs, and Traceability
+├── docs/                               # 38 Verification Reports, ADRs, and Traceability
 └── assets/                             # Visual emblems, diagrams, and identity assets
 ```
 
@@ -323,25 +335,29 @@ SynEvid/
 
 SynEvid maintains a zero-tolerance policy for compiler warnings, test regressions, and non-deterministic behavior.
 
-### Automated Pre-Commit Stack (8 Local Hooks)
+### Automated Pre-Commit Stack (12 Local Hooks)
 All commits and pushes are verified locally via `.pre-commit-config.yaml`:
 ```bash
 $ pre-commit run --all-files
 
-Rust Format Check (rustfmt).................................Passed
-Rust Clippy Strict Lints (-D warnings)......................Passed
-Workspace Test Stack (Unit & Integration)...................Passed
-Rust Documentation Tests....................................Passed
-Golden 100-Run Determinism Invariant........................Passed
-JSON Schema Syntactic Validation............................Passed
-Engine Config & Invariant Syntax Validation.................Passed
-Architectural Boundary Gate (Zero LLM/MCP in Core Crates)...Passed
+Rust Format Check (rustfmt).....................................................Passed
+Rust Clippy Strict Lints (-D warnings)..........................................Passed
+Workspace Test Stack (Unit & Integration).......................................Passed
+Rust Documentation Tests........................................................Passed
+Rustdoc Intra-Doc Link Check (-D warnings)......................................Passed
+Golden 100-Run Determinism Invariant............................................Passed
+JSON Schema Syntactic Validation................................................Passed
+Engine Config & Invariant Syntax Validation.....................................Passed
+TypeScript MCP Server TypeCheck & Tests.........................................Passed
+Web Inspector Render Tests (headless, zero-build)...............................Passed
+Architectural Boundary Gate (Zero LLM/MCP in Core Crates).......................Passed
+Universal Hardware & Multi-Arch Determinism (Pillar A)..........................Passed
 ```
 
 ### GitHub Actions Pre-Merge Gate
 Every pull request and push to `main` executes a multi-job verification matrix ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 1. **`rust-quality`**: `cargo fmt` + `cargo clippy --workspace --all-targets -- -D warnings`
-2. **`rust-tests`**: 831 unit and integration tests across all crates (Phases 0 through 4.6)
+2. **`rust-tests`**: 924 unit and integration tests across all crates and apps
 3. **`determinism-gate`**: 100 sequential runs asserting byte-identical snapshot digests
 4. **`arch-boundary-gate`**: Asserts core crates contain no LLM or presentation dependencies
 5. **`schemas-and-configs`**: Validates JSON Schemas and engine TOML/YAML files
@@ -399,13 +415,16 @@ flowchart TD
 
 | Metric | Baseline A (Agent + Grep) | Baseline B (Agent + LSP) | Baseline C (Agent + Autopsy) | Autopsy Advantage |
 | :--- | :---: | :---: | :---: | :--- |
-| **Mean Recall** | 68.27% | 68.27% | **100.00%** | **+31.73pp Recall Lift** |
-| **Mean Precision** | 75.00% | 76.00% | **5.98%** | **Over-approximates: full transitive closure, needs ranked summarization (RQ3)** |
-| **Mean F1 Score** | 70.04% | 70.71% | **10.80%** | **Recall-first evidence; precision work deferred, not tuned** |
-| **Mean Tool Calls** | 2.92 calls | 1.82 calls | **3.00 calls** | **baseline + impact + verify (real binary runs)** |
-| **Mean Tokens** | 926 tokens | 819 tokens | **2693 tokens** | **Evidence JSON is verbose; cost gate FAILs (-228.78%)** |
-| **Mean Latency** | ~118 ms | ~100 ms | **~112 ms** | **Measured wall-clock per task** |
-| **Failure Classes Detected** | 0 | 8 | **0 (task vocabulary)** | **Engine rule ids vs task change classes: mapping not invented** |
+| **Mean Recall** | 71.67% | 71.67% | **100.00%** | **+28.33pp Recall Lift** |
+| **Mean Precision** | 90.00% | 90.00% | **6.11%** | **Over-approximates: full transitive closure, needs ranked summarization (RQ3)** |
+| **Mean F1 Score** | 76.67% | 76.67% | **10.87%** | **Recall-first evidence; precision work deferred, not tuned** |
+| **Mean Tool Calls** | 2.50 calls | 1.50 calls | **3.00 calls** | **baseline + impact + verify (real binary runs)** |
+| **Mean Tokens** | 800 tokens | 675 tokens | **2338 tokens** | **Evidence JSON is verbose; cost gate FAILs (-246.44%)** |
+| **Mean Latency** | 100.7 ms | 82.5 ms | **97.4 ms** | **Measured wall-clock per task** |
+| **Failure Classes Detected** | 0 | 0 | **0 (task vocabulary)** | **Engine rule ids vs task change classes: mapping not invented** |
+
+*Source of truth: committed [`benchmarks/results/reproduction_report.md`](benchmarks/results/reproduction_report.md)
+(+ `.json`). Every number above is reproduced from that artifact — not from this README.*
 
 > **Honesty note (2026-10-09):** Baseline-C executes the real engine binary
 > per task (see `benchmarks/engine/baseline_autopsy.py`). Earlier 100%
@@ -423,8 +442,8 @@ $$\text{Gate Decision} = (\Delta\text{Recall} \ge +10\text{pp}) \lor (\Delta\tex
 +-----------------------------------------------------------------------------------------+
 |  Gate Criterion       | Pre-Registered Threshold | Observed Telemetry | Gate Decision   |
 +-----------------------+--------------------------+--------------------+-----------------+
-|  Recall Lift          | >= +10.00pp              | +31.73pp           | PASS            |
-|  Cost Reduction       | >= 40.00% (equal acc)    | -228.78%           | FAIL            |
+|  Recall Lift          | >= +10.00pp              | +28.33pp           | PASS            |
+|  Cost Reduction       | >= 40.00% (equal acc)    | -246.44%           | FAIL            |
 |  New Failure Classes  | Discovery of new classes | 0 (vocab gap)      | FAIL            |
 +-----------------------+--------------------------+--------------------+-----------------+
 ```
@@ -444,7 +463,7 @@ curl -fsSL https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/i
 autopsy version   # verify
 ```
 
-**B. CLI binary from source.** Prerequisites: Rust 1.85+.
+**B. CLI binary from source.** Prerequisites: Rust 1.90+.
 ```bash
 git clone https://github.com/sainibhaowal/SynEvid.git && cd SynEvid
 cargo build --release -p autopsy-cli
@@ -523,7 +542,7 @@ Concretely: if your agent shows you a blast-radius list, ask it for the
 the lab said it. Different or missing = the agent improvised it.
 
 ### Prerequisites
-* **Rust**: `1.85+` (2024 Edition)
+* **Rust**: `1.90+` (2024 Edition)
 * **Python**: `3.11+` (for schema validation and benchmark harness)
 * **Pre-commit**: `pre-commit` binary installed
 
@@ -569,7 +588,7 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 * **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0010).
 * **AI Coding Agent Engineering Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 
-### Complete 33-Report Verification Evidence Suite
+### Complete 38-Report Verification Evidence Suite
 
 | Phase / Pillar | Evidence Record | Focus Area & Verified Invariants |
 | :--- | :--- | :--- |
@@ -606,6 +625,11 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 | | [`31-cochange-coupling-inspector.md`](docs/evidence/31-cochange-coupling-inspector.md) | Historical coupling forensics & unexpected correlation detection |
 | | [`32-storage-writeback-persistence.md`](docs/evidence/32-storage-writeback-persistence.md) | Write-through cache invariants & database compaction |
 | | [`33-verification-procedures.md`](docs/evidence/33-verification-procedures.md) | Canonical test suite execution & release sign-off checklist |
+| **Agent Experience & Closure (34–38)** | [`34-hidden-coupling-incidents-behavior.md`](docs/evidence/34-hidden-coupling-incidents-behavior.md) | Hidden-coupling extractors, incident correlation & behavioral research (confidence-scored, non-causal) |
+| | [`35-tier1-agent-experience.md`](docs/evidence/35-tier1-agent-experience.md) | Symbol resolution (`find`), one evidence envelope, bounded graph `map`, snapshot pinning, token budgets |
+| | [`36-tier2-agent-quality.md`](docs/evidence/36-tier2-agent-quality.md) | Deterministic repair advice, Go/Rust adapters, workspace registry, pinned browse, session receipts |
+| | [`37-tier3-polish.md`](docs/evidence/37-tier3-polish.md) | Machine-readable toolspec, `synevid-lsp` editor surface, suggestion receipts, performance ceilings |
+| | [`38-agent-gate-closure.md`](docs/evidence/38-agent-gate-closure.md) | Protocol-level MCP agent-loop tests (real stdio JSON-RPC) & honest promotion-gate status |
 
 ---
 

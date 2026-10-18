@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Documentation end-to-end refresh (2026-10-18)
+
+Brings every living document in `docs/` (plus the root `README.md` / `START_HERE.md`
+portal) in line with the committed state of the tree after Tiers 1–3 and the §6
+acceptance-gate closure. Evidence dossiers 01–33 remain frozen as historical receipts;
+only living documents were rewritten, and every changed number now cites a committed
+artifact.
+
+### Changed
+- **`docs/README.md` + `docs/START_HERE.md`** (kept byte-identical): evidence dossier
+  01–38, a new "Path E: AI Agent Surfaces & Integration" (toolspec rendering, recipes,
+  skill/hooks), agent CLI rows (`find` / `map` / `session` / `tools`), and the current
+  workspace test count (924).
+- **`docs/architecture/OVERVIEW.md`**: new §1.1 "Agent Plane at a Glance" (11 MCP tools,
+  6 resources, CLI agent commands, LSP surface, repair advice, determinism/budget knobs);
+  crate topology corrected 21 → 28 crates (Go/Rust adapters, Research & Federation
+  layer); "four axioms" → five.
+- **`docs/agents/TOOLS.md`**: new §10 inventory of the 11 MCP tools; resources,
+  environment variables, machine-readable spec, and LSP sections renumbered; new §15
+  "Related agent material". New **`docs/agents/README.md`** index for the agent surface.
+- **`docs/benchmark/PROTOCOL.md`**: gate table now cites the committed
+  `benchmarks/results/reproduction_report.*` (+28.33pp recall lift; cost −246.44% and
+  new-failure-class FAILs disclosed), plus §4.1 honest limits (measured tool calls,
+  no Tier 1–3 feature A/B, RQ6–RQ10 not measured).
+- **`docs/requirements/TRACEABILITY.md`**: RQ1-5 row aligned to the committed report
+  (+28.33pp).
+- **`docs/COMPARISON.md`**: breadth row updated honestly to 4 deep (Go + Rust, landed
+  2026-10-17) with a dated update banner; competitor measurements untouched.
+- **`docs/security/THREAT_MODEL.md`**: new threat-matrix row for agent-surface input
+  abuse (MCP argv / no shell, in-process LSP, `.autopsy/`-confined state writes);
+  INV-SANDBOX-004 language list now includes Go and Rust.
+- **`docs/evidence/33-verification-procedures.md`**: 17-step verification list updated
+  for the MCP protocol e2e suite, the LSP crate tests, and the new evidence files.
+- **ADRs 0002 / 0006 / 0007**: dated update notes (MCP surface evolution, LSP as an
+  accepted presentation layer, adapter set TS/Python/Go/Rust under the one-deep-first
+  rule).
+- **Root `README.md`**: badges (924/924 tests, gate +28.33pp), benchmark telemetry table
+  and gate box aligned to the committed report, 38-report evidence suite, 28-crate
+  substrate, 12 pre-commit hooks, MSRV 1.90+, agent command block. Root `START_HERE.md`:
+  evidence range 01–38 and an agent tool reference entry.
+
+---
+
 ## [Unreleased] - Tier 3 polish/productization (2026-10-17)
 
 Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
