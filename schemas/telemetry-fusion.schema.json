@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/telemetry-fusion.schema.json",
+  "$id": "https://synevid.dev/schemas/telemetry-fusion.schema.json",
   "title": "Synevid telemetry fusion record (Step 40)",
   "description": "A sanitized OpenTelemetry OTLP/JSON trace export. Closed: every field an ingest can emit is declared here, and nothing else validates. Redaction is reported as a reason and a count, never as a value or a length.",
   "type": "object",

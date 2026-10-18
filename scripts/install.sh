@@ -6,12 +6,13 @@
 #
 # Strategy (in order):
 #   1. Try a prebuilt release binary for this OS/arch from GitHub releases.
-#   2. Fall back to a local source build (needs Rust 1.85+; installed via rustup if missing).
+#   2. Fall back to a local source build (needs Rust 1.90+; installed via rustup if missing).
 #   3. Optionally wire detected agent hosts (MCP) via setup-agent-hosts.py.
 #
-# Installs to $SYNevid_PREFIX (default ~/.local). Never touches system paths.
+# Installs to $SYNEVID_PREFIX (default ~/.local). Never touches system paths.
 # Set AUTOPSY_SKIP_HOSTS=1 to skip agent wiring, AUTOPSY_SKIP_BUILD=1 to
-# only wire hosts against an existing binary.
+# only wire hosts against an existing binary, AUTOPSY_SKIP_MCP=1 to skip the
+# MCP server build when installing from a cloned source tree.
 #
 set -euo pipefail
 

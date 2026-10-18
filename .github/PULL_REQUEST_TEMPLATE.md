@@ -19,7 +19,7 @@
 - [ ] **100/100 Deterministic Repeatability:** Output collections use `BTreeMap` / `BTreeSet` (no `HashMap`/`HashSet` iteration in canonical outputs).
 - [ ] **No Timestamps:** Canonical `SnapshotId` and evidence outputs contain no timestamps or random seeds.
 - [ ] **Honest Coverage:** Unknown/dynamic constructs emit `CoverageState::Unknown`, never false `PASS`.
-- [ ] **Architectural Boundary:** Core crates do not depend on MCP, presentation, or GUI layers.
+- [ ] **Architectural Boundary:** Core crates do not depend on MCP, LSP, presentation, or GUI layers.
 
 ---
 

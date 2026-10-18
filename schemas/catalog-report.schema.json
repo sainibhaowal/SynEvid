@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/catalog-report.schema.json",
-  "title": "Syncevid catalog ingestion report (Step 43)",
+  "$id": "https://synevid.dev/schemas/catalog-report.schema.json",
+  "title": "Synevid catalog ingestion report (Step 43)",
   "description": "Backstage catalog entities, their ownership graph, and dependency manifests read from one repository tree. Closed: every field the engine can emit is declared and nothing else validates. The scan **root** is not a field: an absolute local path would make one repository hash differently on two machines and is a fact the caller already has.",
   "type": "object",
   "additionalProperties": false,

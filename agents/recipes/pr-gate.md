@@ -31,14 +31,24 @@ autopsy baseline --persist --format json
 # Invariant gate
 autopsy verify --strict --format json
 
-# Contract diff (if contracts changed)
-if git diff --name-only HEAD~1 | grep -qE '\.(yaml|json)$'; then
-  autopsy contract-dist HEAD~1 HEAD --protocol openapi --strict --format json
+# Contract diff (if contract documents changed): compare each document's two revisions.
+# `contract-dist` takes document files, not git revisions — materialize the base side first.
+if git diff --name-only HEAD~1 -- '*.yaml' '*.yml' '*.json' | grep -q .; then
+  while IFS= read -r doc; do
+    [ -f "$doc" ] || continue
+    base_doc="$(mktemp)"
+    git show "HEAD~1:$doc" > "$base_doc"
+    autopsy contract-dist "$base_doc" "$doc" --protocol openapi --strict --format json
+    rm -f "$base_doc"
+  done < <(git diff --name-only HEAD~1 -- '*.yaml' '*.yml' '*.json')
 fi
 
-# Test selection
-CHANGED=$(git diff --name-only HEAD~1 | tr '\n' ' ')
-autopsy test-select --changed $CHANGED --fail-if-all-tests-required --format json
+# Test selection: `--changed` takes exactly one path per occurrence, so repeat the flag.
+CHANGED_ARGS=()
+while IFS= read -r file; do
+  CHANGED_ARGS+=(--changed "$file")
+done < <(git diff --name-only HEAD~1)
+autopsy test-select "${CHANGED_ARGS[@]}" --fail-if-all-tests-required --format json
 
 echo "All gates passed."
 ```

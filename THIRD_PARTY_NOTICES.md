@@ -28,13 +28,15 @@ SynEvid is licensed under the [Apache License, Version 2.0](LICENSE). We express
 | **`tree-sitter`** | MIT | Max Brunsfeld and Tree-sitter Contributors | [github.com/tree-sitter/tree-sitter](https://github.com/tree-sitter/tree-sitter) |
 | **`tree-sitter-typescript`** | MIT | Max Brunsfeld and Tree-sitter Contributors | [github.com/tree-sitter/tree-sitter-typescript](https://github.com/tree-sitter/tree-sitter-typescript) |
 | **`tree-sitter-python`** | MIT | Max Brunsfeld and Tree-sitter Contributors | [github.com/tree-sitter/tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python) |
+| **`tree-sitter-go`** | MIT | Max Brunsfeld and Tree-sitter Contributors | [github.com/tree-sitter/tree-sitter-go](https://github.com/tree-sitter/tree-sitter-go) |
+| **`tree-sitter-rust`** | MIT | Max Brunsfeld and Tree-sitter Contributors | [github.com/tree-sitter/tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust) |
 | **`SQLite`** (via `rusqlite`) | Public Domain | D. Richard Hipp and SQLite Contributors | [sqlite.org](https://www.sqlite.org/) |
 
 ### Model Context Protocol Server (`apps/mcp-server`)
 
 | Component | License | Author / Copyright Holder | Repository / Source |
 | :--- | :--- | :--- | :--- |
-| **`@modelcontextprotocol/sdk`** | MIT | Anthropic, PBC and Contributors | [github.com/modelcontextprotocol/typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) |
+| **`@modelcontextprotocol/server`** (v2) | Apache-2.0 | Anthropic, PBC and Contributors | [github.com/modelcontextprotocol/typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) |
 | **`zod`** | MIT | Colin McDonnell and Zod Contributors | [github.com/colinhacks/zod](https://github.com/colinhacks/zod) |
 
 ---

@@ -356,12 +356,14 @@ Universal Hardware & Multi-Arch Determinism (Pillar A)..........................
 
 ### GitHub Actions Pre-Merge Gate
 Every pull request and push to `main` executes a multi-job verification matrix ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
-1. **`rust-quality`**: `cargo fmt` + `cargo clippy --workspace --all-targets -- -D warnings`
-2. **`rust-tests`**: 924 unit and integration tests across all crates and apps
-3. **`determinism-gate`**: 100 sequential runs asserting byte-identical snapshot digests
-4. **`arch-boundary-gate`**: Asserts core crates contain no LLM or presentation dependencies
-5. **`schemas-and-configs`**: Validates JSON Schemas and engine TOML/YAML files
-6. **`pre-merge-verification-gate`**: Aggregated status check gating merges
+1. **`rust-lint-and-format`**: `cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings`
+2. **`msrv-check`**: builds the workspace at its declared floor (`cargo check` with Rust 1.90 — the measured MSRV)
+3. **`cross-platform-matrix`**: workspace unit/integration and doc tests on Linux x86-64, macOS aarch64, and Windows x86-64
+4. **`determinism-and-boundary-gate`**: golden 100-run determinism, cross-platform determinism, and the zero-LLM/network/subprocess architecture gate
+5. **`schemas-and-configs`**: JSON Schema, `autopsy.toml`, `.autopsy/invariants.yml`, plus Ruff/Pytest on the benchmark harness
+6. **`mcp-server-check`**: MCP server typecheck + lint + 42 tests (incl. protocol-level agent-loop suites) and the headless Web Inspector tests
+7. **`supply-chain-audit`**: `cargo deny` advisories, licenses, bans, and sources policy
+8. **`pre-merge-verification-gate`**: aggregated status check gating merges
 
 ---
 

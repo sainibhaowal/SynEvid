@@ -1,4 +1,4 @@
-.PHONY: all check test fmt determinism cross-platform boundaries schemas pre-commit
+.PHONY: all check test fmt fmt-check determinism cross-platform boundaries schemas pre-commit mcp-check web-inspector-check
 
 export TMPDIR ?= /tmp
 
@@ -6,6 +6,9 @@ all: check
 
 fmt:
 	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
 
 test:
 	cargo test --workspace --all-targets
@@ -29,7 +32,7 @@ mcp-check:
 web-inspector-check:
 	cd apps/web-inspector && npm test
 
-check: fmt boundaries schemas determinism cross-platform mcp-check web-inspector-check
+check: fmt-check boundaries schemas determinism cross-platform mcp-check web-inspector-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace --all-targets
 	cargo test --workspace --doc

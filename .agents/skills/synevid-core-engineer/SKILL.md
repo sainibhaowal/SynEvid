@@ -35,7 +35,7 @@ This skill encodes the mandatory standards, non-negotiable boundaries, and verif
 
 ## 2. Language Adapter Implementation & Conformance Standards (Phase 2)
 
-All language adapters (TypeScript, Python, Go in `crates/autopsy-adapter-go`, Rust in `crates/autopsy-adapter-rust`) must satisfy the following invariants:
+Each language adapter (TypeScript/JavaScript, Python, Go, Rust) must satisfy the following invariants:
 1. **Trait Conformance:** Must implement [`LanguageAdapter`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/lib.rs) and pass the reusable test suite [`verify_adapter_conformance`](file:///home/ravi/Projects/SynEvid/crates/autopsy-adapter-api/src/conformance.rs).
 2. **Grammar & Tree-Sitter Bootstrap:** Use tree-sitter 0.24+ with official language grammar parsers (e.g. `tree-sitter-typescript` for `.ts` and `.tsx`).
 3. **Resilient Symbol Identifiers (FR-005, ADR-0009):** `SymbolId` must be derived from canonical namespace hierarchy, file path, and symbol kind—**never from transient line numbers**. Line shifts and comment additions must produce identical `SymbolId`s.
@@ -70,7 +70,7 @@ All graph and diff operations must satisfy the following invariants:
 
 ## 4. Mandatory Pre-Commit & Verification Loop
 
-Before any commit or merge, execute the full verification chain (all 8 gates must pass):
+Before any commit or merge, execute the full verification chain (all gates must pass):
 
 ```bash
 # 1. Format check
@@ -79,7 +79,8 @@ cargo fmt --all -- --check
 # 2. Strict lints (-D warnings)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. All workspace unit & integration tests (161/161 passing)
+# 3. All workspace unit & integration tests (924 at the 2026-10-18 gate — always
+#    report the count you observe; includes the synevid-lsp suite)
 cargo test --workspace --all-targets -- --nocapture
 
 # 4. Doc tests
@@ -89,13 +90,17 @@ cargo test --workspace --doc
 cargo test -p autopsy-repo -- test_compute_snapshot_id_golden_100_runs
 ./scripts/verify-determinism.sh
 
-# 6. Architectural boundary gate (Zero LLM/MCP in core crates)
+# 6. Architectural boundary gate (zero LLM/MCP/LSP in core crates)
 ./scripts/verify-arch-boundaries.sh
 
 # 7. JSON Schema validation
 for s in schemas/*.json; do python3 -m json.tool "$s" >/dev/null; done
 
-# 8. Pre-commit all-files check
+# 8. MCP server and Web Inspector suites
+cd apps/mcp-server && npm run typecheck && npm run lint && npm test
+cd ../web-inspector && npm test
+
+# 9. Pre-commit all-files check (12 hooks — the aggregated gate)
 make check
 ```
 
@@ -107,20 +112,5 @@ When implementing features:
 1. Identify affected requirements in [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md).
 2. Follow established Architecture Decision Records in [`docs/adr/`](file:///home/ravi/Projects/SynEvid/docs/adr/).
 3. Add end-to-end integration tests in [`tests/tests/`](file:///home/ravi/Projects/SynEvid/tests/tests/) using `autopsy-tests::TestSandbox`.
-4. Document all changes and verification evidence in [`docs/evidence/`]:
-   - [`01-core-foundation-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01-core-foundation-verification.md)
-   - [`02-typescript-adapter-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02-typescript-adapter-verification.md)
-   - [`03-dependency-graph-and-diff.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03-dependency-graph-and-diff.md)
-   - [`04-impact-contracts-and-invariants.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04-impact-contracts-and-invariants.md)
-   - [`05-cli-and-storage-engine.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05-cli-and-storage-engine.md)
-   - [`06-benchmark-harness-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06-benchmark-harness-verification.md)
-    - [`07-cross-platform-hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07-cross-platform-hardening.md)
-    - [`08-hardware-and-multi-arch-determinism.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08-hardware-and-multi-arch-determinism.md)
-    - [`09-dual-cicd-and-release-lifecycle.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09-dual-cicd-and-release-lifecycle.md)
-    - [`10-enterprise-sandboxing-and-defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10-enterprise-sandboxing-and-defense.md)
-    - [`11-mcp-server-and-web-inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11-mcp-server-and-web-inspector.md)
-    - [`12-agent-lifecycle-protocol.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12-agent-lifecycle-protocol.md)
-    - [`13-forensic-benchmark-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13-forensic-benchmark-closure.md)
-    - [`14-precision-incremental-pr-gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14-precision-incremental-pr-gate.md)
-    - [`15-security-and-compliance-audit.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15-security-and-compliance-audit.md)
+4. Document all changes and verification evidence in [`docs/evidence/`](file:///home/ravi/Projects/SynEvid/docs/evidence/) — dossiers are numbered `01`–`38` (one per phase, pillar, or agent tier). Start with the verification checklist [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), and [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md).
 5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).

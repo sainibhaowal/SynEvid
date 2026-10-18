@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/temporal.schema.json",
-  "title": "Syncevid temporal journal envelope (Pillar 1)",
+  "$id": "https://synevid.dev/schemas/temporal.schema.json",
+  "title": "Synevid temporal journal envelope (Pillar 1)",
   "description": "The output document of `autopsy temporal`: the journal's own canonical projection, embedded verbatim under `journal`, plus the three facts the CLI adds about it. Closed: every field the engine can emit is declared and nothing else validates. The CLI wraps the projection in a named field rather than merging into it, so the array cannot be mistaken for the whole document and the engine's projection stays checkable as data.",
   "type": "object",
   "additionalProperties": false,

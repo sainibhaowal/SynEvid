@@ -100,11 +100,11 @@ Runs all unit, integration, fuzz, and schema conformance suites (the MCP server 
 cargo test --workspace --all-targets
 ```
 
-### Step 5: Launch the Next.js Web App / Inspector
+### Step 5: Open the Web Inspector (zero-build, tracked)
+The inspector is a single tracked HTML file — no build step, no server:
 ```bash
-cd web
-npm run dev
-# Open http://localhost:3000 in your browser
+xdg-open apps/web-inspector/index.html   # macOS: open ...   Windows: start ...
+npm --prefix apps/web-inspector test     # headless render tests in the gate
 ```
 
 ---

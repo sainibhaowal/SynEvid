@@ -4,7 +4,7 @@ set -euo pipefail
 # Invariant 1: Core crates (crates/*) must NEVER declare LLM, networking, or presentation/MCP dependencies.
 echo "Verifying architectural dependency boundaries across core crates..."
 
-FORBIDDEN_DEPS="openai|anthropic|gemini|llm|mcp-server|langchain|reqwest|hyper|tokio-net|curl|socket2|tokio-tungstenite|ureq|surf"
+FORBIDDEN_DEPS="openai|anthropic|gemini|llm|mcp-server|synevid-lsp|langchain|reqwest|hyper|tokio-net|curl|socket2|tokio-tungstenite|ureq|surf"
 
 for cargo_file in crates/*/Cargo.toml; do
     if [ -f "$cargo_file" ]; then
@@ -25,7 +25,7 @@ if grep -rnE "($FORBIDDEN_EXEC_CALLS)" crates/ >/dev/null; then
     exit 1
 fi
 
-# Invariant 3: Zero Network Socket Execution (FR-028) - Core crates must never open network sockets.
+# Invariant 3: Zero Network Socket Execution (offline boundary, INV-SANDBOX-001..004) - Core crates must never open network sockets.
 echo "Verifying Zero Network Socket Execution invariant..."
 FORBIDDEN_NET_CALLS="std::net::TcpStream|std::net::UdpSocket|std::net::TcpListener"
 if grep -rnE "($FORBIDDEN_NET_CALLS)" crates/ >/dev/null; then

@@ -62,8 +62,9 @@ task complete while a `fail` finding stands.
 
 ## 3. Coverage honesty (non-negotiable)
 
-- `coverage.state: unknown` (eval, dynamic import) or `partial`
-  (reflection, generated code) limits what the engine can prove.
+- `coverage.state: unknown` (eval, dynamic import; Go cgo/plugin/reflect; Rust `include!`)
+  or `partial` (reflection, generated code; Go `unsafe`/`//go:generate`; Rust
+  `unsafe`/`dyn`/`env!`) limits what the engine can prove.
 - Report `unknown` findings as unknown. Never convert them into a pass,
   and never let them silently justify skipping verification.
 - If a callee resolves only to `symbol::<name>` (Partial), say the binding
@@ -84,8 +85,14 @@ otherwise the evidence is yours, not the engine's.
 - `autopsy_diff` (`base` = before snapshot, `head` = after or worktree)
 - `autopsy_temporal` / `autopsy_contract_diff` / `autopsy_distributed_blast_radius`
   accept `compact: true` + `top_k` for bounded answers
+- `autopsy_test_selection` — conservative test plans for a changed file set (`changed`
+  is an array; pass `fail_if_all_tests_required: true` when the plan must narrow)
+- `autopsy_session` (`start` / `record` / `close` / `show` / `list`) — persist the
+  repair loop's receipts (commands, exit codes, pinned snapshots, notes) in
+  `.autopsy/sessions.json`
 - `autopsy://graph/map{?under,top}` for the bounded code map,
-  `autopsy://graph/symbols{?limit,offset,kind}` for browsing without dumps
+  `autopsy://graph/symbols{?limit,offset,kind}` for browsing without dumps,
+  `autopsy://tools` for the machine-readable toolspec (every tool + resource at runtime)
 
 Pin one baseline across a whole session with `AUTOPSY_SNAPSHOT=<snapshot-id>`
 (export it in the host env; a tool-argument `snapshot_id` still wins for a

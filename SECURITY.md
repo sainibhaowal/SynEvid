@@ -9,6 +9,7 @@ Security in SynEvid is rooted in non-negotiable architectural boundaries:
 - **Strict Read-Only Execution (FR-026):** SynEvid analyzes source code and git histories in an inspect-only capacity. It never mutates repository files, git index, or working trees.
 - **Deterministic Cryptographic Ground Truth (NFR-001):** All evidence receipts and snapshot identifiers use cryptographic BLAKE3 hashes. Outputs are deterministic and tamper-evident.
 - **Offline-First & Air-Gapped Operation:** SynEvid runs entirely locally. It does not transmit analyzed source code, ASTs, or verification telemetry to remote servers.
+- **Agent-surface transports in scope:** the MCP stdio server (`apps/mcp-server`) and the LSP stdio server (`apps/synevid-lsp`) are reader-facing surfaces; their inputs (tool arguments, document URIs) are treated as untrusted and validated — see the agent-surface threat row in [`docs/security/THREAT_MODEL.md`](docs/security/THREAT_MODEL.md).
 
 ---
 
@@ -41,7 +42,7 @@ We take the security and integrity of SynEvid seriously. If you discover a secur
 
 To help us triage and resolve the issue quickly, please provide:
 1. **Type of Vulnerability:** (e.g., path traversal, symlink escape, unbounded memory/CPU denial-of-service, non-deterministic state leak, cache collision).
-2. **Affected Component:** Specific crate (e.g., `crates/autopsy-repo`, `crates/autopsy-storage`, `crates/autopsy-cli`) or schema.
+2. **Affected Component:** Specific crate (e.g., `crates/autopsy-repo`, `crates/autopsy-storage`, `crates/autopsy-cli`), agent surface (e.g., `apps/mcp-server`, `apps/synevid-lsp`), or schema.
 3. **Step-by-step Reproduction:** Minimal code repository or input files that trigger the vulnerability.
 4. **Impact Assessment:** Expected vs. observed behavior and potential security implications.
 5. **Environment Details:** Operating System, Rust version (`rustc --version`), and SynEvid commit hash.

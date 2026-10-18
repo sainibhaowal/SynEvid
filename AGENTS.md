@@ -10,7 +10,7 @@ You are an expert systems engineer working on **Synevid (Code Autopsy)**, an off
 - **Read-Only Analyzer Engine (FR-026):** Commands must never mutate source code or git history.
 - **100/100 Deterministic Repeatability (NFR-001, FR-028):** Every run on identical inputs must produce byte-identical BLAKE3 digests. No timestamps in `SnapshotId` or canonical result outputs. No iteration of unordered collections (`HashMap`, `HashSet`) in serialized outputs; always use `BTreeMap` and `BTreeSet`.
 - **Honest Semantic Coverage (FR-014, FR-030):** Unsupported or dynamic constructs must emit explicit `CoverageState::Unknown` or `Partial`. Never convert `UNKNOWN` into `PASS`.
-- **Clean Architectural Inversion:** Presentation, GUI, and MCP layers depend on core public interfaces, never the reverse (`ARCH_NO_CORE_TO_MCP`).
+- **Clean Architectural Inversion:** Presentation, GUI, MCP, and LSP layers (`apps/*`) depend on core public interfaces, never the reverse (`ARCH_NO_CORE_TO_MCP`).
 - **Ground Truth Integrity:** Never alter benchmark ground truth to improve benchmark scores.
 - **Universal Hardware & Sandboxing Invariants (INV-CROSS-001, INV-SANDBOX-001..004):** Strict path normalization (`/`) and CRLF/LF line-ending determinism across Linux, macOS, and Windows. Symlink escape containment (`follow_links(false)`), path traversal sanitization (rejection of `..` sequences), traversal resource bounds (`max_traversal_nodes`, `max_file_bytes` with explicit `skipped_oversize_files` record), zero sub-process execution, and zero outbound network sockets.
 - **Do-Not-Build Prohibitions (4.1 Ch.13):** No LLM in core, no vector DB/RAG, no Neo4j, no K8s, one language first (TypeScript), no fake claims of perfect blast radius.
@@ -39,7 +39,7 @@ Every code modification must strictly follow this cycle:
    - **Scripts & Checks:** `./scripts/verify-determinism.sh`, `./scripts/verify-arch-boundaries.sh`.
    - **Pre-Commit Hooks:** `pre-commit run --all-files` (or `make check`). Must pass 100% before committing.
    - **Python (if touched):** `ruff check . --fix`, `ruff format --check .`, `bandit -r benchmarks/`, `pytest`.
-   - **TypeScript/Web (if touched):** `eslint`, `prettier --check`, `vitest`, `tsc --noEmit`.
+   - **TypeScript/Web (if touched):** `cd apps/mcp-server && npm run typecheck && npm run lint && npm test` (node:test) and `cd apps/web-inspector && npm test` (headless, zero-build). No formatter/linter runs outside these packages.
 5. **Production Evidence Documentation:**
    - Document changes, technical rationale, and test execution telemetry in [`docs/evidence/`](file:///home/ravi/Projects/SynEvid/docs/evidence/) before committing.
    - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) and [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).

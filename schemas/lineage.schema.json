@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/lineage.schema.json",
+  "$id": "https://synevid.dev/schemas/lineage.schema.json",
   "title": "Synevid lineage comparison envelope (Pillar 1)",
   "description": "The output document of `autopsy lineage`: the identity transitions between two revisions as `autopsy-temporal::detect_lineage` asserts them, plus the revision accounting and the CLI's caveats. Closed: every field the command can emit is declared and nothing else validates. The load-bearing property is that `coverage` is `verified` only when the file enumeration was complete AND every event was proven by a byte-identical content digest; a skipped blob or a truncated file list makes the event set a stated *lower bound* (`partial`), and two empty revisions are `unsupported` rather than an empty pass. Only a confident rename or move preserves identity; a similarity-based match never does.",
   "type": "object",

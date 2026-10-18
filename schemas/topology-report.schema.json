@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/topology-report.schema.json",
+  "$id": "https://synevid.dev/schemas/topology-report.schema.json",
   "title": "Synevid topology report (Step 41)",
   "description": "The runtime-to-static topology diff over a set of observation windows: which spans were placed against the declared surface, which declared code was never observed running, and which observed routes no contract declares. Closed: every field the engine can emit is declared here, and nothing else validates. Every finding carries the coverage it was reached under, so a reader can see how much of the claim is evidence.",
   "type": "object",

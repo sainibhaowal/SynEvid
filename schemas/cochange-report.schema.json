@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/cochange-report.schema.json",
-  "title": "Syncevid co-change mining report (Step 42)",
+  "$id": "https://synevid.dev/schemas/cochange-report.schema.json",
+  "title": "Synevid co-change mining report (Step 42)",
   "description": "Paths that changed in the same commits within an observation window, with Support, Confidence (+ a Wilson score interval) and Lift. Closed: every field the engine can emit is declared here, and nothing else validates. Every edge is tagged as temporal co-occurrence and not a dependency, on the edge itself, because a reader who slices one edge out of a report is exactly who the warning is for.",
   "type": "object",
   "additionalProperties": false,

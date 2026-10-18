@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Governance, instruction & verification surfaces (2026-10-18)
+
+Second end-to-end pass: every instruction file, rule, skill, plan, workflow
+template, script, and engine config was checked against the committed tree and
+brought current. No code semantics changed; the agent-facing contract and the
+local gate now match what the repo actually does.
+
+### Changed
+- `AGENTS.md`: architectural-inversion bullet now names the LSP layer; the
+  TypeScript/Web commands reflect the real toolchain (ESLint + `node:test` +
+  `tsc --noEmit`; the web inspector is zero-build) — the previous `vitest`
+  reference never matched this repo.
+- `.agents/rules/agent-engineering-rules.md`: scope extended to the Tier-1–3
+  build-out; agent-surface dynamic-construct rules for Go/Rust; LSP named in the
+  dependency-inversion rule; evidence pointer updated from the frozen 01–15 list
+  to the 01–38 dossier index; workspace test command notes the LSP suite.
+- `.agents/skills/synevid-core-engineer/SKILL.md`: verification chain corrected
+  (924 tests, LSP suite, MCP + inspector suites, 12 pre-commit hooks); evidence
+  list replaced with the dossier range plus agent-tier records.
+- `.agents/plans/4.2_remaining_closure.md`: explicit closure status for all six
+  items with final evidence paths (the plan's provisional file names had drifted).
+- `CLAUDE.md` / `GEMINI.md`: rebuilt pointer lists — the previous versions ended
+  in a duplicated, misnumbered list that stopped at evidence 16.
+- `INSTRUCTIONS.md`: current test count, full gate description, agent-surface
+  pointers (TOOLS.md, TRACEABILITY rows, evidence 33 and 35–38).
+- `CONTRIBUTING.md`: Node 22 prerequisite; `make check` item list matched to the
+  real target; LSP named in the inversion rule; a commit-message example that
+  misstated ADR-0009 fixed.
+- `SECURITY.md`: MCP/LSP stdio surfaces named in scope and in the report template.
+- `THIRD_PARTY_NOTICES.md`: added `tree-sitter-go` and `tree-sitter-rust`;
+  corrected the MCP dependency to its real v2 package name
+  `@modelcontextprotocol/server` (Apache-2.0).
+- `Makefile`: `make check` now runs `cargo fmt --all -- --check` (the previous
+  target auto-formatted the tree instead of checking it); new `fmt-check` target.
+- `.pre-commit-config.yaml`: the cargo hooks no longer fall back to a
+  maintainer-specific temp path — fallback is now `${TMPDIR:-$HOME/.cache/tmp}`.
+- `.autopsy/invariants.yml`: `ARCH_NO_CORE_TO_MCP` target widened to `apps/**`
+  (covers the LSP surface, not just the MCP server).
+- `scripts/install.sh`: MSRV comment corrected to 1.90+; documented
+  `AUTOPSY_SKIP_MCP`; fixed the `$SYNevid_PREFIX` casing typo.
+- `scripts/verify-arch-boundaries.sh`: core crates are now also forbidden from
+  depending on `synevid-lsp`; corrected the FR tag on the socket invariant.
+- `docs/README.md` / `docs/START_HERE.md`: the quick-start step now points to
+  the tracked zero-build inspector (`apps/web-inspector`) instead of the
+  gitignored private `web/` app.
+- `README.md` (root): CI job list matched to the actual workflow jobs
+  (`rust-lint-and-format`, `msrv-check`, `cross-platform-matrix`,
+  `determinism-and-boundary-gate`, `schemas-and-configs`, `mcp-server-check`,
+  `supply-chain-audit`, `pre-merge-verification-gate`).
+- `apps/mcp-server/README.md`: the tool table was stale at 6 of the 11 exposed
+  tools — `autopsy_temporal`, `autopsy_test_selection`, `autopsy_contract_diff`,
+  `autopsy_distributed_blast_radius`, and `autopsy_session` are now documented
+  with their real parameter schemas; all six resources (including
+  `autopsy://workspace` and `autopsy://tools`) are listed; the read-only claim
+  now states the truth (there is no `--read-only` flag — only engine-store
+  artifacts under `.autopsy/` are written, never source or git history); a
+  duplicated trailing line was removed.
+- `apps/mcp-server/src/server.ts`: header comment now names the `session` tool
+  (comment-only; no behavior change).
+- `agents/recipes/pr-gate.md`: two snippets were not executable as written —
+  `contract-dist` now materializes each document's base revision (it takes
+  document paths, not git revisions), and `test-select --changed` is repeated
+  once per path (the flag takes exactly one value per occurrence).
+- `agents/skills/synevid-forensics.md`: added the Go/Rust coverage constructs
+  (cgo/plugin/reflect, `include!`, `unsafe`/`dyn`/`env!`), plus the
+  `autopsy_session`, `autopsy_test_selection`, and `autopsy://tools` surfaces.
+- `benchmarks/README.md`: replaced the two-line stub with the harness layout,
+  exact run/lint commands, the pre-registered-gate pointer, the committed-result
+  table, and the ground-truth integrity rule.
+- `benchmarks/pyproject.toml` and `benchmarks/engine/__init__.py`: harness
+  package version aligned to `0.1.0` (a package version, not one of the frozen
+  format versions enumerated in evidence 30).
+- `schemas/*.json` (7 files): corrected the product-name typo `Syncevid` →
+  `Synevid` in schema titles and `$id` URLs; nothing referenced the old values.
+- `CONTRIBUTING.md`: the Python prerequisite now distinguishes the `3.11+`
+  tooling floor from the benchmark harness's declared `>=3.12`.
+
+---
+
 ## [Unreleased] - Documentation end-to-end refresh (2026-10-18)
 
 Brings every living document in `docs/` (plus the root `README.md` / `START_HERE.md`

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://syncevid.dev/schemas/blast-radius.schema.json",
-  "title": "Syncevid organisational blast radius output (Step 45)",
+  "$id": "https://synevid.dev/schemas/blast-radius.schema.json",
+  "title": "Synevid organisational blast radius output (Step 45)",
   "description": "The output document of `autopsy blast-radius`: the catalog report the traversal was computed from, and the radius itself. Closed: every field the engine can emit is declared and nothing else validates. Emitting only the radius would leave every answer unverifiable — a reader could not see the entities the traversal walked, and the radius is a view of those entities rather than an independent fact.",
   "type": "object",
   "additionalProperties": false,

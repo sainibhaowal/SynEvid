@@ -20,11 +20,11 @@ export function resolveAgainstRepoRoot(input: string, repoRoot: string): string 
  * Creates and configures the Code Autopsy Model Context Protocol (MCP) server.
  * Implements the 5 mandatory read-only tools defined in CA-TECH-001 Chapter 4.1, the
  * 4 Phase 4.2 evidence tools (temporal, test selection, distributed contract diff, and
- * the organisational blast radius), and the Tier-1 agent-experience additions (`find`
- * for symbol resolution, `map` as a graph resource). Every one of them is read-only:
- * they run the `autopsy` CLI with the flags the caller supplied and return what the
- * engine said — always inside one envelope, with the exit code that says whether the
- * answer is actionable.
+ * the organisational blast radius), and the Tier-1/2 agent-experience additions
+ * (`find` for symbol resolution, `map` as a graph resource, `session` for repair-loop
+ * receipts). Every one of them is read-only: they run the `autopsy` CLI with the flags
+ * the caller supplied and return what the engine said — always inside one envelope,
+ * with the exit code that says whether the answer is actionable.
  */
 export function createAutopsyMcpServer(): McpServer {
   const server = new McpServer({

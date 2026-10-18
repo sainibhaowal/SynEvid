@@ -18,7 +18,7 @@ Before contributing, ensure you are familiar with the architectural boundaries d
    - **No unordered collections:** Never serialize or iterate `HashMap` / `HashSet` in canonical outputs. Always use `BTreeMap` and `BTreeSet`.
    - **No non-deterministic inputs:** Never inject system timestamps, random seeds, or machine-specific absolute paths into canonical `SnapshotId`, evidence receipts, or result contracts.
 4. **Honest Semantic Coverage (FR-014, FR-030):** Dynamic or unsupported language constructs must emit explicit `CoverageState::Unknown` or `Partial`. **Never collapse `UNKNOWN` into `PASS`**.
-5. **Clean Architectural Inversion (`ARCH_NO_CORE_TO_MCP`):** Presentations, web inspectors, and MCP adapters depend on core crate interfaces—never the reverse.
+5. **Clean Architectural Inversion (`ARCH_NO_CORE_TO_MCP`):** Presentation layers — Web Inspector, MCP adapter (`apps/mcp-server`), and LSP server (`apps/synevid-lsp`) — depend on core crate interfaces, never the reverse.
 6. **Ground Truth Integrity:** Never alter benchmark ground truth to artificially inflate benchmark scores.
 
 ---
@@ -27,7 +27,8 @@ Before contributing, ensure you are familiar with the architectural boundaries d
 
 ### Prerequisites
 * **Rust:** MSRV `1.90+` (Rust 2024 edition — `let`-chains require 1.88 and `tree-sitter-language@0.1.8` requires 1.90). Install via [rustup](https://rustup.rs/).
-* **Python:** `3.11+` with `tomllib` and `pyyaml` (used by schema validation hooks).
+* **Node.js:** `22+` with npm (runs the MCP server and Web Inspector test suites in the gate).
+* **Python:** `3.11+` with `tomllib` and `pyyaml` (used by schema validation hooks); the benchmark harness declares `>=3.12` (`benchmarks/pyproject.toml`).
 * **Pre-commit:** Install via `pip install pre-commit` or your system package manager.
 * **Make:** Standard POSIX `make`.
 
@@ -53,13 +54,18 @@ make check
 ```
 
 Under the hood, `make check` executes:
-1. **Formatting:** `cargo fmt --all -- --check`
+1. **Formatting check:** `cargo fmt --all -- --check`
 2. **Strict Lints:** `cargo clippy --workspace --all-targets -- -D warnings`
-3. **Unit & Integration Tests:** `cargo test --workspace --all-targets -- --nocapture`
+3. **Unit & Integration Tests:** `cargo test --workspace --all-targets` (includes the `synevid-lsp` suite)
 4. **Documentation Tests:** `cargo test --workspace --doc`
 5. **100-Run Determinism Gate:** `./scripts/verify-determinism.sh` (validates byte-identical BLAKE3 snapshot digests across 100 runs)
-6. **Architectural Boundary Gate:** `./scripts/verify-arch-boundaries.sh` (ensures zero LLM/MCP leaks in core crates)
-7. **Schema & Config Validation:** JSON Schema validation and configuration syntax checks
+6. **Architectural Boundary Gate:** `./scripts/verify-arch-boundaries.sh` (ensures zero LLM/MCP/LSP leaks in core crates)
+7. **Cross-Platform Determinism:** `./scripts/verify-cross-platform.sh`
+8. **Schema & Config Validation:** JSON Schema validation and configuration syntax checks
+9. **MCP Server:** `cd apps/mcp-server && npm run typecheck && npm run lint && npm test`
+10. **Web Inspector:** `cd apps/web-inspector && npm test` (headless, zero-build)
+
+The same stack runs as 12 pre-commit hooks (`pre-commit run --all-files`) and as the CI verification matrix in `.github/workflows/ci.yml`.
 
 ---
 
@@ -85,7 +91,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 Examples:
 - `feat(graph): implement strongly-connected component cycle detection`
 - `fix(storage): replace HashMap with BTreeMap for deterministic serialization`
-- `docs(adr): add ADR-0009 for adapter streaming architecture`
+- `docs(adr): add ADR-0009 for the symbol identity/shape split`
 
 ---
 

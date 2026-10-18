@@ -1,6 +1,6 @@
 # Mandatory Rules & Operational Protocol for AI Coding Agents
 
-Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly follow these rules without exception across the entire development lifecycle (Phases 0 through 6, v0.0.1 through 4.1).
+Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly follow these rules without exception across the entire development lifecycle (Phases 0 through 6, v0.0.1 through 4.1, and the Tier-1–3 agent-experience build-out — see `docs/evidence/35`–`38`).
 
 ---
 
@@ -21,12 +21,14 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
 5. **Coverage Honesty & Adapter Dynamic Construct Rules (FR-014, FR-030):**
    - Unresolved dynamic constructs (`eval`, dynamic `import(...)`) MUST emit explicit `CoverageState::Unknown`.
    - Metaprogramming constructs (`Reflect.*`, `Proxy`, generated files) MUST emit explicit `CoverageState::Partial`.
+   - Go (Tier 2.2): `cgo`/`plugin`/`reflect` produce `Unknown`; `unsafe`/`//go:generate` produce `Partial`.
+   - Rust (Tier 2.2): `include!` code-inclusion produces `Unknown`; `unsafe`/`dyn`/`env!` runtime behavior produces `Partial`.
    - Fully resolved AST declarations emit `CoverageState::Verified`.
    - Never collapse `UNKNOWN` or `PARTIAL` into `PASS` or `VERIFIED`.
 6. **Ground Truth Integrity:**
    - Never modify benchmark ground truth datasets to inflate benchmark scores.
 7. **Clean Dependency Inversion:**
-   - Presentation, GUI (`apps/web-inspector`), and MCP (`apps/mcp-server`) layers depend on core public interfaces, NEVER the reverse. Enforced by `ARCH_NO_CORE_TO_MCP`.
+   - Presentation, GUI (`apps/web-inspector`), MCP (`apps/mcp-server`), and LSP (`apps/synevid-lsp`) layers depend on core public interfaces, NEVER the reverse. Enforced by `ARCH_NO_CORE_TO_MCP` and the repo's own `.autopsy/invariants.yml`.
 8. **Ambiguous Rename Rule (FR-007):**
    - If multiple files share identical content hashes or multiple symbols share a signature in the same scope, renames MUST stay `Added` + `Deleted` / `Added` + `Removed`. Never guess.
 9. **Cross-Platform Path Determinism (INV-CROSS-001):**
@@ -99,7 +101,7 @@ Before concluding or proposing a commit, the agent MUST run the full verificatio
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets -- --nocapture
+cargo test --workspace --all-targets -- --nocapture   # includes the synevid-lsp suite
 cargo test --workspace --doc
 ./scripts/verify-determinism.sh
 ./scripts/verify-arch-boundaries.sh
@@ -114,7 +116,7 @@ bandit -r benchmarks/
 pytest
 ```
 
-#### C. TypeScript / Web Apps (MCP & GUI):
+#### C. TypeScript / Web Apps (MCP Server & Web Inspector):
 If `apps/mcp-server` or `apps/web-inspector` are touched:
 ```bash
 npm run lint      # ESLint with zero errors
@@ -137,22 +139,7 @@ Before any commit:
   - What was changed and why.
   - How the solution works technically.
   - Exact command execution output and test telemetry.
-  - Historical evidence records:
-    - [`01-core-foundation-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/01-core-foundation-verification.md)
-    - [`02-typescript-adapter-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/02-typescript-adapter-verification.md)
-    - [`03-dependency-graph-and-diff.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/03-dependency-graph-and-diff.md)
-    - [`04-impact-contracts-and-invariants.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/04-impact-contracts-and-invariants.md)
-    - [`05-cli-and-storage-engine.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/05-cli-and-storage-engine.md)
-    - [`06-benchmark-harness-verification.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/06-benchmark-harness-verification.md)
-    - [`07-cross-platform-hardening.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/07-cross-platform-hardening.md)
-    - [`08-hardware-and-multi-arch-determinism.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/08-hardware-and-multi-arch-determinism.md)
-    - [`09-dual-cicd-and-release-lifecycle.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/09-dual-cicd-and-release-lifecycle.md)
-    - [`10-enterprise-sandboxing-and-defense.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/10-enterprise-sandboxing-and-defense.md)
-    - [`11-mcp-server-and-web-inspector.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/11-mcp-server-and-web-inspector.md)
-    - [`12-agent-lifecycle-protocol.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/12-agent-lifecycle-protocol.md)
-    - [`13-forensic-benchmark-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/13-forensic-benchmark-closure.md)
-    - [`14-precision-incremental-pr-gate.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/14-precision-incremental-pr-gate.md)
-    - [`15-security-and-compliance-audit.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/15-security-and-compliance-audit.md)
+- Evidence dossiers are numbered `01`–`38` (one record per phase, pillar, or agent tier). The canonical verification checklist is [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), and [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md).
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.
