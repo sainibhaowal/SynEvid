@@ -76,20 +76,26 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      - name: Build Optimized Release Binary
-        run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli
+      - name: Build Optimized Release Binaries
+        run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli -p synevid-lsp
 
       - name: Package Release Archive (with License & Metadata)
         shell: bash
         run: |
           DIST_DIR="autopsy-${{ matrix.target }}"
           mkdir -p "$DIST_DIR"
-          
-          if [ -f "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" ]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$DIST_DIR/"
-          else
-            cp "target/release/${{ matrix.binary_name }}" "$DIST_DIR/"
-          fi
+
+          # The CLI is required; the IDE surface (synevid-lsp, Tier 3.2) ships in the
+          # same archive so editors and terminals install from one artifact.
+          BIN_BASE="${{ matrix.binary_name }}"
+          LSP_NAME="${BIN_BASE/autopsy/synevid-lsp}"
+          for name in "$BIN_BASE" "$LSP_NAME"; do
+            if [ -f "target/${{ matrix.target }}/release/$name" ]; then
+              cp "target/${{ matrix.target }}/release/$name" "$DIST_DIR/"
+            elif [ -f "target/release/$name" ]; then
+              cp "target/release/$name" "$DIST_DIR/"
+            fi
+          done
           
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "$DIST_DIR/"
           

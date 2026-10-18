@@ -9,21 +9,53 @@ production-grade, with the full gate stack green (`pre-commit run --all-files` A
 
 - **Deliverable:** `autopsy tools --format json` served as MCP resource `autopsy://tools`.
 - **Implementation:** `crates/autopsy-cli/src/toolspec.rs` — pure function `toolspec()` producing
-  a deterministic JSON document (BTreeMap ordering, no timestamps). Every subcommand (21 total)
+  a deterministic JSON document (BTreeMap ordering, no timestamps). Every subcommand (22 total)
   with its args, pinning surface, compact flag, and coverage semantics. Plus global flags,
   exit-code contract, envelope description, error advice markers, and feedback channel docs.
 - **CLI command:** `Commands::Tools` → `handle_tools()` in `lib.rs`.
+- **MCP surface:** `autopsy://tools{?repo_root}` registered in `apps/mcp-server/src/server.ts`;
+  the resource returns the same document, byte-identical across reads (node test).
 - **Tests:** unit tests for determinism and spec coverage; integration via `autopsy tools --format json`.
 - **Verification:** `autopsy tools --format json` emits valid, byte-identical JSON across runs.
 
 ## T3.2 — IDE-native surface (`synevid-lsp`)
 
-- **Deliverable:** `synevid-lsp` for inline impact hovers.
-- **Status:** Crate skeleton created; full JSON-RPC LSP implementation deferred to a dedicated
-  sprint (requires tower-lsp or hand-rolled JSON-RPC over stdio, plus engine integration).
-- **Note:** The engine's `build_snapshot_and_graph` function is available as a library API
-  for the LSP to call directly (no subprocess). The hover content would be: stable id, kind,
-  callers count, impacted files count, coverage state.
+- **Deliverable:** `apps/synevid-lsp` — a working Language Server Protocol server for
+  inline impact hovers (Tier 3.2 is implemented, not a skeleton).
+- **Implementation:**
+  - `src/protocol.rs` — `Content-Length` JSON-RPC framing; tolerant header reader
+    (`\r\n` or `\n`, extra headers) and byte-canonical writer; request/notification/
+    error-response shapes; `-32601` for unsupported requests, unknown notifications ignored.
+  - `src/hover.rs` — LSP UTF-16 column → char conversion; identifier extraction for
+    `.`- and `::`-joined paths (`svc.UserService.create`, `crate::billing::Ledger::settle`);
+    deterministic resolution (declaration-at-cursor → scope-qualified candidates most-specific
+    first → same-file preference); 1-hop neighborhood counts; markdown rendering.
+  - `src/lib.rs` — lazy `EngineBridge` over `autopsy_cli::build_snapshot_and_graph` (library
+    call, no subprocess); full-sync overlay tracking (`didOpen`/`didChange`/`didClose`); cache
+    invalidation on `didSave`/watch events; root resolution (`--repo-root` > `rootUri` >
+    workspace folder > cwd); `file://` URI percent-decoding.
+  - `src/main.rs` — stdio binary with `--help`/`--version` and spec-correct exit codes
+    (`0` after shutdown, `1` on exit without shutdown, `2` on bad arguments).
+- **Semantics (honesty rules):**
+  - Callers/callees follow the engine's `callers` profile (`Calls` + `References`);
+    structural `Contains` edges never inflate the number (unit-tested).
+  - 1-hop impact follows `ImpactProfile::default()`, so the hover number and the CLI
+    `autopsy impact` number describe the same graph.
+  - Ambiguous names list up to five candidates in stable-id order and state the real
+    match count; no match returns `null`; analysis failure returns an explicit
+    "analysis unavailable" hover.
+  - Hover output contains no timestamps or absolute workspace paths (repo-relative only).
+- **Tests:** 24 crate tests — framing round-trip/malformed frames; cursor and UTF-16
+  edge cases (astral chars); `.`/`::` path extraction; resolution and ambiguity rendering;
+  neighborhood dedup and containment exclusion; sessions over in-memory buffers against a
+  real two-file fixture (cross-file hover, declaration hover, live overlay, unknown method,
+  exit codes, missing root).
+- **Verification:** the real binary over stdio returns
+  `Declared src/ledger.ts:2` + `Callers 1 · Callees 1 · 1-hop impact 1 symbols / 1 files`
+  + `Engine coverage verified`; three independent sessions produce byte-identical stdout;
+  stdout carries protocol frames only (stderr empty).
+- **Docs:** `docs/agents/TOOLS.md` §13 — capabilities, freshness model, exit codes,
+  Neovim `vim.lsp.start` example.
 
 ## T3.3 — Agent feedback channel
 
@@ -42,9 +74,9 @@ production-grade, with the full gate stack green (`pre-commit run --all-files` A
 
 - **Deliverable:** `docs/agents/TOOLS.md` + `agents/recipes/*`.
 - **Implementation:**
-  - `docs/agents/TOOLS.md` — human rendering of the toolspec: 21 subcommands, global flags,
+  - `docs/agents/TOOLS.md` — human rendering of the toolspec: 22 subcommands, global flags,
     exit codes, envelope, coverage semantics, pinning, repair advice, feedback channel, MCP
-    resources, environment variables.
+    resources, environment variables, and the `synevid-lsp` editor surface.
   - `agents/recipes/repair-loop.md` — impact → edit → verify → repair → re-verify with session receipts.
   - `agents/recipes/pinned-evidence.md` — session-wide snapshot pinning.
   - `agents/recipes/pr-gate.md` — CI integration with exit-code contract.
@@ -74,4 +106,5 @@ production-grade, with the full gate stack green (`pre-commit run --all-files` A
 - `verify-determinism.sh` (100/100) ✅
 - `verify-arch-boundaries.sh` ✅
 - `pre-commit run --all-files` ✅ All Passed
-- MCP `npm test` (37 tests) ✅
+- MCP `npm test` (37 tests) ✅ (includes the `autopsy://tools` resource test)
+- `synevid-lsp` crate tests (24) ✅ (part of the workspace run; includes real-fixture LSP sessions)

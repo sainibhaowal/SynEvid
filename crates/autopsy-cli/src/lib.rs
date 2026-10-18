@@ -1224,7 +1224,12 @@ fn get_storage(cli: &Cli) -> Result<StorageEngine, CliError> {
 /// operation). A PRESENT but invalid file is a hard error with
 /// path-aware diagnostics — never a silent fallback (02 §3: invalid
 /// config fails before verification).
-fn load_or_default_config(repo_root: &Path) -> Result<AutopsyConfig, CliError> {
+///
+/// Public because it is part of the engine's embedding surface: the LSP
+/// server (`apps/synevid-lsp`) resolves configuration exactly the way the CLI
+/// does, so an editor hover and a terminal run can never disagree about which
+/// rules were applied.
+pub fn load_or_default_config(repo_root: &Path) -> Result<AutopsyConfig, CliError> {
     let config_path = repo_root.join("autopsy.toml");
     if !config_path.exists() {
         return Ok(AutopsyConfig {

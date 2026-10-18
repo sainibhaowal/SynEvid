@@ -11,7 +11,8 @@ SynEvid enforces a strict **Architectural Inversion** principle: presentation, i
 ```
 +-------------------------------------------------------------------------------------------------+
 |                                 1. PRESENTATION & INTEGRATION LAYER                              |
-|       CLI (`autopsy`) | Web Inspector (`apps/web-inspector`) | MCP Server v2                   |
+|   CLI (`autopsy`) | Web Inspector (`apps/web-inspector`) | MCP Server v2                          |
+|   IDE Surface: LSP stdio server (`apps/synevid-lsp`, inline impact hovers)                       |
 +------------------------------------------------+------------------------------------------------+
                                                  | (Public Rust APIs & JSON Schemas)
                                                  v

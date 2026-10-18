@@ -1,0 +1,20 @@
+[package]
+name = "synevid-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "synevid-lsp"
+path = "src/main.rs"
+
+# The IDE surface is a *presentation* layer (Tier 3.2): it depends on the engine's
+# public library API (`autopsy-cli`), never the reverse. No async runtime, no
+# subprocess spawning, no sockets — a synchronous JSON-RPC loop over whatever
+# stdin/stdout the editor hands it, which keeps the whole thing deterministic and
+# testable over in-memory buffers.
+[dependencies]
+serde_json = { workspace = true }
+autopsy-cli = { path = "../../crates/autopsy-cli" }
+autopsy-domain = { path = "../../crates/autopsy-domain" }
+autopsy-graph = { path = "../../crates/autopsy-graph" }

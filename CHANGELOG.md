@@ -12,9 +12,18 @@ Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
 
 ### Added
 - **Machine-readable toolspec (`AGENT-T3.1`):** `autopsy tools --format json` emits a
-  deterministic JSON document (21 subcommands, args, pinning surfaces, coverage semantics,
+  deterministic JSON document (22 subcommands, args, pinning surfaces, coverage semantics,
   global flags, exit-code contract, envelope, error advice, feedback channel); served as
   MCP resource `autopsy://tools`. `docs/agents/TOOLS.md` is the human rendering.
+- **IDE-native surface (`AGENT-T3.2`):** `apps/synevid-lsp` — a Language Server Protocol
+  server over stdio whose hover returns the symbol signature, scope-qualified name,
+  declaration site, direct callers/callees (Calls|References edges — containment never
+  inflates the number), 1-hop impact size over the default impact profile, and the coverage
+  state of the edges counted. Deterministic framing and hover bytes; ambiguous names state
+  the true match count and list candidates in stable-id order; no match returns `null`;
+  analysis failure is stated, never blank. Live-buffer overlays with save-triggered cache
+  invalidation; spec-correct exit codes. Engine access is a direct library call
+  (`build_snapshot_and_graph`) — no subprocess, no sockets.
 - **Agent feedback channel (`AGENT-T3.3`):** `--suggestion <TEXT>` / `--disable-suggestion`
   global flags. Correction receipts stored deterministically in `.autopsy/suggestions.json`
   (BLAKE3 id over normalized root + counter, no timestamps). Hint line on failures; echo on
@@ -26,6 +35,10 @@ Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
 
 ### Changed
 - MCP `cli.ts` maxBuffer now env-overridable via `AUTOPSY_MAX_BUFFER_BYTES`.
+- `autopsy_cli::load_or_default_config` is now public — the LSP resolves configuration
+  exactly the way the CLI does, so an editor hover and a terminal run cannot disagree.
+- MCP server registers the `autopsy://tools` resource (the toolspec document, byte-identical
+  across reads).
 
 ---
 

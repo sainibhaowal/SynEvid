@@ -61,6 +61,7 @@ next_action: <concrete repair step>
 | `impact` | Deterministic bounded transitive impact analysis and blast radius for one symbol | `--snapshot-id <id>` | no |
 | `diff` | Semantic AST symbol delta between a stored baseline and a state | `--before <id>` | no |
 | `verify` | Evaluate pinned architectural invariants and contract models | `--baseline-id <id>` | no |
+| `explain` | Explain one finding or symbol: provenance, evidence receipt, and neighborhood | none | no |
 
 ### 4.2 Browse
 
@@ -147,12 +148,12 @@ never silent.
 
 | URI | Description |
 |---|---|
-| `autopsy://graph` | Compact graph summary |
-| `autopsy://graph/map{?repo_root,snapshot}` | Bounded whole-graph projection |
-| `autopsy://symbols{?repo_root,snapshot}` | Paginated symbol index |
-| `autopsy://edges{?source,repo_root,snapshot}` | 1-hop neighborhood |
+| `autopsy://graph{?repo_root}` | Compact graph summary |
+| `autopsy://graph/map{?under,top,repo_root,snapshot}` | Bounded whole-graph projection |
+| `autopsy://graph/symbols{?limit,offset,kind,repo_root,snapshot}` | Paginated symbol index |
+| `autopsy://graph/edges{?source,direction,kind,limit,offset,repo_root,snapshot}` | Paginated 1-hop neighborhood |
 | `autopsy://workspace{?repo_root}` | Multi-repo registry |
-| `autopsy://tools` | This specification (Tier 3.1) |
+| `autopsy://tools{?repo_root}` | This specification (Tier 3.1) |
 
 ## 11. Environment variables
 
@@ -162,9 +163,45 @@ never silent.
 | `AUTOPSY_TIMEOUT_MS` | MCP per-call timeout ceiling (default 30 s) |
 | `AUTOPSY_MAX_BUFFER_BYTES` | MCP maxBuffer ceiling (default 20 MB) |
 | `AUTOPSY_BIN` | Path to the `autopsy` binary (MCP tests) |
-| `AUTOPSY_TIMEOUT_MS` | Per-call timeout override (MCP) |
 
 ## 12. Machine-readable spec
 
 Run `autopsy tools --format json` for the full contract. The MCP server exposes it
 as the `autopsy://tools` resource.
+
+## 13. IDE surface — `synevid-lsp` (Tier 3.2)
+
+`synevid-lsp` is a Language Server Protocol server that answers hover requests with
+the engine's impact analysis. It is a presentation layer over the same library API
+the CLI uses (`build_snapshot_and_graph`), so an editor hover and a terminal run can
+never disagree about the graph.
+
+```bash
+synevid-lsp [--repo-root <PATH>]
+```
+
+- **Transport:** JSON-RPC 2.0 over stdin/stdout (`Content-Length` framing).
+- **Capabilities:** `hover` and full-sync text documents.
+- **Root resolution:** `--repo-root`, else the client's `rootUri`, else the first
+  workspace folder, else the process working directory.
+- **Hover content:** signature, kind, scope-qualified name, declaration site, direct
+  callers/callees, 1-hop impact size, and the coverage state of the edges counted.
+  Ambiguous names list up to five candidates in stable-id order; no match returns
+  `null` — the server never invents a symbol.
+- **Freshness:** analysis is built lazily on the first hover and cached; a save
+  (`textDocument/didSave`) invalidates it. Hover reads the live buffer for the word
+  under the cursor, so unsaved edits can move the cursor onto a word the last saved
+  graph does not contain — the honest answer there is `null`.
+- **Exit codes:** `0` after `shutdown`+`exit`, `1` on `exit` without `shutdown`
+  (LSP spec), `2` on a bad command-line argument.
+
+Example editor configuration (Neovim, built-in LSP):
+
+```lua
+vim.lsp.start({
+  name = 'synevid',
+  cmd = { 'synevid-lsp', '--repo-root', vim.fn.getcwd() },
+  root_dir = vim.fn.getcwd(),
+})
+```
+

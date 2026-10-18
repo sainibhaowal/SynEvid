@@ -70,6 +70,7 @@ flowchart TD
         CLI["autopsy-cli<br/>(Deterministic CLI Binary)"]
         MCP["apps/mcp-server<br/>(Model Context Protocol Stdio)"]
         WEB["apps/web-inspector<br/>(Forensic Graph Visualizer)"]
+        LSP["apps/synevid-lsp<br/>(IDE Impact Hovers, Tier 3.2)"]
         PRG["GitHub Actions PR Gate<br/>(autopsy-pr-gate.yml)"]
     end
 
@@ -108,8 +109,8 @@ flowchart TD
     end
 
     %% Tier 1 to Tier 2 & 3
-    CLI & MCP & WEB & PRG --> REP & STO & TEL & CAT
-    CLI & MCP & WEB & PRG --> IMP & INV & DIF & TEM & TST
+    CLI & MCP & WEB & LSP & PRG --> REP & STO & TEL & CAT
+    CLI & MCP & WEB & LSP & PRG --> IMP & INV & DIF & TEM & TST
 
     %% Tier 2 to Tier 3
     STO & CAT & TEL --> EVI & GRA
@@ -307,6 +308,7 @@ SynEvid/
 │       └── autopsy-repo/               # Discovery, ignore rules, sandboxing & BLAKE3 digests
 ├── apps/
 │   ├── mcp-server/                     # Model Context Protocol adapter (read-only, stdio)
+│   ├── synevid-lsp/                    # LSP stdio server: inline impact hovers (Tier 3.2)
 │   └── web-inspector/                  # Local evidence & dependency graph inspector
 ├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
 ├── schemas/                            # Frozen public JSON Schemas (Draft-07)

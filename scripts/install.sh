@@ -58,12 +58,17 @@ try_release() {
       unzip -q -o "$tmp/pkg.$ext" -d "$tmp/out"
       found="$(find "$tmp/out" -name "autopsy.exe" | head -1)"
       [ -n "$found" ] && cp "$found" "$BIN_DIR/autopsy.exe"
+      found_lsp="$(find "$tmp/out" -name "synevid-lsp.exe" | head -1)"
+      [ -n "$found_lsp" ] && cp "$found_lsp" "$BIN_DIR/synevid-lsp.exe"
     else
       tar -xzf "$tmp/pkg.$ext" -C "$tmp"
       found="$(find "$tmp" -name autopsy -type f | head -1)"
       [ -n "$found" ] && cp "$found" "$BIN_DIR/autopsy"
+      found_lsp="$(find "$tmp" -name synevid-lsp -type f | head -1)"
+      [ -n "$found_lsp" ] && cp "$found_lsp" "$BIN_DIR/synevid-lsp"
     fi
-    chmod +x "$BIN_DIR/autopsy" "$BIN_DIR/autopsy.exe" 2>/dev/null || true
+    chmod +x "$BIN_DIR/autopsy" "$BIN_DIR/autopsy.exe" \
+             "$BIN_DIR/synevid-lsp" "$BIN_DIR/synevid-lsp.exe" 2>/dev/null || true
     if [ -x "$BIN_DIR/autopsy" ] || [ -x "$BIN_DIR/autopsy.exe" ]; then
       rm -rf "$tmp"
       return 0
@@ -81,9 +86,12 @@ source_build() {
     # shellcheck disable=SC1091
     . "$HOME/.cargo/env"
   fi
-  (cd "$src_dir" && cargo build --release --locked -p autopsy-cli)
+  (cd "$src_dir" && cargo build --release --locked -p autopsy-cli -p synevid-lsp)
   mkdir -p "$BIN_DIR"
   cp "$src_dir/target/release/autopsy" "$BIN_DIR/autopsy"
+  if [ -f "$src_dir/target/release/synevid-lsp" ]; then
+    cp "$src_dir/target/release/synevid-lsp" "$BIN_DIR/synevid-lsp"
+  fi
 }
 
 main() {
@@ -119,6 +127,9 @@ main() {
 
   echo "verifying installation..."
   "$BIN_DIR/autopsy" version
+  if [ -x "$BIN_DIR/synevid-lsp" ]; then
+    "$BIN_DIR/synevid-lsp" --version
+  fi
   echo "add to PATH if needed: export PATH=\"$BIN_DIR:\$PATH\""
 }
 

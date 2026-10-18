@@ -1001,5 +1001,36 @@ export function createAutopsyMcpServer(): McpServer {
     }
   );
 
+  // Machine-readable toolspec resource (Tier 3.1): the same deterministic document
+  // as `autopsy tools --format json`, so an agent can discover every subcommand,
+  // flag, exit code, and the feedback channel without shelling out. The content is
+  // repository-independent, but the resource accepts `repo_root` for symmetry with
+  // the other resources and to keep the binary resolution in one place.
+  server.registerResource(
+    'autopsy_tools',
+    new ResourceTemplate('autopsy://tools{?repo_root}', { list: undefined }),
+    {
+      title: 'Machine-readable toolspec',
+      description:
+        'Deterministic toolspec: every subcommand with its arguments, snapshot pinning, ' +
+        'coverage semantics, the evidence envelope, exit codes, global flags, and the ' +
+        'agent feedback channel.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('tools', [], { repoRoot });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: asText(result.data),
+          },
+        ],
+      };
+    }
+  );
+
   return server;
 }

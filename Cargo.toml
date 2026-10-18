@@ -29,6 +29,7 @@ members = [
     "crates/autopsy-behavior-research",
     "crates/autopsy-schema-registry",
     "crates/autopsy-workspace-registry",
+    "apps/synevid-lsp",
     "tests"
 ]
 

@@ -103,6 +103,27 @@ test('createAutopsyMcpServer registers all 10 read-only tools and resources', ()
     templates.includes('autopsy_workspace'),
     'Must register the Tier 2.3 workspace registry resource'
   );
+  assert.ok(
+    templates.includes('autopsy_tools'),
+    'Must register the Tier 3.1 toolspec resource (autopsy://tools)'
+  );
+});
+
+test('autopsy://tools resource serves the deterministic toolspec (Tier 3.1)', async () => {
+  const server = createAutopsyMcpServer();
+  const template = server._registeredResourceTemplates.autopsy_tools;
+  assert.ok(template, 'the toolspec resource must be registered');
+  const read = async () => template.readCallback(new URL('autopsy://tools'), {}, {});
+  const first = await read();
+  const second = await read();
+  const text = first.contents[0].text;
+  assert.equal(second.contents[0].text, text, 'two reads must be byte-identical');
+  const spec = JSON.parse(text);
+  assert.equal(spec.format_version, '0.0.1');
+  assert.ok(Array.isArray(spec.tools) && spec.tools.length >= 22, 'every subcommand is listed');
+  assert.ok(spec.exit_codes, 'the exit-code contract is present');
+  assert.ok(spec.feedback, 'the feedback channel is documented');
+  assert.ok(spec.envelope, 'the evidence envelope is documented');
 });
 
 // ---------------------------------------------------------------------------------------
