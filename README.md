@@ -323,7 +323,7 @@ SynEvid/
 ├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
 ├── schemas/                            # Frozen public JSON Schemas (Draft-07)
 ├── scripts/                            # Automated verification & determinism gates
-├── docs/                               # 38 Verification Reports, ADRs, and Traceability
+├── docs/                               # 39 Verification Reports, ADRs, and Traceability
 └── assets/                             # Visual emblems, diagrams, and identity assets
 ```
 
@@ -333,7 +333,7 @@ SynEvid/
 
 SynEvid maintains a zero-tolerance policy for compiler warnings, test regressions, and non-deterministic behavior.
 
-### Automated Pre-Commit Stack (12 Local Hooks)
+### Automated Pre-Commit Stack (13 Local Hooks)
 All commits and pushes are verified locally via `.pre-commit-config.yaml`:
 ```bash
 $ pre-commit run --all-files
@@ -348,6 +348,7 @@ JSON Schema Syntactic Validation................................................
 Engine Config & Invariant Syntax Validation.....................................Passed
 TypeScript MCP Server TypeCheck & Tests.........................................Passed
 Web Inspector Render Tests (headless, zero-build)...............................Passed
+Installer, Update & Host-Wiring Self-Test (offline, fake release)...............Passed
 Architectural Boundary Gate (Zero LLM/MCP in Core Crates).......................Passed
 Universal Hardware & Multi-Arch Determinism (Pillar A)..........................Passed
 ```
@@ -359,9 +360,10 @@ Every pull request and push to `main` executes a multi-job verification matrix (
 3. **`cross-platform-matrix`**: workspace unit/integration and doc tests on Linux x86-64, macOS aarch64, and Windows x86-64
 4. **`determinism-and-boundary-gate`**: golden 100-run determinism, cross-platform determinism, and the zero-LLM/network/subprocess architecture gate
 5. **`schemas-and-configs`**: JSON Schema, `autopsy.toml`, `.autopsy/invariants.yml`, plus Ruff/Pytest on the benchmark harness
-6. **`mcp-server-check`**: MCP server typecheck + lint + 43 tests (incl. protocol-level agent-loop suites) and the headless Web Inspector tests
-7. **`supply-chain-audit`**: `cargo deny` advisories, licenses, bans, and sources policy
-8. **`pre-merge-verification-gate`**: aggregated status check gating merges
+6. **`mcp-server-check`**: MCP server typecheck + lint + 44 tests (incl. protocol-level agent-loop suites and the shipped-bundle test) and the headless Web Inspector tests
+7. **`installer-and-wiring-check`**: offline installer self-test (`scripts/tests/test-install.sh`) — fake release, checksum abort, update idempotency, check/uninstall, host wiring
+8. **`supply-chain-audit`**: `cargo deny` advisories, licenses, bans, and sources policy
+9. **`pre-merge-verification-gate`**: aggregated status check gating merges
 
 ---
 
@@ -452,48 +454,73 @@ $$\text{Gate Decision} = (\Delta\text{Recall} \ge +10\text{pp}) \lor (\Delta\tex
 
 ## 8. Developer & Agent Workflow
 
-### Install as a user (4 paths)
+### Install as a user (one-time setup, then it stays out of your way)
 
-**A. One-line installer (recommended).** Tries a prebuilt release binary for
-your OS/arch; falls back to a source build (installs Rust via rustup if
-missing); optionally wires detected agent hosts.
+**Where it installs:** per-user and system-wide — never inside a repository.
+One installation serves every repo on the machine. A repository only ever
+gains a `.autopsy/` analysis store (like `.git/`), and only when a command
+writes one.
+
+| What | Where (default) |
+| :--- | :--- |
+| `autopsy` engine | `~/.local/bin/autopsy` |
+| `synevid-lsp` IDE server | `~/.local/bin/synevid-lsp` |
+| MCP server — agent bridge (single file, zero-build) | `~/.local/share/synevid/mcp-server/index.js` |
+| Host-wiring helper + advisory hooks | `~/.local/share/synevid/` |
+
+**A. One-line installer (recommended).** Downloads the prebuilt release for
+your OS/arch and verifies its SHA-256 against the release's `SHA256SUMS.txt`
+(abort on mismatch); falls back to a source build (installs Rust via rustup if
+missing); adds `~/.local/bin` to PATH through one managed block; installs the
+MCP server; and wires every detected agent host (backup-first, re-run safe).
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.sh | bash
-# env: AUTOPSY_SKIP_HOSTS=1 (skip host wiring) · AUTOPSY_SKIP_MCP=1 (skip the MCP build) · AUTOPSY_SKIP_BUILD=1 · SYNEVID_PREFIX=~/.local
-autopsy version   # verify
+# then open a new terminal
+autopsy version                                  # verify
+autopsy --repo-root /path/to/your/repo doctor    # expect: Overall Status: HEALTHY
 ```
+- **Update:** re-run the same one-liner (or `install.sh --update` if you kept
+  the script). Idempotent and takes seconds. Releases are refreshed from every
+  green `main` post-merge run, so "latest" is always the newest gate-passing
+  revision. No silent auto-update by design — SynEvid never phones home.
+- **Inspect / remove:** `install.sh --check` · `install.sh --uninstall`
+  (also unwires hosts and removes the PATH block).
+- **Knobs:** `SYNEVID_PREFIX=~/.local` · `AUTOPSY_SKIP_HOSTS=1` ·
+  `AUTOPSY_SKIP_MCP=1` · `AUTOPSY_SKIP_BUILD=1` · `SYNEVID_NO_PATH=1` ·
+  `SYNEVID_STRICT=1` (require checksum verification).
 
 **B. CLI binary from source.** Prerequisites: Rust 1.90+.
 ```bash
 git clone https://github.com/sainibhaowal/SynEvid.git && cd SynEvid
-cargo build --release -p autopsy-cli
+cargo build --release -p autopsy-cli -p synevid-lsp
 export PATH="$PWD/target/release:$PATH"
 autopsy --repo-root /path/to/your/repo version
 ```
 
-**C. Wire your agents automatically (Claude Code, Cursor, Windsurf,
-VS Code, opencode, Gemini CLI).** Auto-detects installed hosts, writes
-timestamped backups, and is re-run safe.
+**C. Wire your agents (Claude Code, Claude Desktop, Cursor, Windsurf,
+VS Code, opencode, Gemini CLI).** The installer wires them automatically; to
+(re)wire from a checkout — backup-first, unwire-able:
 ```bash
 python3 scripts/setup-agent-hosts.py --check            # dry run: what would change
 python3 scripts/setup-agent-hosts.py --hooks            # MCP + advisory safe-edit hook
+python3 scripts/setup-agent-hosts.py --unwire           # remove the entries again
 ```
-Manual alternative for any MCP client (Prerequisites: Node 22+,
-`npm ci && npm run build` in `apps/mcp-server`):
+Manual alternative for any MCP client (Node 22+; expand `~` before pasting):
 ```json
 {
   "mcpServers": {
     "synevid": {
       "command": "node",
-      "args": ["/absolute/path/to/SynEvid/apps/mcp-server/dist/index.js"],
-      "env": { "AUTOPSY_BIN": "/absolute/path/to/SynEvid/target/release/autopsy" }
+      "args": ["/home/you/.local/share/synevid/mcp-server/index.js"],
+      "env": { "AUTOPSY_BIN": "/home/you/.local/bin/autopsy" }
     }
   }
 }
 ```
-`AUTOPSY_BIN` is optional: without it the server tries `~/.local/bin/autopsy`,
-then `~/.cargo/bin/autopsy`, then workspace `target/release` and
-`target/debug` builds, then `PATH`.
+Developers can point `args` at `/absolute/path/to/SynEvid/apps/mcp-server/dist/index.js`
+instead. `AUTOPSY_BIN` is optional: without it the server tries
+`~/.local/bin/autopsy`, then `~/.cargo/bin/autopsy`, then workspace
+`target/release` and `target/debug` builds, then `PATH`.
 Opt-in agent guidance lives in `agents/skills/synevid-forensics.md`, and
 `agents/hooks/safe-edit.sh` is an advisory, fail-open pre-edit blast-radius
 prompt (never blocks an edit).
@@ -588,7 +615,7 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 * **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0009).
 * **AI Coding Agent Engineering Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 
-### Complete 38-Report Verification Evidence Suite
+### Complete 39-Report Verification Evidence Suite
 
 | Phase / Pillar | Evidence Record | Focus Area & Verified Invariants |
 | :--- | :--- | :--- |
@@ -630,6 +657,7 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 | | [`36-tier2-agent-quality.md`](docs/evidence/36-tier2-agent-quality.md) | Deterministic repair advice, Go/Rust adapters, workspace registry, pinned browse, session receipts |
 | | [`37-tier3-polish.md`](docs/evidence/37-tier3-polish.md) | Machine-readable toolspec, `synevid-lsp` editor surface, suggestion receipts, performance ceilings |
 | | [`38-agent-gate-closure.md`](docs/evidence/38-agent-gate-closure.md) | Protocol-level MCP agent-loop tests (real stdio JSON-RPC) & honest promotion-gate status |
+| **Install & Lifecycle (39)** | [`39-install-update-lifecycle.md`](docs/evidence/39-install-update-lifecycle.md) | One-command install/update/check/uninstall, checksum-verified releases, bundled zero-build MCP server, offline installer self-test |
 
 ---
 

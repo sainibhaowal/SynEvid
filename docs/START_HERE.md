@@ -17,7 +17,7 @@ Depending on your role and interest, follow the designated reading path below:
         |                       |               |                       |
         v                       v               v                       v
 [Architecture & Design]   [Requirements & Trace] [Safety & Invariants]  [Evidence & Receipts]
-docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..38
+docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..39
         |                       |               |                       |
         v                       v               v                       v
    ADR-0001..0009         schemas/*.json   scripts/verify-arch-*.sh  docs/benchmark/PROTOCOL.md
@@ -47,13 +47,17 @@ docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/
 
 ### Path D: Empirical Benchmarks & Production Evidence
 1. [**Benchmark Protocol**](benchmark/PROTOCOL.md): Pre-registered evaluation methodology across 50 refactoring tasks and 5 TypeScript target repositories.
-2. [**Evidence Dossier (38 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md)).
+2. [**Evidence Dossier (39 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out and the install lifecycle (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md), [39: Install Lifecycle](evidence/39-install-update-lifecycle.md)).
 
 ### Path E: AI Agent Surfaces & Integration
 1. [**Agent Tool Reference**](agents/TOOLS.md): the one envelope, the exit-code contract, all 22 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 6 resources, environment variables, and the `synevid-lsp` editor surface (Tier 1–3).
 2. [**Agent recipes**](../agents/recipes/repair-loop.md): step-by-step playbooks — [repair loop](../agents/recipes/repair-loop.md), [pinned evidence](../agents/recipes/pinned-evidence.md), [PR gate](../agents/recipes/pr-gate.md), [multi-repo](../agents/recipes/multi-repo.md).
 3. [**Agent skill & hooks**](../agents/skills/synevid-forensics.md): opt-in host guidance, session-receipt hook ([`autopsy-session.sh`](../agents/hooks/autopsy-session.sh)), and the advisory fail-open [safe-edit hook](../agents/hooks/safe-edit.sh). Index: [Agent Documentation](agents/README.md).
 4. [**Tier evidence & gate closure**](evidence/38-agent-gate-closure.md): what each tier added and how it is verified (35–38), including the protocol-level MCP agent-loop tests.
+
+### Path F: Install & Operate (users)
+1. [**One-line install / update / uninstall**](../README.md#8-developer--agent-workflow): per-user install under `~/.local` (one install serves every repository), checksum-verified release downloads, managed PATH block, a bundled single-file MCP server, automatic agent-host wiring — update by re-running the same command; `--check` and `--uninstall` supported. Releases are refreshed from every green `main` post-merge run.
+2. [**Offline self-test of that path**](../scripts/tests/test-install.sh): `bash scripts/tests/test-install.sh` installs from a fake release into a throwaway HOME — no network, no Rust — and asserts install, checksum-abort, update idempotency, `--check`, and `--uninstall`. It runs in the pre-commit gate and in CI.
 
 ---
 
@@ -95,7 +99,7 @@ Verifies that 100 consecutive full snapshot calculations produce byte-identical 
 ```
 
 ### Step 4: Run the Complete Test Suite (924 workspace tests)
-Runs all unit, integration, fuzz, and schema conformance suites (the MCP server adds 42 protocol-level tests via `npm test`):
+Runs all unit, integration, fuzz, and schema conformance suites (the MCP server adds 44 protocol-level tests via `npm test`, including the shipped single-file bundle):
 ```bash
 cargo test --workspace --all-targets
 ```

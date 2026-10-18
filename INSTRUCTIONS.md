@@ -21,6 +21,6 @@ make test
 # Format code:
 make fmt
 
-# Execute all pre-commit hooks (12 hooks):
+# Execute all pre-commit hooks (13 hooks):
 pre-commit run --all-files
 ```

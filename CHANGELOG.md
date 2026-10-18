@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Frictionless install, update & uninstall lifecycle (2026-10-18)
+
+One command installs everything a user needs — engine, IDE server, a
+zero-build MCP bridge that ships prebuilt, PATH, and agent-host wiring — and
+the same command updates it. The audit also found the piece that made any of
+it moot: the post-merge pipeline never published a GitHub Release, so the
+installer's "prebuilt binary" path could never succeed and every user fell
+into a multi-minute Rust source build.
+
+### Added
+- `.github/workflows/post-merge.yml`: new `release-publish` job publishes a
+  rolling GitHub Release for the workspace version (refreshed in place from
+  every green `main` run), attaching all platform archives, `SHA256SUMS.txt`,
+  and the CycloneDX SBOM — this is what makes `install.sh` work.
+- Platform archives now embed the zero-build agent surface: the single-file
+  MCP server (`mcp-server/index.js`, esbuild), `setup-agent-hosts.py`, and the
+  advisory hooks, so the installer never needs npm on the user's machine.
+- `apps/mcp-server`: `npm run build:bundle` (esbuild → `dist/index.bundle.js`)
+  and `test/bundle.test.js`, which spawns the shipped bundle over the real
+  stdio protocol (MCP suite now 44 tests).
+- `scripts/tests/test-install.sh`: fully offline installer self-test (fake
+  release + fake `curl` + throwaway HOME) covering install, checksum abort,
+  update idempotency, `--check`, `--uninstall`, and host wiring/unwiring —
+  wired into the pre-commit gate (13 hooks now) and a new CI job
+  `installer-and-wiring-check`.
+- `scripts/setup-agent-hosts.py --unwire`, layout-aware MCP/hook resolution,
+  and installed-binary auto-detection.
+- Evidence `docs/evidence/39-install-update-lifecycle.md`.
+
+### Changed
+- `scripts/install.sh` rewritten: `--update`, `--check`, `--uninstall`,
+  `--help`; SHA-256 verification against `SHA256SUMS.txt` with abort-on-mismatch
+  (no silent source fallback); managed PATH block in `~/.bashrc`/`~/.zshrc`/
+  `~/.profile`; installs the MCP server + hooks under `$PREFIX/share/synevid/`;
+  wires hosts against the installed bundle; prints a clear final report.
+- README §8 states the install model plainly (per-user, system-wide, never
+  inside a repository; update = re-run; no phone-home) and the docs portal
+  gained a "Path F: Install & Operate" reading path.
+- `ci.yml`: new `installer-and-wiring-check` job feeding the pre-merge gate.
+
+### Fixed
+- `apps/mcp-server/test/mcp_stdio.js`: `freshWorkspaceCopy` no longer copies
+  the engine's live `.autopsy/` store, fixing an intermittent `ENOENT` race in
+  the session e2e test when copies ran concurrently with store writes.
+
+### Verification
+- `bash scripts/tests/test-install.sh` — 39/39 checks.
+- `cd apps/mcp-server && npm test` — 44/44.
+- `pre-commit run --all-files` — 13/13 hooks.
+
+---
+
 ## [Unreleased] - Root README verification & MCP install-path fix (2026-10-18)
 
 Line-by-line verification of the root README against the built CLI and tree.

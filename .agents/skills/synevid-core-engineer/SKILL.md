@@ -100,7 +100,7 @@ for s in schemas/*.json; do python3 -m json.tool "$s" >/dev/null; done
 cd apps/mcp-server && npm run typecheck && npm run lint && npm test
 cd ../web-inspector && npm test
 
-# 9. Pre-commit all-files check (12 hooks — the aggregated gate)
+# 9. Pre-commit all-files check (13 hooks — the aggregated gate)
 make check
 ```
 

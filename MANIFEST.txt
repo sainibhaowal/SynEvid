@@ -328,6 +328,7 @@ docs/evidence/35-tier1-agent-experience.md
 docs/evidence/36-tier2-agent-quality.md
 docs/evidence/37-tier3-polish.md
 docs/evidence/38-agent-gate-closure.md
+docs/evidence/39-install-update-lifecycle.md
 docs/README.md
 docs/requirements/COVERAGE_APPENDIX.md
 docs/requirements/TRACEABILITY.md
