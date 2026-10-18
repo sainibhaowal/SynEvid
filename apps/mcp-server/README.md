@@ -91,9 +91,9 @@ $$\text{Baseline } A \longrightarrow \text{Pre-Edit Impact} \longrightarrow \tex
 
 ### Binary resolution (`AUTOPSY_BIN`)
 `AUTOPSY_BIN` is optional. Resolution order: `AUTOPSY_BIN` env →
-`~/.cargo/bin/autopsy` → workspace `target/release/autopsy` →
-workspace `target/debug/autopsy` → `PATH`. Tests pin the workspace
-debug build so they validate current code, not stale installs.
+`~/.local/bin/autopsy` (the one-line installer's prefix) → `~/.cargo/bin/autopsy` →
+workspace `target/release/autopsy` → workspace `target/debug/autopsy` → `PATH`.
+Tests pin the workspace debug build so they validate current code, not stale installs.
 
 ### Prove the bridge works (no agent needed)
 Always use absolute repository paths: the CLI resolves `--repo-root`

@@ -38,6 +38,26 @@ test('CLI runner resolves valid autopsy binary', () => {
   assert.ok(binary, 'Autopsy binary path must not be empty');
 });
 
+test('CLI runner prefers the installer prefix ~/.local/bin', () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-home-'));
+  const localBin = path.join(tmpHome, '.local', 'bin', 'autopsy');
+  const savedBin = process.env.AUTOPSY_BIN;
+  const savedHome = process.env.HOME;
+  try {
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.writeFileSync(localBin, '#!/bin/sh\n');
+    delete process.env.AUTOPSY_BIN;
+    process.env.HOME = tmpHome;
+    assert.equal(resolveAutopsyBinary(), localBin);
+  } finally {
+    if (savedBin === undefined) delete process.env.AUTOPSY_BIN;
+    else process.env.AUTOPSY_BIN = savedBin;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 test('runAutopsy executes baseline command on repo-api deterministically', async () => {
   const result = await runAutopsy('baseline', [], { repoRoot: REPO_API_ROOT });
   assert.equal(result.success, true);

@@ -2,6 +2,9 @@
   "name": "@code-autopsy/mcp-server",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

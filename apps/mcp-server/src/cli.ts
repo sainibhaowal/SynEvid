@@ -109,6 +109,15 @@ export function resolveAutopsyBinary(): string {
     return process.env.AUTOPSY_BIN;
   }
 
+  // Check the one-line installer's default prefix first (~/.local/bin), then
+  // the cargo install prefix. Both are checked before workspace builds so a
+  // user-installed binary wins over a developer build unless AUTOPSY_BIN says
+  // otherwise.
+  const localBin = path.join(process.env.HOME || '', '.local', 'bin', 'autopsy');
+  if (fs.existsSync(localBin)) {
+    return localBin;
+  }
+
   // Check user cargo bin
   const cargoBin = path.join(process.env.HOME || '', '.cargo', 'bin', 'autopsy');
   if (fs.existsSync(cargoBin)) {
