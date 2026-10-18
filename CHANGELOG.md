@@ -81,6 +81,16 @@ local gate now match what the repo actually does.
   `Synevid` in schema titles and `$id` URLs; nothing referenced the old values.
 - `CONTRIBUTING.md`: the Python prerequisite now distinguishes the `3.11+`
   tooling floor from the benchmark harness's declared `>=3.12`.
+- `agents/hooks/safe-edit.sh`: the pre-edit advisor now recognizes Go and Rust
+  files (`.go`, `.rs`) — the Tier-2 adapters were missing from its language gate;
+  smoke-tested against this workspace (advisory JSON + digest for `.rs`, silent
+  exit 0 for non-analyzed files).
+- `agents/hooks/autopsy-session.sh`: binary resolution now honors `AUTOPSY_BIN`
+  first and includes the default `~/.local/bin` install prefix (it previously
+  only checked `PATH`, `~/.cargo/bin`, and a workspace debug build, so a
+  standard `install.sh` installation silently no-opped); verified end-to-end in
+  a throwaway repo (open session + no evidence → verdict `unknown`, exit 3;
+  nothing open → no-op exit 0).
 
 ---
 

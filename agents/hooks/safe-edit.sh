@@ -3,7 +3,7 @@
 # safe-edit.sh — Pre-edit blast-radius advisor hook for coding agents.
 #
 # Reads a JSON event from stdin: {"tool": "Edit|Write", "path": "/abs/file"}.
-# For analyzed languages (.ts/.tsx/.js/.jsx/.py), runs a fast caller-closure
+# For analyzed languages (.ts/.tsx/.js/.jsx/.py/.go/.rs), runs a fast caller-closure
 # impact query and prints machine-readable guidance to stdout.
 #
 # Contract (fail-open by design):
@@ -32,7 +32,7 @@ FILE="$(printf '%s' "$INPUT" | python3 -c "import json,sys; print(json.load(sys.
 [ -n "$FILE" ] || exit 0
 
 case "$FILE" in
-  *.ts|*.tsx|*.js|*.jsx|*.py) ;;
+  *.ts|*.tsx|*.js|*.jsx|*.py|*.go|*.rs) ;;
   *) exit 0 ;;
 esac
 

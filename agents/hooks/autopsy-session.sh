@@ -32,10 +32,15 @@ SID=$(awk '
 ' "$STORE" | tr -d '",')
 [ -n "$SID" ] || exit 0  # every session already closed: nothing to gate
 
-# Resolve the autopsy binary the same way the engine documents it.
-BIN=$(command -v autopsy 2>/dev/null || true)
+# Resolve the autopsy binary the same way the engine documents it: explicit
+# AUTOPSY_BIN first, then PATH, then the two standard install prefixes, then
+# a workspace debug build (for development).
+BIN="${AUTOPSY_BIN:-}"
 if [ -z "$BIN" ]; then
-  for cand in "$HOME/.cargo/bin/autopsy" "$(pwd)/target/debug/autopsy"; do
+  BIN=$(command -v autopsy 2>/dev/null || true)
+fi
+if [ -z "$BIN" ]; then
+  for cand in "$HOME/.local/bin/autopsy" "$HOME/.cargo/bin/autopsy" "$(pwd)/target/debug/autopsy"; do
     if [ -x "$cand" ]; then
       BIN="$cand"
       break
