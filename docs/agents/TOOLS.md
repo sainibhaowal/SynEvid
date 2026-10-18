@@ -153,7 +153,7 @@ never silent.
 | `autopsy://graph/symbols{?limit,offset,kind,repo_root,snapshot}` | Paginated symbol index |
 | `autopsy://graph/edges{?source,direction,kind,limit,offset,repo_root,snapshot}` | Paginated 1-hop neighborhood |
 | `autopsy://workspace{?repo_root}` | Multi-repo registry |
-| `autopsy://tools{?repo_root}` | This specification (Tier 3.1) |
+| `autopsy://tools` | This specification (Tier 3.1, fixed URI) |
 
 ## 11. Environment variables
 

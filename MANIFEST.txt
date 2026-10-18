@@ -18,6 +18,9 @@ apps/mcp-server/src/cli.ts
 apps/mcp-server/src/evidence.ts
 apps/mcp-server/src/index.ts
 apps/mcp-server/src/server.ts
+apps/mcp-server/test/e2e_agent_find_and_envelope.test.js
+apps/mcp-server/test/e2e_agent_session.test.js
+apps/mcp-server/test/mcp_stdio.js
 apps/mcp-server/test/server.test.js
 apps/mcp-server/tsconfig.json
 apps/synevid-lsp/Cargo.toml
@@ -322,6 +325,7 @@ docs/evidence/34-hidden-coupling-incidents-behavior.md
 docs/evidence/35-tier1-agent-experience.md
 docs/evidence/36-tier2-agent-quality.md
 docs/evidence/37-tier3-polish.md
+docs/evidence/38-agent-gate-closure.md
 docs/README.md
 docs/requirements/COVERAGE_APPENDIX.md
 docs/requirements/TRACEABILITY.md

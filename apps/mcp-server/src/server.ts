@@ -1004,11 +1004,12 @@ export function createAutopsyMcpServer(): McpServer {
   // Machine-readable toolspec resource (Tier 3.1): the same deterministic document
   // as `autopsy tools --format json`, so an agent can discover every subcommand,
   // flag, exit code, and the feedback channel without shelling out. The content is
-  // repository-independent, but the resource accepts `repo_root` for symmetry with
-  // the other resources and to keep the binary resolution in one place.
+  // repository-independent, so this is registered as a fixed URI: `autopsy://tools`
+  // is readable exactly as documented (a template would require a query parameter
+  // even though there is nothing repository-specific to parameterize).
   server.registerResource(
     'autopsy_tools',
-    new ResourceTemplate('autopsy://tools{?repo_root}', { list: undefined }),
+    'autopsy://tools',
     {
       title: 'Machine-readable toolspec',
       description:
@@ -1017,10 +1018,8 @@ export function createAutopsyMcpServer(): McpServer {
         'agent feedback channel.',
       mimeType: 'application/json',
     },
-    async (uri, variables) => {
-      const v = (variables || {}) as Record<string, unknown>;
-      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
-      const result = await runAutopsy('tools', [], { repoRoot });
+    async (uri) => {
+      const result = await runAutopsy('tools', []);
       return {
         contents: [
           {

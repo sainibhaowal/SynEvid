@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - Tier 3 polish/productization (2026-10-17)
 
 Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
-`docs/evidence/37-tier3-polish.md`.
+`docs/evidence/37-tier3-polish.md` and `docs/evidence/38-agent-gate-closure.md`
+(roadmap §6 acceptance-gate closure).
 
 ### Added
 - **Machine-readable toolspec (`AGENT-T3.1`):** `autopsy tools --format json` emits a
@@ -32,6 +33,13 @@ Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
   existing `AUTOPSY_TIMEOUT_MS` (default 30 s). `resolveMaxBufferBytes()` in MCP cli.ts.
 - **Agent docs (`AGENT-T3.4`):** `docs/agents/TOOLS.md` + `agents/recipes/` (repair-loop,
   pinned-evidence, pr-gate, multi-repo).
+- **Protocol-level agent-loop e2e (`AGENT-GATE-1`):**
+  `apps/mcp-server/test/e2e_agent_find_and_envelope.test.js` and
+  `e2e_agent_session.test.js` drive the real MCP server over stdio JSON-RPC: the
+  canonical 3-call loop (find → impact → passing verify), enveloped refusals with repair
+  advice, the toolspec at its documented URI, and session verdicts mirroring recorded
+  engine exit codes with byte-reproducible stores. See
+  `docs/evidence/38-agent-gate-closure.md`.
 
 ### Changed
 - MCP `cli.ts` maxBuffer now env-overridable via `AUTOPSY_MAX_BUFFER_BYTES`.
@@ -39,6 +47,12 @@ Implements Tier-3 items from `Resource/Agent_Advancement_Roadmap.md`; see
   exactly the way the CLI does, so an editor hover and a terminal run cannot disagree.
 - MCP server registers the `autopsy://tools` resource (the toolspec document, byte-identical
   across reads).
+
+### Fixed
+- `autopsy://tools` is now registered as a fixed-URI resource: the SDK's template matching
+  refused the bare documented URI (`Resource not found: autopsy://tools`), so reads are now
+  served exactly as `docs/agents/TOOLS.md` documents. The template's `repo_root` parameter
+  was symmetry-only — the toolspec is repository-independent.
 
 ---
 

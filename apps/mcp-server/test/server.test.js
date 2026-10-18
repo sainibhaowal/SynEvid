@@ -67,7 +67,7 @@ test('runAutopsy executes verify command on repo-api', async () => {
   assert.equal(result.data.coverage.state, 'verified');
 });
 
-test('createAutopsyMcpServer registers all 10 read-only tools and resources', () => {
+test('createAutopsyMcpServer registers all 11 tools and resources', () => {
   const server = createAutopsyMcpServer();
   assert.ok(server, 'McpServer instance must be created');
 
@@ -104,16 +104,16 @@ test('createAutopsyMcpServer registers all 10 read-only tools and resources', ()
     'Must register the Tier 2.3 workspace registry resource'
   );
   assert.ok(
-    templates.includes('autopsy_tools'),
-    'Must register the Tier 3.1 toolspec resource (autopsy://tools)'
+    resources.includes('autopsy://tools'),
+    'Must register the Tier 3.1 toolspec resource as a fixed URI (autopsy://tools)'
   );
 });
 
 test('autopsy://tools resource serves the deterministic toolspec (Tier 3.1)', async () => {
   const server = createAutopsyMcpServer();
-  const template = server._registeredResourceTemplates.autopsy_tools;
-  assert.ok(template, 'the toolspec resource must be registered');
-  const read = async () => template.readCallback(new URL('autopsy://tools'), {}, {});
+  const resource = server._registeredResources['autopsy://tools'];
+  assert.ok(resource, 'the toolspec resource must be registered at its documented URI');
+  const read = async () => resource.readCallback(new URL('autopsy://tools'));
   const first = await read();
   const second = await read();
   const text = first.contents[0].text;

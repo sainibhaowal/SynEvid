@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "pretest": "npm run build",
-    "test": "node --test test/server.test.js",
+    "test": "node --test test/server.test.js test/e2e_agent_find_and_envelope.test.js test/e2e_agent_session.test.js",
     "lint": "eslint src/ test/"
   },
   "dependencies": {
