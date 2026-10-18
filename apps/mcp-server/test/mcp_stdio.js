@@ -30,23 +30,29 @@ function pinnedBinary() {
 /** A throwaway copy of the corpus fixture, so receipts never touch committed ground truth. */
 export function freshWorkspaceCopy(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  fs.cpSync(REPO_API_ROOT, dir, { recursive: true });
-  // Strip any stale session store: the store drives the deterministic session
-  // counter, so a leftover file would shift ids on a dirty developer machine.
-  fs.rmSync(path.join(dir, '.autopsy', 'sessions.json'), { force: true });
+  // Never copy the engine's analysis store: tests run commands against the
+  // corpus concurrently, so `.autopsy/` is being written while we copy — and a
+  // copied store (session counter included) would poison determinism anyway.
+  fs.cpSync(REPO_API_ROOT, dir, {
+    recursive: true,
+    filter: (src) => path.basename(src) !== '.autopsy',
+  });
   return dir;
 }
 
 /**
  * Spawns the MCP server and completes the protocol handshake.
  * Returns `{request, notify, stderr, close}`.
+ *
+ * `entry` overrides the server file to spawn — used by the release-artifact
+ * test to run `dist/index.bundle.js`, the exact file users install.
  */
-export async function startMcpServer({ cwd = REPO_API_ROOT } = {}) {
+export async function startMcpServer({ entry = SERVER_ENTRY, cwd = REPO_API_ROOT } = {}) {
   const binary = pinnedBinary();
   const env = { ...process.env, RUST_BACKTRACE: '0' };
   if (binary) env.AUTOPSY_BIN = binary;
 
-  const child = spawn(process.execPath, [SERVER_ENTRY], {
+  const child = spawn(process.execPath, [entry], {
     cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],

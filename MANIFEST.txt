@@ -18,6 +18,7 @@ apps/mcp-server/src/cli.ts
 apps/mcp-server/src/evidence.ts
 apps/mcp-server/src/index.ts
 apps/mcp-server/src/server.ts
+apps/mcp-server/test/bundle.test.js
 apps/mcp-server/test/e2e_agent_find_and_envelope.test.js
 apps/mcp-server/test/e2e_agent_session.test.js
 apps/mcp-server/test/mcp_stdio.js
@@ -368,6 +369,7 @@ scripts/forensic-case.sh
 scripts/install.sh
 scripts/patch_banner.py
 scripts/setup-agent-hosts.py
+scripts/tests/test-install.sh
 scripts/verify-arch-boundaries.sh
 scripts/verify-cross-platform.sh
 scripts/verify-determinism.sh

@@ -206,6 +206,16 @@ jobs:
       - name: Test Web Inspector (headless, zero-build)
         run: cd apps/web-inspector && npm test
 
+  installer-and-wiring-check:
+    name: Installer, Update & Host-Wiring Self-Test (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Run Offline Installer Self-Test (fake release, temp HOME)
+        run: bash scripts/tests/test-install.sh
+
   supply-chain-audit:
     name: Cargo Deny (advisories, licenses, bans)
     runs-on: ubuntu-latest
@@ -232,6 +242,7 @@ jobs:
       - schemas-and-configs
       - msrv-check
       - mcp-server-check
+      - installer-and-wiring-check
       - supply-chain-audit
     if: always()
     steps:
@@ -246,6 +257,7 @@ jobs:
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| MSRV 1.90 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Web Inspector | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| One-Line Installer & Host Wiring (offline self-test) | ${{ needs.installer-and-wiring-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
@@ -254,6 +266,7 @@ jobs:
              [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
              [ "${{ needs.msrv-check.result }}" != "success" ] || \
              [ "${{ needs.mcp-server-check.result }}" != "success" ] || \
+             [ "${{ needs.installer-and-wiring-check.result }}" != "success" ] || \
              [ "${{ needs.supply-chain-audit.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY
             echo "ERROR: One or more pre-merge verification checks failed!"

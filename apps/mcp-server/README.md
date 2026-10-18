@@ -94,6 +94,8 @@ $$\text{Baseline } A \longrightarrow \text{Pre-Edit Impact} \longrightarrow \tex
 `~/.local/bin/autopsy` (the one-line installer's prefix) → `~/.cargo/bin/autopsy` →
 workspace `target/release/autopsy` → workspace `target/debug/autopsy` → `PATH`.
 Tests pin the workspace debug build so they validate current code, not stale installs.
+Installed users point `args` at the release bundle
+(`~/.local/share/synevid/mcp-server/index.js`) instead of a checkout.
 
 ### Prove the bridge works (no agent needed)
 Always use absolute repository paths: the CLI resolves `--repo-root`
@@ -121,12 +123,23 @@ import('./dist/cli.js').then(async ({ runAutopsy }) => {
 # Build TypeScript
 npm run build
 
+# Build the single-file release bundle (what users actually install)
+npm run build:bundle
+
 # Type check (no emit)
 npm run typecheck
 
 # Lint (ESLint)
 npm run lint
 
-# Unit + protocol-level agent-loop suites (node:test)
+# Unit + protocol-level agent-loop suites, incl. the shipped-bundle test (node:test)
 npm test
 ```
+
+`npm run build:bundle` produces `dist/index.bundle.js`: one file with the SDK
+and validation dependencies vendored in (Node built-ins stay external), built
+by esbuild. It is the exact artifact shipped inside the platform archives as
+`mcp-server/index.js` and installed to `~/.local/share/synevid/` by
+`scripts/install.sh` — installed users never run npm. `npm test` builds the
+bundle first (`pretest`), and `test/bundle.test.js` spawns that file over the
+real stdio protocol so the released artifact is verified, not just the sources.

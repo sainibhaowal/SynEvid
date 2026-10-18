@@ -11,9 +11,10 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "build:bundle": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.bundle.js --log-level=warning",
     "start": "node dist/index.js",
-    "pretest": "npm run build",
-    "test": "node --test test/server.test.js test/e2e_agent_find_and_envelope.test.js test/e2e_agent_session.test.js",
+    "pretest": "npm run build && npm run build:bundle",
+    "test": "node --test test/server.test.js test/e2e_agent_find_and_envelope.test.js test/e2e_agent_session.test.js test/bundle.test.js",
     "lint": "eslint src/ test/"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^26.6.4",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.5",
     "globals": "^17.13.0",
     "typescript": "^5.9.0",

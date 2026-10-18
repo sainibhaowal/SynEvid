@@ -79,6 +79,16 @@ jobs:
       - name: Build Optimized Release Binaries
         run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli -p synevid-lsp
 
+      - name: Set up Node.js 22 (MCP bundle)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/mcp-server/package-lock.json
+
+      - name: Build Single-File MCP Server (zero-build agent surface)
+        run: cd apps/mcp-server && npm ci --no-audit --no-fund && npm run build:bundle
+
       - name: Package Release Archive (with License & Metadata)
         shell: bash
         run: |
@@ -96,6 +106,13 @@ jobs:
               cp "target/release/$name" "$DIST_DIR/"
             fi
           done
+
+          # Zero-build agent surface: install.sh unpacks these into
+          # $PREFIX/share/synevid/ so hosts never need npm at run time.
+          mkdir -p "$DIST_DIR/mcp-server" "$DIST_DIR/hooks"
+          cp apps/mcp-server/dist/index.bundle.js "$DIST_DIR/mcp-server/index.js"
+          cp scripts/setup-agent-hosts.py "$DIST_DIR/"
+          cp agents/hooks/safe-edit.sh agents/hooks/autopsy-session.sh "$DIST_DIR/hooks/"
           
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "$DIST_DIR/"
           
@@ -166,3 +183,40 @@ jobs:
         with:
           name: autopsy-release-bundle
           path: release-bundle/
+
+  release-publish:
+    name: Publish Rolling Latest Release
+    needs: release-manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Download Final Release Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: autopsy-release-bundle
+          path: release-bundle
+
+      - name: Resolve Release Tag from Workspace Version
+        id: version
+        run: |
+          VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # This is what makes `install.sh` work: the one-line installer downloads
+      # https://github.com/<repo>/releases/latest/download/<asset>. The release
+      # for the current workspace version is refreshed in place on every
+      # post-merge run, so "latest" always means "latest main that passed the
+      # full post-merge gate" — users update by simply re-running the installer.
+      - name: Publish / Refresh GitHub Release (rolling latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "SynEvid ${{ steps.version.outputs.tag }}"
+          make_latest: true
+          overwrite_files: true
+          generate_release_notes: true
+          files: release-bundle/*
