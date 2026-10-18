@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Root README verification & MCP install-path fix (2026-10-18)
+
+Line-by-line verification of the root README against the built CLI and tree.
+Every command below is now executable exactly as printed.
+
+### Fixed
+- `README.md` §4: three command references were not real CLI verbs —
+  `autopsy timeline` → `autopsy temporal --max-commits 25 --compact --top-k 20`,
+  `autopsy test-impact` → `autopsy test-select --changed …`, and
+  `autopsy lineage --symbol …` → `autopsy lineage --from … --to …` (lineage
+  compares two revisions; it never took a symbol seed).
+- `README.md` §8: the installer env var was misspelled (`SYNevid_PREFIX` →
+  `SYNEVID_PREFIX`); documented `AUTOPSY_SKIP_MCP` and clarified what
+  `AUTOPSY_SKIP_HOSTS` skips.
+- `README.md` §2: the architectural-inversion bullet now names the LSP layer;
+  the adapter mermaid now routes Go and Rust parsers to the scanner node.
+- `README.md` §9: corrected the ADR range (`ADR-0010` did not exist — the
+  directory ends at ADR-0009) and the traceability range now names
+  `FR-ADV`, `AGENT-T1.*`–`T3.*`, and `AGENT-GATE-1`.
+- `README.md` §8: the self-check now says Go/Rust repos are covered, and the
+  Python prerequisite distinguishes the harness's `>=3.12` from the `3.11+`
+  schema-hook floor.
+- `apps/mcp-server/src/cli.ts`: binary resolution now checks
+  `~/.local/bin/autopsy` (the one-line installer's default prefix) before
+  `~/.cargo/bin`; previously an `install.sh` installation was invisible to the
+  server unless it was on `PATH` or `AUTOPSY_BIN` was set. Regression test
+  added (`server.test.js`), MCP README updated.
+- `apps/mcp-server/package.json` and `apps/web-inspector/package.json`: declare
+  `engines.node >= 22` — the docs already required Node 22+, but nothing
+  enforced it.
+
+### Verification
+- `cd apps/mcp-server && npm run typecheck && npm run lint && npm test` — 43/43.
+- `cd apps/web-inspector && npm test` — headless render tests pass.
+- `pre-commit run --all-files` — 12/12 hooks.
+
+---
+
 ## [Unreleased] - Governance, instruction & verification surfaces (2026-10-18)
 
 Second end-to-end pass: every instruction file, rule, skill, plan, workflow

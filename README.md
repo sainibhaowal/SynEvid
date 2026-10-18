@@ -52,9 +52,7 @@ SynEvid enforces strict architectural axioms (governed by [`AGENTS.md`](AGENTS.m
 * **100/100 Deterministic Repeatability (NFR-001, FR-028):** Every run on identical inputs produces byte-identical BLAKE3 digests. No timestamps or unordered hash-map iterations exist in canonical serialization paths (strictly using `BTreeMap` and `BTreeSet`).
 * **Read-Only Analyzer Engine (FR-026):** Commands strictly inspect repository state and change deltas; they **never mutate source code or git history**.
 * **Honest Semantic Coverage (FR-014, FR-030):** Unsupported or dynamic constructs (reflection, dynamic imports, generated code) emit explicit `CoverageState::Unknown` or `Partial`. **`UNKNOWN` never collapses into `PASS`**.
-* **Clean Architectural Inversion (`ARCH_NO_CORE_TO_MCP`):** Presentation, GUI, and MCP layers depend on core public interfaces, never the reverse.
-
----
+* **Clean Architectural Inversion (`ARCH_NO_CORE_TO_MCP`):** Presentation, GUI, MCP, and LSP layers depend on core public interfaces, never the reverse.
 
 ---
 
@@ -129,7 +127,7 @@ flowchart TD
     %% Tier 4 to Tier 5
     SYM --> API
     API --> ATS & APY
-    ATS & APY --> REP_SCAN
+    ATS & APY & AGO & ARS --> REP_SCAN
 ```
 
 ---
@@ -252,12 +250,12 @@ autopsy baseline --incremental --baseline-id <snapshot_id>
 # 4. Verify architectural policies and contract compatibility (exit: 0 pass, 2 fail, 4 unknown)
 autopsy verify --strict --invariants-file .autopsy/invariants.yml
 
-# 5. Bi-temporal Git commit DAG timeline & symbol lineage forensics
-autopsy timeline --limit 20 --format json
-autopsy lineage --symbol "src/core.ts::ProcessHandler" --format json
+# 5. Bi-temporal Git commit DAG timeline & file identity lineage forensics
+autopsy temporal --max-commits 25 --compact --top-k 20 --format json
+autopsy lineage --from HEAD~1 --to HEAD --format json
 
-# 6. Predictive test selection based on semantic code deltas
-autopsy test-impact --baseline <snapshot_id> --format json
+# 6. Conservative test selection for a changed file set
+autopsy test-select --changed src/index.ts --fail-if-all-tests-required --format json
 
 # 7. Trace exact evidence derivation, line spans, and paths for a finding
 autopsy explain <finding_id>
@@ -361,7 +359,7 @@ Every pull request and push to `main` executes a multi-job verification matrix (
 3. **`cross-platform-matrix`**: workspace unit/integration and doc tests on Linux x86-64, macOS aarch64, and Windows x86-64
 4. **`determinism-and-boundary-gate`**: golden 100-run determinism, cross-platform determinism, and the zero-LLM/network/subprocess architecture gate
 5. **`schemas-and-configs`**: JSON Schema, `autopsy.toml`, `.autopsy/invariants.yml`, plus Ruff/Pytest on the benchmark harness
-6. **`mcp-server-check`**: MCP server typecheck + lint + 42 tests (incl. protocol-level agent-loop suites) and the headless Web Inspector tests
+6. **`mcp-server-check`**: MCP server typecheck + lint + 43 tests (incl. protocol-level agent-loop suites) and the headless Web Inspector tests
 7. **`supply-chain-audit`**: `cargo deny` advisories, licenses, bans, and sources policy
 8. **`pre-merge-verification-gate`**: aggregated status check gating merges
 
@@ -461,7 +459,7 @@ your OS/arch; falls back to a source build (installs Rust via rustup if
 missing); optionally wires detected agent hosts.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.sh | bash
-# env: AUTOPSY_SKIP_HOSTS=1 (MCP only) · AUTOPSY_SKIP_BUILD=1 · SYNevid_PREFIX=~/.local
+# env: AUTOPSY_SKIP_HOSTS=1 (skip host wiring) · AUTOPSY_SKIP_MCP=1 (skip the MCP build) · AUTOPSY_SKIP_BUILD=1 · SYNEVID_PREFIX=~/.local
 autopsy version   # verify
 ```
 
@@ -509,7 +507,7 @@ deterministic, tree-sitter, conformance-tested). Others land only when a
 design partner requires one — breadth deliberately follows demand.
 
 ### Prove it's working on your machine (60-second self-check)
-Run these verbatim against any TypeScript or Python repo. Every step has an
+Run these verbatim against any TypeScript/JavaScript, Python, Go, or Rust repo. Every step has an
 unmistakable pass signal — no trust required:
 
 ```bash
@@ -545,7 +543,7 @@ the lab said it. Different or missing = the agent improvised it.
 
 ### Prerequisites
 * **Rust**: `1.90+` (2024 Edition)
-* **Python**: `3.11+` (for schema validation and benchmark harness)
+* **Python**: `3.12+` for the benchmark harness (`benchmarks/pyproject.toml`); `3.11+` suffices for schema validation
 * **Pre-commit**: `pre-commit` binary installed
 
 ### Quick Start
@@ -585,9 +583,9 @@ To run SynEvid on a partner's historical change (base ref → worktree):
 
 Synevid enforces strict, verifiable evidence documentation for every subsystem and invariant. Complete documentation index is available at [`docs/README.md`](docs/README.md).
 
-* **Formal Requirements Traceability:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001 through FR-030).
+* **Formal Requirements Traceability:** [`docs/requirements/TRACEABILITY.md`](docs/requirements/TRACEABILITY.md) (FR-001–FR-030, FR-ADV, plus the agent rows `AGENT-T1.*`–`T3.*` and `AGENT-GATE-1`).
 * **Specification Coverage Appendix:** [`docs/requirements/COVERAGE_APPENDIX.md`](docs/requirements/COVERAGE_APPENDIX.md).
-* **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0010).
+* **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0009).
 * **AI Coding Agent Engineering Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 
 ### Complete 38-Report Verification Evidence Suite
