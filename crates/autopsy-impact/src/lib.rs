@@ -3,7 +3,7 @@
 //! Provides bounded forward/backward BFS graph traversal, impact profiling,
 //! SCC condensation, deterministic path ranking, and budget truncation tracking.
 
-use autopsy_domain::{EdgeKind, SymbolId};
+use autopsy_domain::{Edge, EdgeKind, SymbolId};
 use autopsy_graph::DependencyGraph;
 use petgraph::Direction;
 use petgraph::graph::NodeIndex;
@@ -17,6 +17,86 @@ pub enum ImpactError {
     SeedSymbolNotFound(String),
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+}
+
+/// Discrete confidence grade of an edge in the dependency multigraph (FR-008, NFR-001).
+/// All grades are deterministic integers (parts-per-million, 0..1_000_000).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum EdgeGrade {
+    /// Unknown or unsupported dynamic construct.
+    Unrated = 0,
+    /// Unresolved or bare name-level match (e.g. `call_expression:imported-name`).
+    NameLevel = 250_000,
+    /// Structural container or file transit edge (e.g. `Contains` or `Imports` through module nodes).
+    Structural = 500_000,
+    /// Inferred or partial coverage match.
+    Inferred = 600_000,
+    /// Verified resolved call, reference, or member access.
+    Resolved = 900_000,
+    /// Verified declared relation (e.g. `ast_extends`, `ast_implements`).
+    Declared = 1_000_000,
+}
+
+impl EdgeGrade {
+    pub const fn score(self) -> u32 {
+        self as u32
+    }
+
+    pub fn from_score(score: u32) -> Self {
+        if score >= Self::Declared.score() {
+            Self::Declared
+        } else if score >= Self::Resolved.score() {
+            Self::Resolved
+        } else if score >= Self::Inferred.score() {
+            Self::Inferred
+        } else if score >= Self::Structural.score() {
+            Self::Structural
+        } else if score >= Self::NameLevel.score() {
+            Self::NameLevel
+        } else {
+            Self::Unrated
+        }
+    }
+}
+
+/// Pure function mapping an edge's kind, coverage, and provenance into an `EdgeGrade`.
+pub fn grade_edge(edge: &Edge) -> EdgeGrade {
+    use autopsy_domain::CoverageState;
+
+    match edge.coverage {
+        CoverageState::Unknown | CoverageState::Unsupported => EdgeGrade::Unrated,
+        CoverageState::Partial => {
+            if edge.provenance.contains("name") || edge.provenance.contains("unresolved") {
+                EdgeGrade::NameLevel
+            } else {
+                EdgeGrade::Inferred
+            }
+        }
+        CoverageState::Verified => match edge.kind {
+            EdgeKind::Contains | EdgeKind::Imports => EdgeGrade::Structural,
+            EdgeKind::Inherits | EdgeKind::Implements => EdgeGrade::Declared,
+            EdgeKind::StatisticalCoChange => EdgeGrade::Inferred,
+            EdgeKind::Calls
+            | EdgeKind::References
+            | EdgeKind::ReadsSchema
+            | EdgeKind::WritesSchema
+            | EdgeKind::TestCovers => {
+                let prov = edge.provenance.as_str();
+                if prov.contains("imported-resolved")
+                    || prov.contains("local")
+                    || prov.contains("this-method")
+                    || prov.contains("typed-receiver")
+                    || prov.contains("package-qualified")
+                {
+                    EdgeGrade::Resolved
+                } else if prov.contains("imported-name") || prov.contains("bare-name") {
+                    EdgeGrade::NameLevel
+                } else {
+                    EdgeGrade::Resolved
+                }
+            }
+        },
+    }
 }
 
 /// Traversal direction for impact analysis.
@@ -99,6 +179,10 @@ pub struct ImpactQuery {
 pub struct ImpactResult {
     pub query: ImpactQuery,
     pub impacted_entities: Vec<SymbolId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub likely_affected: Vec<SymbolId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub possibly_affected: Vec<SymbolId>,
     pub paths: Vec<Vec<SymbolId>>,
     pub traversal_profile: String,
     pub truncated: bool,
@@ -123,6 +207,7 @@ impl ImpactEngine {
         let raw_graph = graph.raw_graph();
         let mut impacted_nodes: BTreeSet<NodeIndex> = BTreeSet::new();
         let mut shortest_paths: BTreeMap<NodeIndex, Vec<NodeIndex>> = BTreeMap::new();
+        let mut node_bottlenecks: BTreeMap<NodeIndex, EdgeGrade> = BTreeMap::new();
         let mut truncated = false;
 
         // Collect strongly connected components for cycle condensation
@@ -161,6 +246,7 @@ impl ImpactEngine {
             queue.push_back((seed_idx, 0, vec![seed_idx]));
             visited_depth.insert(seed_idx, 0);
             impacted_nodes.insert(seed_idx);
+            node_bottlenecks.insert(seed_idx, EdgeGrade::Declared);
             shortest_paths
                 .entry(seed_idx)
                 .or_insert_with(|| vec![seed_idx]);
@@ -203,6 +289,20 @@ impl ImpactEngine {
                         let edge_weight = &raw_graph[edge_idx];
                         if !query.profile.edge_kinds.contains(&edge_weight.kind) {
                             continue;
+                        }
+
+                        let edge_grade = grade_edge(edge_weight);
+                        let curr_grade = node_bottlenecks
+                            .get(&curr)
+                            .copied()
+                            .unwrap_or(EdgeGrade::Declared);
+                        let cand_bottleneck = curr_grade.min(edge_grade);
+
+                        let entry = node_bottlenecks
+                            .entry(neighbor)
+                            .or_insert(EdgeGrade::Unrated);
+                        if cand_bottleneck > *entry {
+                            *entry = cand_bottleneck;
                         }
 
                         let next_depth = depth + 1;
@@ -256,6 +356,21 @@ impl ImpactEngine {
             .collect();
         impacted_entities.sort();
 
+        // Partition into likely_affected vs possibly_affected based on bottleneck confidence grade
+        let mut likely_affected = Vec::new();
+        let mut possibly_affected = Vec::new();
+        for sym in &impacted_entities {
+            let is_likely = graph
+                .get_node_index(sym)
+                .and_then(|idx| node_bottlenecks.get(&idx))
+                .is_some_and(|&grade| grade >= EdgeGrade::Resolved);
+            if is_likely {
+                likely_affected.push(sym.clone());
+            } else {
+                possibly_affected.push(sym.clone());
+            }
+        }
+
         // Convert and rank paths deterministically
         // Ranking rule: 1. Shortest path length first, 2. Lexical order of SymbolId sequence
         let mut ranked_paths: Vec<Vec<SymbolId>> = shortest_paths
@@ -278,6 +393,8 @@ impl ImpactEngine {
         Ok(ImpactResult {
             query: query.clone(),
             impacted_entities,
+            likely_affected,
+            possibly_affected,
             paths: ranked_paths,
             traversal_profile: query.profile.name.clone(),
             truncated,
@@ -568,5 +685,125 @@ mod tests {
         assert!(!profile.traverse_file_nodes);
         // Legacy default is unchanged (full transit, all core kinds).
         assert!(ImpactProfile::default().traverse_file_nodes);
+    }
+
+    #[test]
+    fn test_edge_grade_mapping() {
+        let e_verified_call = Edge {
+            source: SymbolId::new("a"),
+            target: SymbolId::new("b"),
+            kind: EdgeKind::Calls,
+            coverage: CoverageState::Verified,
+            location: None,
+            provenance: "call_expression:imported-resolved".to_string(),
+        };
+        assert_eq!(grade_edge(&e_verified_call), EdgeGrade::Resolved);
+
+        let e_name_call = Edge {
+            source: SymbolId::new("a"),
+            target: SymbolId::new("b"),
+            kind: EdgeKind::Calls,
+            coverage: CoverageState::Partial,
+            location: None,
+            provenance: "call_expression:imported-name".to_string(),
+        };
+        assert_eq!(grade_edge(&e_name_call), EdgeGrade::NameLevel);
+
+        let e_contains = Edge {
+            source: SymbolId::new("file::a"),
+            target: SymbolId::new("fn::b"),
+            kind: EdgeKind::Contains,
+            coverage: CoverageState::Verified,
+            location: None,
+            provenance: "ast_contains".to_string(),
+        };
+        assert_eq!(grade_edge(&e_contains), EdgeGrade::Structural);
+
+        let e_inherits = Edge {
+            source: SymbolId::new("class::sub"),
+            target: SymbolId::new("class::base"),
+            kind: EdgeKind::Inherits,
+            coverage: CoverageState::Verified,
+            location: None,
+            provenance: "ast_extends".to_string(),
+        };
+        assert_eq!(grade_edge(&e_inherits), EdgeGrade::Declared);
+    }
+
+    #[test]
+    fn test_likely_vs_possibly_affected_partitioning() {
+        let mut graph = DependencyGraph::new();
+        graph.add_node(make_test_symbol("seed_fn"));
+        graph.add_node(make_test_symbol("resolved_caller"));
+        graph.add_node(make_test_symbol("name_guess_caller"));
+        graph.add_node(make_test_symbol("file::container"));
+        graph.add_node(make_test_symbol("sibling_fn"));
+
+        // 1. resolved_caller --Calls(Verified)--> seed_fn
+        let edge_resolved = Edge {
+            source: SymbolId::new("resolved_caller"),
+            target: SymbolId::new("seed_fn"),
+            kind: EdgeKind::Calls,
+            coverage: CoverageState::Verified,
+            location: None,
+            provenance: "call_expression:imported-resolved".to_string(),
+        };
+        graph.add_edge(edge_resolved);
+
+        // 2. name_guess_caller --Calls(Partial)--> seed_fn
+        let edge_guess = Edge {
+            source: SymbolId::new("name_guess_caller"),
+            target: SymbolId::new("seed_fn"),
+            kind: EdgeKind::Calls,
+            coverage: CoverageState::Partial,
+            location: None,
+            provenance: "call_expression:imported-name".to_string(),
+        };
+        graph.add_edge(edge_guess);
+
+        // 3. file::container --Contains--> seed_fn and file::container --Contains--> sibling_fn
+        graph.add_edge(make_test_edge(
+            "file::container",
+            "seed_fn",
+            EdgeKind::Contains,
+        ));
+        graph.add_edge(make_test_edge(
+            "file::container",
+            "sibling_fn",
+            EdgeKind::Contains,
+        ));
+
+        let engine = ImpactEngine::new();
+        let query = ImpactQuery {
+            seed_symbols: vec![SymbolId::new("seed_fn")],
+            direction: ImpactDirection::Bidirectional,
+            profile: ImpactProfile::default(),
+        };
+
+        let res = engine.compute_impact(&graph, &query).unwrap();
+
+        // seed_fn itself and resolved_caller should be likely_affected
+        assert!(res.likely_affected.contains(&SymbolId::new("seed_fn")));
+        assert!(
+            res.likely_affected
+                .contains(&SymbolId::new("resolved_caller"))
+        );
+
+        // name_guess_caller, file::container, and sibling_fn should be possibly_affected
+        assert!(
+            res.possibly_affected
+                .contains(&SymbolId::new("name_guess_caller"))
+        );
+        assert!(
+            res.possibly_affected
+                .contains(&SymbolId::new("file::container"))
+        );
+        assert!(res.possibly_affected.contains(&SymbolId::new("sibling_fn")));
+
+        // Disjoint and exhaustive partition
+        assert_eq!(
+            res.likely_affected.len() + res.possibly_affected.len(),
+            res.impacted_entities.len()
+        );
     }
 }

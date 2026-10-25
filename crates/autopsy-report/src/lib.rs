@@ -66,11 +66,27 @@ pub struct ChangeSetSummary {
     pub edge_deltas: Vec<serde_json::Value>,
 }
 
+/// Compact summary of impact tiers for token-efficient agent consumption (Tier 3.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpactSummaryTiers {
+    pub likely_count: usize,
+    pub possible_count: usize,
+    pub top_likely: Vec<String>,
+    pub top_possible: Vec<String>,
+    pub impact_digest: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImpactSummary {
     pub query: serde_json::Value,
     /// Complete impacted set (evidence completeness; lexical order).
     pub impacted_entities: Vec<String>,
+    /// High-confidence impacted entities (bottleneck confidence >= Resolved).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub likely_affected: Vec<String>,
+    /// Secondary or name-level impacted entities (bottleneck confidence < Resolved).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub possibly_affected: Vec<String>,
     /// Ranked shortlist: entities ordered by shortest-path distance
     /// (then lexical), sliced to the requested top-k. Empty when no
     /// top-k was requested.
@@ -79,6 +95,9 @@ pub struct ImpactSummary {
     /// Full impacted count (equals `impacted_entities.len()`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_impacted: Option<usize>,
+    /// Compact summary tiers (populated in summary mode or when tiers requested).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ImpactSummaryTiers>,
     pub paths: Vec<serde_json::Value>,
     pub traversal_profile: String,
     pub truncated: bool,
@@ -531,7 +550,7 @@ pub fn convert_semantic_diff(diff: &SemanticDiff) -> ChangeSetSummary {
 
 /// Helper to convert impact result into ImpactSummary
 pub fn convert_impact_result(impact: &ImpactResult) -> ImpactSummary {
-    convert_impact_result_top_k(impact, None)
+    convert_impact_result_detail(impact, None, false)
 }
 
 /// Converts with a ranked top-k shortlist.
@@ -542,57 +561,109 @@ pub fn convert_impact_result(impact: &ImpactResult) -> ImpactSummary {
 /// `impacted_entities` set is always preserved for evidence; `top_k`
 /// only shapes the `ranked_top` presentation slice.
 pub fn convert_impact_result_top_k(impact: &ImpactResult, top_k: Option<usize>) -> ImpactSummary {
+    convert_impact_result_detail(impact, top_k, false)
+}
+
+/// Converts with optional summary mode (Tier 3.1) and top-k shortlist.
+pub fn convert_impact_result_detail(
+    impact: &ImpactResult,
+    top_k: Option<usize>,
+    summary_mode: bool,
+) -> ImpactSummary {
     let total = impact.impacted_entities.len();
-    let ranked_top = match top_k {
-        Some(k) => {
-            let mut scored: Vec<(&autopsy_domain::SymbolId, usize, Vec<String>)> = impact
-                .impacted_entities
-                .iter()
-                .map(|e| {
-                    let mut best: Option<(usize, Vec<String>)> = None;
-                    for p in &impact.paths {
-                        if p.contains(e) {
-                            let path_strs: Vec<String> = p.iter().map(|s| s.to_string()).collect();
-                            let cand = (p.len(), path_strs);
-                            if best.as_ref().is_none_or(|b| cand < *b) {
-                                best = Some(cand);
+    let likely: Vec<String> = impact
+        .likely_affected
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let possible: Vec<String> = impact
+        .possibly_affected
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let summary_tiers = ImpactSummaryTiers {
+        likely_count: likely.len(),
+        possible_count: possible.len(),
+        top_likely: likely.iter().take(5).cloned().collect(),
+        top_possible: possible.iter().take(5).cloned().collect(),
+        impact_digest: impact.impact_digest.clone(),
+    };
+
+    if summary_mode {
+        let top_likely: Vec<String> = likely.iter().take(5).cloned().collect();
+        let top_possible: Vec<String> = possible.iter().take(5).cloned().collect();
+        ImpactSummary {
+            query: serde_json::json!({
+                "seed_symbols": impact.query.seed_symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "direction": format!("{:?}", impact.query.direction),
+            }),
+            impacted_entities: top_likely.clone(),
+            likely_affected: top_likely,
+            possibly_affected: top_possible,
+            ranked_top: Vec::new(),
+            total_impacted: Some(total),
+            summary: Some(summary_tiers),
+            paths: Vec::new(),
+            traversal_profile: impact.traversal_profile.clone(),
+            truncated: impact.truncated,
+        }
+    } else {
+        let ranked_top = match top_k {
+            Some(k) => {
+                let mut scored: Vec<(&autopsy_domain::SymbolId, usize, Vec<String>)> = impact
+                    .impacted_entities
+                    .iter()
+                    .map(|e| {
+                        let mut best: Option<(usize, Vec<String>)> = None;
+                        for p in &impact.paths {
+                            if p.contains(e) {
+                                let path_strs: Vec<String> =
+                                    p.iter().map(|s| s.to_string()).collect();
+                                let cand = (p.len(), path_strs);
+                                if best.as_ref().is_none_or(|b| cand < *b) {
+                                    best = Some(cand);
+                                }
                             }
                         }
-                    }
-                    match best {
-                        Some((len, path)) => (e, len, path),
-                        None => (e, usize::MAX, vec![e.to_string()]),
-                    }
-                })
-                .collect();
-            scored.sort_by(|a, b| (a.1, &a.2, a.0).cmp(&(b.1, &b.2, b.0)));
-            scored
-                .into_iter()
-                .take(k)
-                .map(|(e, _, _)| e.to_string())
-                .collect()
+                        match best {
+                            Some((len, path)) => (e, len, path),
+                            None => (e, usize::MAX, vec![e.to_string()]),
+                        }
+                    })
+                    .collect();
+                scored.sort_by(|a, b| (a.1, &a.2, a.0).cmp(&(b.1, &b.2, b.0)));
+                scored
+                    .into_iter()
+                    .take(k)
+                    .map(|(e, _, _)| e.to_string())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        ImpactSummary {
+            query: serde_json::json!({
+                "seed_symbols": impact.query.seed_symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "direction": format!("{:?}", impact.query.direction),
+            }),
+            impacted_entities: impact
+                .impacted_entities
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            likely_affected: likely,
+            possibly_affected: possible,
+            ranked_top,
+            total_impacted: Some(total),
+            summary: Some(summary_tiers),
+            paths: impact
+                .paths
+                .iter()
+                .map(|p| serde_json::to_value(p).unwrap_or_default())
+                .collect(),
+            traversal_profile: impact.traversal_profile.clone(),
+            truncated: impact.truncated,
         }
-        None => Vec::new(),
-    };
-    ImpactSummary {
-        query: serde_json::json!({
-            "seed_symbols": impact.query.seed_symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            "direction": format!("{:?}", impact.query.direction),
-        }),
-        impacted_entities: impact
-            .impacted_entities
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        ranked_top,
-        total_impacted: Some(total),
-        paths: impact
-            .paths
-            .iter()
-            .map(|p| serde_json::to_value(p).unwrap_or_default())
-            .collect(),
-        traversal_profile: impact.traversal_profile.clone(),
-        truncated: impact.truncated,
     }
 }
 
@@ -759,6 +830,8 @@ mod tests {
                 profile: ImpactProfile::default(),
             },
             impacted_entities: entities.iter().map(|e| SymbolId::new(*e)).collect(),
+            likely_affected: entities.iter().map(|e| SymbolId::new(*e)).collect(),
+            possibly_affected: Vec::new(),
             paths: paths
                 .iter()
                 .map(|p| p.iter().map(|s| SymbolId::new(*s)).collect())
@@ -767,6 +840,23 @@ mod tests {
             truncated: false,
             impact_digest: "digest".to_string(),
         }
+    }
+
+    #[test]
+    fn test_summary_mode_token_reduction() {
+        let impact = test_impact_result(
+            "seed",
+            &["seed", "a", "b", "c", "d", "e", "f"],
+            &[vec!["seed", "a"]],
+        );
+        let summary = convert_impact_result_detail(&impact, None, true);
+        assert_eq!(summary.impacted_entities.len(), 5);
+        assert_eq!(summary.paths.len(), 0);
+        assert!(summary.summary.is_some());
+        let tiers = summary.summary.unwrap();
+        assert_eq!(tiers.likely_count, 7);
+        assert_eq!(tiers.top_likely.len(), 5);
+        assert_eq!(tiers.impact_digest, "digest");
     }
 
     #[test]

@@ -48,7 +48,7 @@ use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig
 use autopsy_repo::{AutopsyConfig, scan_repository};
 use autopsy_report::{
     AutopsyReport, CoverageSummary, SnapshotSummary, convert_domain_findings,
-    convert_impact_result_top_k, convert_semantic_diff,
+    convert_impact_result_detail, convert_semantic_diff,
 };
 use autopsy_storage::{StorageEngine, StorageOptions};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -301,6 +301,13 @@ pub enum CliImpactProfile {
     Callers,
 }
 
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliImpactDetail {
+    #[default]
+    Full,
+    Summary,
+}
+
 impl From<CliImpactDirection> for ImpactDirection {
     fn from(val: CliImpactDirection) -> Self {
         match val {
@@ -371,6 +378,10 @@ pub enum Commands {
         /// evidence. Omitted = no shortlist (full list only).
         #[arg(long)]
         top_k: Option<usize>,
+        /// Detail level: `full` (default; complete entity and path arrays)
+        /// or `summary` (token-efficient agent mode: tier counts + top 5 likely/possible + digest).
+        #[arg(long, value_enum, default_value = "full")]
+        detail: CliImpactDetail,
     },
     /// Evaluate invariant rules against current snapshot or diff
     Verify {
@@ -786,6 +797,7 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             edge_kinds,
             profile,
             top_k,
+            detail,
         } => handle_impact(
             cli,
             ImpactRequest {
@@ -797,6 +809,7 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
                 edge_kinds: edge_kinds.as_deref(),
                 profile: *profile,
                 top_k: *top_k,
+                detail: *detail,
             },
         ),
         Commands::Verify {
@@ -2165,6 +2178,7 @@ struct ImpactRequest<'a> {
     edge_kinds: Option<&'a str>,
     profile: CliImpactProfile,
     top_k: Option<usize>,
+    detail: CliImpactDetail,
 }
 
 fn handle_impact(cli: &Cli, req: ImpactRequest<'_>) -> Result<i32, CliError> {
@@ -2302,7 +2316,8 @@ fn handle_impact(cli: &Cli, req: ImpactRequest<'_>) -> Result<i32, CliError> {
         .compute_impact(&artifacts.graph, &query)
         .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-    let impact_summary = convert_impact_result_top_k(&impact_result, top_k);
+    let summary_mode = matches!(req.detail, CliImpactDetail::Summary);
+    let impact_summary = convert_impact_result_detail(&impact_result, top_k, summary_mode);
     let coverage = CoverageSummary {
         state: format!("{:?}", artifacts.coverage_state).to_lowercase(),
         unsupported_constructs: artifacts.unsupported_constructs,

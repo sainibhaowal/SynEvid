@@ -120,6 +120,13 @@ export function createAutopsyMcpServer(): McpServer {
               'settable for the whole session via the AUTOPSY_SNAPSHOT environment variable; ' +
               'an explicit argument always wins over the pin)'
           ),
+        detail: z
+          .enum(['summary', 'full'])
+          .optional()
+          .default('summary')
+          .describe(
+            'Detail level: summary (default; token-efficient agent mode with tier counts, top 5 likely/possible, and digest) or full (complete arrays of entities and paths)'
+          ),
       }),
     },
     async (args) => {
@@ -144,6 +151,8 @@ export function createAutopsyMcpServer(): McpServer {
       if (args.top_k) {
         cliArgs.push('--top-k', args.top_k.toString());
       }
+      const detail = args.detail || 'summary';
+      cliArgs.push('--detail', detail);
 
       const result = await runAutopsy('impact', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
 

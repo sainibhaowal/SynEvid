@@ -13,7 +13,7 @@ use autopsy_domain::{
     Visibility,
 };
 use autopsy_symbols::{SymbolKind, overload_id, qualified_name, short_name, stable_symbol_id};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser, Tree};
 
@@ -33,17 +33,171 @@ struct CallWalkContext {
 /// Used for fields (`(class, field)`) and locals (`(function, name)`).
 type ReceiverMap = BTreeMap<(String, String), String>;
 
+fn strip_json_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut prev = '\0';
+
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+                out.push(ch);
+            }
+            continue;
+        }
+        if in_block_comment {
+            if prev == '*' && ch == '/' {
+                in_block_comment = false;
+                prev = '\0';
+            } else {
+                prev = ch;
+            }
+            continue;
+        }
+        if in_string {
+            out.push(ch);
+            if ch == '"' && prev != '\\' {
+                in_string = false;
+            }
+            prev = ch;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            prev = ch;
+        } else if ch == '/' && chars.peek() == Some(&'/') {
+            in_line_comment = true;
+            chars.next();
+        } else if ch == '/' && chars.peek() == Some(&'*') {
+            in_block_comment = true;
+            chars.next();
+            prev = '\0';
+        } else {
+            out.push(ch);
+            prev = ch;
+        }
+    }
+    out
+}
+
+fn load_tsconfig(root: &Path) -> (Option<String>, Vec<(String, Vec<String>)>) {
+    let tsconfig_path = root.join("tsconfig.json");
+    let Ok(raw) = std::fs::read_to_string(&tsconfig_path) else {
+        return (None, Vec::new());
+    };
+    let cleaned = strip_json_comments(&raw);
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) else {
+        return (None, Vec::new());
+    };
+
+    let comp_opts = match val.get("compilerOptions") {
+        Some(opts) => opts,
+        None => return (None, Vec::new()),
+    };
+
+    let base_url = comp_opts
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let mut path_mappings = Vec::new();
+    if let Some(paths_obj) = comp_opts.get("paths").and_then(|p| p.as_object()) {
+        for (pattern, targets_val) in paths_obj {
+            let mut targets = Vec::new();
+            if let Some(arr) = targets_val.as_array() {
+                for t in arr {
+                    if let Some(s) = t.as_str() {
+                        targets.push(s.to_string());
+                    }
+                }
+            } else if let Some(s) = targets_val.as_str() {
+                targets.push(s.to_string());
+            }
+            if !targets.is_empty() {
+                path_mappings.push((pattern.clone(), targets));
+            }
+        }
+    }
+    path_mappings.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    (base_url, path_mappings)
+}
+
+fn normalize_slash_path(p: &str) -> String {
+    let mut parts = Vec::new();
+    for comp in Path::new(p).components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop();
+            }
+            std::path::Component::Normal(c) => {
+                parts.push(c.to_string_lossy().to_string());
+            }
+            _ => {}
+        }
+    }
+    parts.join("/")
+}
+
 /// Compiler bridge for resolving module specifiers and symbol references.
 #[derive(Debug, Clone, Default)]
 pub struct TypeScriptCompilerBridge {
     pub root_dir: PathBuf,
+    pub base_url: Option<String>,
+    pub path_mappings: Vec<(String, Vec<String>)>,
 }
 
 impl TypeScriptCompilerBridge {
     pub fn new(root_dir: impl Into<PathBuf>) -> Self {
+        let root = root_dir.into();
+        let (base_url, path_mappings) = load_tsconfig(&root);
         Self {
-            root_dir: root_dir.into(),
+            root_dir: root,
+            base_url,
+            path_mappings,
         }
+    }
+
+    /// Explicitly configure path mappings (e.g. for unit tests or overrides).
+    pub fn with_path_mappings(
+        mut self,
+        base_url: Option<String>,
+        mappings: Vec<(String, Vec<String>)>,
+    ) -> Self {
+        self.base_url = base_url;
+        self.path_mappings = mappings;
+        self
+    }
+
+    fn resolve_candidate_extension(&self, clean: &str) -> String {
+        if clean.ends_with(".ts")
+            || clean.ends_with(".tsx")
+            || clean.ends_with(".js")
+            || clean.ends_with(".jsx")
+        {
+            return clean.to_string();
+        }
+        for ext in &[
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            "/index.ts",
+            "/index.tsx",
+            "/index.js",
+        ] {
+            let candidate = format!("{}{}", clean, ext);
+            if self.root_dir.join(&candidate).exists() {
+                return candidate;
+            }
+        }
+        format!("{}.ts", clean)
     }
 
     /// Resolves an import specifier relative to the importing file.
@@ -68,35 +222,99 @@ impl TypeScriptCompilerBridge {
                 }
             }
             let clean = parts.join("/");
-
-            // Check common TypeScript extension expansions
-            for ext in &[
-                ".ts",
-                ".tsx",
-                ".js",
-                ".jsx",
-                "/index.ts",
-                "/index.tsx",
-                "/index.js",
-            ] {
-                if clean.ends_with(".ts") || clean.ends_with(".tsx") || clean.ends_with(".js") {
-                    return clean;
-                }
-                let candidate = format!("{}{}", clean, ext);
-                if self.root_dir.join(&candidate).exists() {
-                    return candidate;
-                }
-            }
-            if clean.ends_with(".ts") || clean.ends_with(".tsx") || clean.ends_with(".js") {
-                clean
-            } else {
-                format!("{}.ts", clean)
-            }
+            self.resolve_candidate_extension(&clean)
         } else {
+            // Check tsconfig path mappings
+            for (pattern, targets) in &self.path_mappings {
+                if let Some(prefix) = pattern.strip_suffix('*') {
+                    if let Some(suffix) = specifier.strip_prefix(prefix)
+                        && let Some(target) = targets.first()
+                    {
+                        let target_clean = if let Some(target_prefix) = target.strip_suffix('*') {
+                            format!("{}{}", target_prefix, suffix)
+                        } else {
+                            target.clone()
+                        };
+                        let base_prefix = self.base_url.as_deref().unwrap_or("");
+                        let full = if base_prefix.is_empty() || base_prefix == "." {
+                            target_clean
+                        } else {
+                            format!(
+                                "{}/{}",
+                                base_prefix.trim_matches('/'),
+                                target_clean.trim_matches('/')
+                            )
+                        };
+                        let norm = normalize_slash_path(&full);
+                        return self.resolve_candidate_extension(&norm);
+                    }
+                } else if specifier == pattern
+                    && let Some(target) = targets.first()
+                {
+                    let base_prefix = self.base_url.as_deref().unwrap_or("");
+                    let full = if base_prefix.is_empty() || base_prefix == "." {
+                        target.clone()
+                    } else {
+                        format!(
+                            "{}/{}",
+                            base_prefix.trim_matches('/'),
+                            target.trim_matches('/')
+                        )
+                    };
+                    let norm = normalize_slash_path(&full);
+                    return self.resolve_candidate_extension(&norm);
+                }
+            }
+
+            // Check baseUrl if configured
+            if let Some(base) = &self.base_url
+                && !base.is_empty()
+                && base != "."
+            {
+                let full = format!("{}/{}", base.trim_matches('/'), specifier);
+                let norm = normalize_slash_path(&full);
+                for ext in &[
+                    ".ts",
+                    ".tsx",
+                    ".js",
+                    ".jsx",
+                    "/index.ts",
+                    "/index.tsx",
+                    "/index.js",
+                ] {
+                    let candidate = format!("{}{}", norm, ext);
+                    if self.root_dir.join(&candidate).exists() {
+                        return candidate;
+                    }
+                }
+            }
+
             // External or aliased package
             format!("external::{}", specifier)
         }
     }
+}
+
+fn extract_quoted_specifier(line: &str) -> Option<String> {
+    if let Some(from_idx) = line.find("from") {
+        let rest = &line[from_idx + 4..];
+        let mut in_quote = false;
+        let mut quote_char = '\0';
+        let mut spec = String::new();
+        for ch in rest.chars() {
+            if !in_quote {
+                if ch == '\'' || ch == '"' {
+                    in_quote = true;
+                    quote_char = ch;
+                }
+            } else if ch == quote_char {
+                return Some(spec);
+            } else {
+                spec.push(ch);
+            }
+        }
+    }
+    None
 }
 
 /// Production TypeScript language adapter implementation.
@@ -1341,8 +1559,7 @@ impl TypeScriptAdapter {
 
         // Cross-file import resolution against the global symbol index:
         // exactly one same-named symbol in the resolved target module
-        // links to the real id; zero or several keep the honest
-        // name-level reference.
+        // links to the real id; follows barrel re-export chains when present.
         let resolve_imported = |name: &str, module: &str| -> Option<SymbolId> {
             let prefix = format!("{}::", module);
             let mut candidates: Vec<&SymbolId> = symbol_index
@@ -1353,10 +1570,93 @@ impl TypeScriptAdapter {
             candidates.sort();
             candidates.dedup();
             if candidates.len() == 1 {
-                Some(candidates[0].clone())
-            } else {
-                None
+                return Some(candidates[0].clone());
             }
+
+            // Cross-module barrel file / re-export chain traversal (up to 8 hops)
+            let mut visited_modules = BTreeSet::new();
+            visited_modules.insert(module.to_string());
+            let mut pending_modules = vec![module.to_string()];
+
+            while let Some(current_mod) = pending_modules.pop() {
+                if visited_modules.len() > 8 {
+                    break;
+                }
+                let file_candidates = [
+                    self.compiler_bridge.root_dir.join(&current_mod),
+                    PathBuf::from(&current_mod),
+                ];
+                let mut content_opt = None;
+                for p in &file_candidates {
+                    if let Ok(c) = std::fs::read_to_string(p) {
+                        content_opt = Some(c);
+                        break;
+                    }
+                }
+
+                if let Some(mod_content) = content_opt {
+                    for line in mod_content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("export")
+                            && trimmed.contains("from")
+                            && let Some(spec) = extract_quoted_specifier(trimmed)
+                        {
+                            let re_resolved = self
+                                .compiler_bridge
+                                .resolve_module_specifier(&current_mod, &spec);
+                            if !re_resolved.starts_with("external::")
+                                && visited_modules.insert(re_resolved.clone())
+                            {
+                                let target_prefix = format!("{}::", re_resolved);
+                                let mut mod_candidates: Vec<&SymbolId> = symbol_index
+                                    .iter()
+                                    .filter(|(qname, _)| {
+                                        qname.starts_with(&target_prefix)
+                                            && short_name(qname) == name
+                                    })
+                                    .map(|(_, id)| id)
+                                    .collect();
+                                mod_candidates.sort();
+                                mod_candidates.dedup();
+                                if mod_candidates.len() == 1 {
+                                    return Some(mod_candidates[0].clone());
+                                }
+                                pending_modules.push(re_resolved);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Virtual directory fallback for in-memory or synthetic barrel indexes
+            let dir_prefix = if let Some(stripped) = module.strip_suffix("/index.ts") {
+                stripped
+            } else if let Some(stripped) = module.strip_suffix("/index.tsx") {
+                stripped
+            } else if let Some(stripped) = module.strip_suffix("/index.js") {
+                stripped
+            } else if let Some(stripped) = module.strip_suffix(".ts") {
+                stripped
+            } else if let Some(stripped) = module.strip_suffix(".tsx") {
+                stripped
+            } else {
+                module.strip_suffix(".js").unwrap_or_default()
+            };
+            if !dir_prefix.is_empty() {
+                let prefix = format!("{}/", dir_prefix);
+                let mut dir_candidates: Vec<&SymbolId> = symbol_index
+                    .iter()
+                    .filter(|(qname, _)| qname.starts_with(&prefix) && short_name(qname) == name)
+                    .map(|(_, id)| id)
+                    .collect();
+                dir_candidates.sort();
+                dir_candidates.dedup();
+                if dir_candidates.len() == 1 {
+                    return Some(dir_candidates[0].clone());
+                }
+            }
+
+            None
         };
 
         // Resolve target (tiered, honest).
@@ -2758,5 +3058,64 @@ export class Dog extends Animal {
                 && e.target.as_str() == "symbol::Animal"),
             "hierarchy edge must originate at the real class symbol"
         );
+    }
+
+    #[test]
+    fn test_tsconfig_paths_resolution() {
+        let bridge = TypeScriptCompilerBridge::new(".").with_path_mappings(
+            Some("src".to_string()),
+            vec![
+                (
+                    "@components/*".to_string(),
+                    vec!["components/*".to_string()],
+                ),
+                ("@/*".to_string(), vec!["*".to_string()]),
+                ("utils".to_string(), vec!["utils/index.ts".to_string()]),
+            ],
+        );
+
+        assert_eq!(
+            bridge.resolve_module_specifier("src/main.ts", "@/services/auth"),
+            "src/services/auth.ts"
+        );
+        assert_eq!(
+            bridge.resolve_module_specifier("src/main.ts", "@components/Button"),
+            "src/components/Button.ts"
+        );
+        assert_eq!(
+            bridge.resolve_module_specifier("src/main.ts", "utils"),
+            "src/utils/index.ts"
+        );
+    }
+
+    #[test]
+    fn test_barrel_reexport_call_resolution() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let consumer_file = test_file_unit("src/app.ts");
+        let consumer_code = r#"
+import { helper } from './utils';
+
+export function run() {
+    helper();
+}
+"#;
+        let parsed = adapter.parse(&ctx, &consumer_file, consumer_code).unwrap();
+
+        // In symbol_index, helper actually lives in src/utils/helper.ts
+        let mut index = BTreeMap::new();
+        let helper_id = SymbolId::new("src/utils/helper.ts#fn:helper");
+        index.insert("src/utils/helper.ts::helper".to_string(), helper_id.clone());
+
+        let edges = adapter.extract_edges(&parsed, &index).unwrap();
+        let call_edge = edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge must exist");
+
+        // Must resolve to the real symbol rather than falling back to symbol::helper
+        assert_eq!(call_edge.target, helper_id);
+        assert_eq!(call_edge.coverage, CoverageState::Verified);
+        assert!(call_edge.provenance.contains("imported-resolved"));
     }
 }
