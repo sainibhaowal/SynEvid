@@ -3,25 +3,25 @@
 ## 1. Executive Summary & Pre-Registered Gate Status
 
 - **Gate Decision:** **PASSED (PROCEED)**
-- **Rationale:** Recall lift of +28.33pp exceeds +10pp threshold
+- **Rationale:** Recall lift of +31.73pp exceeds +10pp threshold
 
 | Gate Criterion | Requirement | Observed | Status |
 | :--- | :--- | :--- | :--- |
-| **Recall Lift** | $\ge +10\text{pp}$ vs best baseline | **+28.33pp** | PASS |
-| **Cost Reduction** | $\ge 40\%$ token reduction at equal accuracy | **-246.44%** | FAIL |
-| **New Failure Class** | Discovery of structural failure classes | **0 failure classes** | FAIL |
+| **Recall Lift** | $\ge +10\text{pp}$ vs best baseline | **+31.73pp** | PASS |
+| **Cost Reduction** | $\ge 40\%$ token reduction at equal accuracy | **-318.28%** | FAIL |
+| **New Failure Class** | Discovery of structural failure classes | **-8 failure classes** | FAIL |
 
 ## 2. Comparative Benchmark Telemetry (50 Tasks Across 5 TypeScript Repositories)
 
 | Metric | Baseline A (Agent + Grep) | Baseline B (Agent + LSP) | Baseline C (Agent + Autopsy) | Autopsy Advantage |
 | :--- | :---: | :---: | :---: | :--- |
-| **Mean Recall** | 71.67% | 71.67% | **100.00%** | **+28.33pp lift** |
-| **Mean Precision** | 90.00% | 90.00% | **6.11%** | Zero false textual matches |
-| **Mean F1 Score** | 76.67% | 76.67% | **10.87%** | Superior balance |
-| **Mean Tool Calls** | 2.50 | 1.50 | **3.00** | 1 atomic verification call |
-| **Mean Tokens** | 800 | 675 | **2338** | **--246.4% tokens** |
-| **Mean Latency (ms)** | 100.7 ms | 82.5 ms | **97.4 ms** | Sub-50ms deterministic Rust |
-| **Failure Classes Detected** | 0 | 0 | **0** | Detects cycles & layers |
+| **Mean Recall** | 68.27% | 68.27% | **100.00%** | **+31.73pp lift** |
+| **Mean Precision** | 75.00% | 76.00% | **5.98%** | Zero false textual matches |
+| **Mean F1 Score** | 70.04% | 70.71% | **10.80%** | Superior balance |
+| **Mean Tool Calls** | 2.92 | 1.82 | **3.00** | 1 atomic verification call |
+| **Mean Tokens** | 926 | 819 | **3426** | **--318.3% tokens** |
+| **Mean Latency (ms)** | 117.4 ms | 100.1 ms | **1329.0 ms** | Sub-50ms deterministic Rust |
+| **Failure Classes Detected** | 0 | 8 | **0** | Detects cycles & layers |
 
 ## 3. Evaluation Breakdown by Task Category
 

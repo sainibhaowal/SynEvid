@@ -86,16 +86,7 @@ fn strip_json_comments(input: &str) -> String {
     out
 }
 
-fn load_tsconfig(root: &Path) -> (Option<String>, Vec<(String, Vec<String>)>) {
-    let tsconfig_path = root.join("tsconfig.json");
-    let Ok(raw) = std::fs::read_to_string(&tsconfig_path) else {
-        return (None, Vec::new());
-    };
-    let cleaned = strip_json_comments(&raw);
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) else {
-        return (None, Vec::new());
-    };
-
+fn parse_tsconfig_value(val: &serde_json::Value) -> (Option<String>, Vec<(String, Vec<String>)>) {
     let comp_opts = match val.get("compilerOptions") {
         Some(opts) => opts,
         None => return (None, Vec::new()),
@@ -126,6 +117,58 @@ fn load_tsconfig(root: &Path) -> (Option<String>, Vec<(String, Vec<String>)>) {
     }
     path_mappings.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
     (base_url, path_mappings)
+}
+
+fn load_tsconfig_recursive(
+    target_path: &Path,
+    depth: usize,
+    visited: &mut BTreeSet<PathBuf>,
+) -> (Option<String>, Vec<(String, Vec<String>)>) {
+    if depth > 4 {
+        return (None, Vec::new());
+    }
+    let canonical = target_path
+        .canonicalize()
+        .unwrap_or_else(|_| target_path.to_path_buf());
+    if !visited.insert(canonical) {
+        return (None, Vec::new());
+    }
+    let Ok(raw) = std::fs::read_to_string(target_path) else {
+        return (None, Vec::new());
+    };
+    let cleaned = strip_json_comments(&raw);
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) else {
+        return (None, Vec::new());
+    };
+
+    let (mut base_url, mut path_mappings) =
+        if let Some(ext_val) = val.get("extends").and_then(|v| v.as_str()) {
+            let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
+            let mut ext_path = parent_dir.join(ext_val);
+            if ext_path.extension().is_none() {
+                ext_path.set_extension("json");
+            }
+            load_tsconfig_recursive(&ext_path, depth + 1, visited)
+        } else {
+            (None, Vec::new())
+        };
+
+    let (child_base_url, child_mappings) = parse_tsconfig_value(&val);
+    if child_base_url.is_some() {
+        base_url = child_base_url;
+    }
+    for (pat, targets) in child_mappings {
+        path_mappings.retain(|(p, _)| p != &pat);
+        path_mappings.push((pat, targets));
+    }
+    path_mappings.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    (base_url, path_mappings)
+}
+
+fn load_tsconfig(root: &Path) -> (Option<String>, Vec<(String, Vec<String>)>) {
+    let mut visited = BTreeSet::new();
+    let tsconfig_path = root.join("tsconfig.json");
+    load_tsconfig_recursive(&tsconfig_path, 0, &mut visited)
 }
 
 fn normalize_slash_path(p: &str) -> String {
@@ -172,6 +215,21 @@ impl TypeScriptCompilerBridge {
     ) -> Self {
         self.base_url = base_url;
         self.path_mappings = mappings;
+        self
+    }
+
+    /// Parse and apply a tsconfig.json content string (e.g. from in-memory snapshot).
+    pub fn with_tsconfig_str(mut self, content: &str) -> Self {
+        let cleaned = strip_json_comments(content);
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+            let (base_url, mappings) = parse_tsconfig_value(&val);
+            if base_url.is_some() {
+                self.base_url = base_url;
+            }
+            if !mappings.is_empty() {
+                self.path_mappings = mappings;
+            }
+        }
         self
     }
 
@@ -1365,7 +1423,8 @@ impl TypeScriptAdapter {
             }
         }
         let imported = self.collect_imported_names(root, content, file_path);
-        let (field_types, local_types) = self.collect_receiver_types(root, content);
+        let (field_types, local_types) =
+            self.collect_receiver_types(root, content, &imported, symbol_index);
         let mut ctx = CallWalkContext {
             enclosing: None,
             enclosing_class: String::new(),
@@ -1836,22 +1895,158 @@ impl TypeScriptAdapter {
     /// `(class, field) -> type name` (property declarations + constructor
     /// parameter properties) and `local_types` maps
     /// `(enclosing_function_name, binding) -> type name` (annotated
-    /// parameters, annotated declarators, `new C(...)` initializers).
+    /// parameters, annotated declarators, `new C(...)` initializers, and
+    /// one-hop declared function returns `const x = getService();`).
     /// Only plain-identifier annotations are honored; generics, unions
     /// and computed shapes stay unresolved (honest syntactic scope).
-    fn collect_receiver_types(&self, root: Node, content: &str) -> (ReceiverMap, ReceiverMap) {
+    fn collect_receiver_types(
+        &self,
+        root: Node,
+        content: &str,
+        imported: &BTreeMap<String, String>,
+        symbol_index: &BTreeMap<String, SymbolId>,
+    ) -> (ReceiverMap, ReceiverMap) {
+        let declared_returns = self.collect_file_declared_returns(root, content);
         let mut fields = BTreeMap::new();
         let mut locals = BTreeMap::new();
-        self.collect_receiver_types_inner(root, content, "", "", &mut fields, &mut locals);
+        self.collect_receiver_types_inner(
+            root,
+            content,
+            "",
+            "",
+            &declared_returns,
+            imported,
+            symbol_index,
+            &mut fields,
+            &mut locals,
+        );
         (fields, locals)
     }
 
+    fn collect_file_declared_returns(&self, root: Node, content: &str) -> BTreeMap<String, String> {
+        let mut returns = BTreeMap::new();
+        self.collect_declared_returns_inner(root, content, &mut returns);
+        returns
+    }
+
+    fn collect_declared_returns_inner(
+        &self,
+        node: Node,
+        content: &str,
+        returns: &mut BTreeMap<String, String>,
+    ) {
+        let kind = node.kind();
+        if matches!(
+            kind,
+            "function_declaration"
+                | "generator_function_declaration"
+                | "function_signature"
+                | "method_definition"
+        ) {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let name = content[name_node.byte_range()].trim().to_string();
+                if let Some(ty) = self.plain_type_name(node, content) {
+                    returns.insert(name, ty);
+                }
+            }
+        } else if kind == "variable_declarator"
+            && let Some(name_node) = node.child_by_field_name("name")
+            && name_node.kind() == "identifier"
+        {
+            let name = content[name_node.byte_range()].trim().to_string();
+            if let Some(val) = node.child_by_field_name("value")
+                && matches!(val.kind(), "arrow_function" | "function_expression")
+                && let Some(ty) = self.plain_type_name(val, content)
+            {
+                returns.insert(name, ty);
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_declared_returns_inner(child, content, returns);
+        }
+    }
+
+    fn read_file_content(&self, rel_path: &str) -> Option<String> {
+        let clean = rel_path.trim_end_matches('/');
+        let exts = if clean.ends_with(".ts")
+            || clean.ends_with(".tsx")
+            || clean.ends_with(".js")
+            || clean.ends_with(".jsx")
+        {
+            vec![""]
+        } else {
+            vec![
+                "",
+                ".ts",
+                ".tsx",
+                ".js",
+                ".jsx",
+                "/index.ts",
+                "/index.tsx",
+                "/index.js",
+            ]
+        };
+        for ext in exts {
+            let candidate = format!("{}{}", clean, ext);
+            let paths = [
+                self.compiler_bridge.root_dir.join(&candidate),
+                PathBuf::from(&candidate),
+            ];
+            for p in &paths {
+                if let Ok(c) = std::fs::read_to_string(p) {
+                    return Some(c);
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_imported_function_return_type(
+        &self,
+        fn_name: &str,
+        target_mod: &str,
+        symbol_index: &BTreeMap<String, SymbolId>,
+    ) -> Option<String> {
+        let target_prefix = format!("{}::", target_mod);
+        let cand = symbol_index
+            .iter()
+            .find(|(qname, _)| qname.starts_with(&target_prefix) && short_name(qname) == fn_name)
+            .map(|(_, id)| id)
+            .or_else(|| {
+                let matches: Vec<&SymbolId> = symbol_index
+                    .iter()
+                    .filter(|(qname, _)| short_name(qname) == fn_name)
+                    .map(|(_, id)| id)
+                    .collect();
+                if matches.len() == 1 {
+                    Some(matches[0])
+                } else {
+                    None
+                }
+            });
+
+        let declaring_file = cand
+            .map(|c| c.as_str().split('#').next().unwrap_or(target_mod))
+            .unwrap_or(target_mod);
+
+        let content = self.read_file_content(declaring_file)?;
+        let tree = self.parse_tree(declaring_file, &content).ok()?;
+        let returns = self.collect_file_declared_returns(tree.root_node(), &content);
+        returns.get(fn_name).cloned()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn collect_receiver_types_inner(
         &self,
         node: Node,
         content: &str,
         enclosing_class: &str,
         enclosing_fn: &str,
+        declared_returns: &BTreeMap<String, String>,
+        imported: &BTreeMap<String, String>,
+        symbol_index: &BTreeMap<String, SymbolId>,
         fields: &mut BTreeMap<(String, String), String>,
         locals: &mut BTreeMap<(String, String), String>,
     ) {
@@ -1917,7 +2112,7 @@ impl TypeScriptAdapter {
             let field = content[name_node.byte_range()].to_string();
             fields.insert((enclosing_class.to_string(), field), ty);
         }
-        // `const x: C = ...` and `const x = new C(...)` bindings.
+        // `const x: C = ...`, `const x = new C(...)`, and `const x = getService()` bindings.
         if kind == "variable_declarator"
             && let Some(name_node) = node.child_by_field_name("name")
             && name_node.kind() == "identifier"
@@ -1926,14 +2121,33 @@ impl TypeScriptAdapter {
             let mut ty = self.plain_type_name(node, content);
             if ty.is_none()
                 && let Some(value) = node.child_by_field_name("value")
-                && value.kind() == "new_expression"
-                && let Some(ctor) = value.child_by_field_name("constructor").or_else(|| {
-                    let mut vc = value.walk();
-                    value.children(&mut vc).next()
-                })
-                && ctor.kind() == "identifier"
             {
-                ty = Some(content[ctor.byte_range()].to_string());
+                if value.kind() == "new_expression"
+                    && let Some(ctor) = value.child_by_field_name("constructor").or_else(|| {
+                        let mut vc = value.walk();
+                        value.children(&mut vc).next()
+                    })
+                    && ctor.kind() == "identifier"
+                {
+                    ty = Some(content[ctor.byte_range()].to_string());
+                } else if value.kind() == "call_expression"
+                    && let Some(func) = value.child_by_field_name("function").or_else(|| {
+                        let mut vc = value.walk();
+                        value.children(&mut vc).next()
+                    })
+                    && func.kind() == "identifier"
+                {
+                    let callee = &content[func.byte_range()];
+                    if let Some(ret) = declared_returns.get(callee) {
+                        ty = Some(ret.clone());
+                    } else if let Some(target_mod) = imported.get(callee) {
+                        ty = self.resolve_imported_function_return_type(
+                            callee,
+                            target_mod,
+                            symbol_index,
+                        );
+                    }
+                }
             }
             if let Some(ty) = ty {
                 locals.insert((next_fn.clone(), binding), ty);
@@ -1971,6 +2185,9 @@ impl TypeScriptAdapter {
                 content,
                 &next_class,
                 &next_fn,
+                declared_returns,
+                imported,
+                symbol_index,
                 fields,
                 locals,
             );
@@ -3117,5 +3334,57 @@ export function run() {
         assert_eq!(call_edge.target, helper_id);
         assert_eq!(call_edge.coverage, CoverageState::Verified);
         assert!(call_edge.provenance.contains("imported-resolved"));
+    }
+
+    #[test]
+    fn test_declared_return_type_propagation() {
+        let adapter = TypeScriptAdapter::new();
+        let ctx = ParseContext::new(".");
+        let consumer_file = test_file_unit("src/app.ts");
+        let consumer_code = r#"
+class UserService {
+    login() {}
+}
+
+function getService(): UserService {
+    return new UserService();
+}
+
+export function run() {
+    const s = getService();
+    s.login();
+}
+"#;
+        let parsed = adapter.parse(&ctx, &consumer_file, consumer_code).unwrap();
+        let symbols = adapter.extract_symbols(&parsed).unwrap();
+        let index = symbol_index_of(&symbols);
+        let edges = adapter.extract_edges(&parsed, &index).unwrap();
+
+        let login_id = SymbolId::new("src/app.ts#method:UserService.login");
+        let typed_call = edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls && e.target == login_id)
+            .expect("one-hop return-type propagation must resolve s.login()");
+
+        assert_eq!(typed_call.coverage, CoverageState::Verified);
+        assert_eq!(typed_call.provenance, "call_expression:typed-receiver");
+    }
+
+    #[test]
+    fn test_tsconfig_with_string_configuration() {
+        let tsconfig_json = r#"{
+            "compilerOptions": {
+                "baseUrl": "src",
+                "paths": {
+                    "@models/*": ["models/*"]
+                }
+            }
+        }"#;
+        let bridge = TypeScriptCompilerBridge::new(".").with_tsconfig_str(tsconfig_json);
+        assert_eq!(bridge.base_url.as_deref(), Some("src"));
+        assert_eq!(
+            bridge.resolve_module_specifier("src/main.ts", "@models/user"),
+            "src/models/user.ts"
+        );
     }
 }

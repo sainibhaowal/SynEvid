@@ -7,7 +7,7 @@
 use autopsy_diff::SemanticDiff;
 use autopsy_domain::{CoverageState, Finding, Severity};
 use autopsy_evidence::EvidenceReceipt;
-use autopsy_impact::ImpactResult;
+use autopsy_impact::{EdgeGrade, ImpactResult};
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,14 +66,34 @@ pub struct ChangeSetSummary {
     pub edge_deltas: Vec<serde_json::Value>,
 }
 
-/// Compact summary of impact tiers for token-efficient agent consumption (Tier 3.1).
+/// Counts for impact tiers (L5 summary mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpactCounts {
+    pub likely: usize,
+    pub possible: usize,
+    pub total: usize,
+}
+
+/// Tiered item entry in impact summary (L5 summary mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpactTierItem {
+    pub id: String,
+    pub grade: u32,
+    pub hops: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weakest_link: Option<String>,
+}
+
+/// Compact summary of impact tiers for token-efficient agent consumption (Tier 3.1 & L5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImpactSummaryTiers {
-    pub likely_count: usize,
-    pub possible_count: usize,
-    pub top_likely: Vec<String>,
-    pub top_possible: Vec<String>,
+    pub seed: String,
+    pub counts: ImpactCounts,
+    pub likely_top: Vec<ImpactTierItem>,
+    pub possible_top: Vec<ImpactTierItem>,
+    pub truncated: bool,
     pub impact_digest: String,
+    pub full_via: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -571,28 +591,73 @@ pub fn convert_impact_result_detail(
     summary_mode: bool,
 ) -> ImpactSummary {
     let total = impact.impacted_entities.len();
-    let likely: Vec<String> = impact
+    let seed_str = impact
+        .query
+        .seed_symbols
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let likely_top: Vec<ImpactTierItem> = impact
         .likely_affected
         .iter()
-        .map(|s| s.to_string())
+        .take(5)
+        .map(|s| {
+            let meta = impact.entity_meta.get(s);
+            ImpactTierItem {
+                id: s.to_string(),
+                grade: meta
+                    .map(|m| m.grade.score())
+                    .unwrap_or(EdgeGrade::Resolved.score()),
+                hops: meta.map(|m| m.hops).unwrap_or(1),
+                weakest_link: meta.and_then(|m| m.weakest_link.clone()),
+            }
+        })
         .collect();
-    let possible: Vec<String> = impact
+
+    let possible_top: Vec<ImpactTierItem> = impact
         .possibly_affected
         .iter()
-        .map(|s| s.to_string())
+        .take(5)
+        .map(|s| {
+            let meta = impact.entity_meta.get(s);
+            ImpactTierItem {
+                id: s.to_string(),
+                grade: meta.map(|m| m.grade.score()).unwrap_or(0),
+                hops: meta.map(|m| m.hops).unwrap_or(1),
+                weakest_link: meta.and_then(|m| m.weakest_link.clone()),
+            }
+        })
         .collect();
 
     let summary_tiers = ImpactSummaryTiers {
-        likely_count: likely.len(),
-        possible_count: possible.len(),
-        top_likely: likely.iter().take(5).cloned().collect(),
-        top_possible: possible.iter().take(5).cloned().collect(),
+        seed: seed_str,
+        counts: ImpactCounts {
+            likely: impact.likely_affected.len(),
+            possible: impact.possibly_affected.len(),
+            total,
+        },
+        likely_top,
+        possible_top,
+        truncated: impact.truncated,
         impact_digest: impact.impact_digest.clone(),
+        full_via: "--detail full".to_string(),
     };
 
     if summary_mode {
-        let top_likely: Vec<String> = likely.iter().take(5).cloned().collect();
-        let top_possible: Vec<String> = possible.iter().take(5).cloned().collect();
+        let top_likely: Vec<String> = impact
+            .likely_affected
+            .iter()
+            .take(5)
+            .map(|s| s.to_string())
+            .collect();
+        let top_possible: Vec<String> = impact
+            .possibly_affected
+            .iter()
+            .take(5)
+            .map(|s| s.to_string())
+            .collect();
         ImpactSummary {
             query: serde_json::json!({
                 "seed_symbols": impact.query.seed_symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -651,8 +716,16 @@ pub fn convert_impact_result_detail(
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
-            likely_affected: likely,
-            possibly_affected: possible,
+            likely_affected: impact
+                .likely_affected
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            possibly_affected: impact
+                .possibly_affected
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             ranked_top,
             total_impacted: Some(total),
             summary: Some(summary_tiers),
@@ -832,6 +905,7 @@ mod tests {
             impacted_entities: entities.iter().map(|e| SymbolId::new(*e)).collect(),
             likely_affected: entities.iter().map(|e| SymbolId::new(*e)).collect(),
             possibly_affected: Vec::new(),
+            entity_meta: std::collections::BTreeMap::new(),
             paths: paths
                 .iter()
                 .map(|p| p.iter().map(|s| SymbolId::new(*s)).collect())
@@ -854,8 +928,10 @@ mod tests {
         assert_eq!(summary.paths.len(), 0);
         assert!(summary.summary.is_some());
         let tiers = summary.summary.unwrap();
-        assert_eq!(tiers.likely_count, 7);
-        assert_eq!(tiers.top_likely.len(), 5);
+        assert_eq!(tiers.counts.likely, 7);
+        assert_eq!(tiers.likely_top.len(), 5);
+        assert_eq!(tiers.counts.total, 7);
+        assert_eq!(tiers.full_via, "--detail full");
         assert_eq!(tiers.impact_digest, "digest");
     }
 

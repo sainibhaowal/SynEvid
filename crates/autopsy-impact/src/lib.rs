@@ -174,6 +174,15 @@ pub struct ImpactQuery {
     pub profile: ImpactProfile,
 }
 
+/// Evidence and distance metadata for an impacted entity (L4 & L5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpactEntityMeta {
+    pub grade: EdgeGrade,
+    pub hops: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weakest_link: Option<String>,
+}
+
 /// Verifiable result of an impact analysis query.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImpactResult {
@@ -183,6 +192,8 @@ pub struct ImpactResult {
     pub likely_affected: Vec<SymbolId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possibly_affected: Vec<SymbolId>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub entity_meta: BTreeMap<SymbolId, ImpactEntityMeta>,
     pub paths: Vec<Vec<SymbolId>>,
     pub traversal_profile: String,
     pub truncated: bool,
@@ -208,6 +219,8 @@ impl ImpactEngine {
         let mut impacted_nodes: BTreeSet<NodeIndex> = BTreeSet::new();
         let mut shortest_paths: BTreeMap<NodeIndex, Vec<NodeIndex>> = BTreeMap::new();
         let mut node_bottlenecks: BTreeMap<NodeIndex, EdgeGrade> = BTreeMap::new();
+        let mut node_weakest_link: BTreeMap<NodeIndex, Option<String>> = BTreeMap::new();
+        let mut node_hops: BTreeMap<NodeIndex, usize> = BTreeMap::new();
         let mut truncated = false;
 
         // Collect strongly connected components for cycle condensation
@@ -247,6 +260,8 @@ impl ImpactEngine {
             visited_depth.insert(seed_idx, 0);
             impacted_nodes.insert(seed_idx);
             node_bottlenecks.insert(seed_idx, EdgeGrade::Declared);
+            node_weakest_link.insert(seed_idx, None);
+            node_hops.insert(seed_idx, 0);
             shortest_paths
                 .entry(seed_idx)
                 .or_insert_with(|| vec![seed_idx]);
@@ -297,12 +312,18 @@ impl ImpactEngine {
                             .copied()
                             .unwrap_or(EdgeGrade::Declared);
                         let cand_bottleneck = curr_grade.min(edge_grade);
+                        let cand_weakest = if cand_bottleneck == edge_grade {
+                            Some(edge_weight.provenance.clone())
+                        } else {
+                            node_weakest_link.get(&curr).cloned().flatten()
+                        };
 
                         let entry = node_bottlenecks
                             .entry(neighbor)
                             .or_insert(EdgeGrade::Unrated);
                         if cand_bottleneck > *entry {
                             *entry = cand_bottleneck;
+                            node_weakest_link.insert(neighbor, cand_weakest);
                         }
 
                         let next_depth = depth + 1;
@@ -321,6 +342,7 @@ impl ImpactEngine {
 
                             visited_depth.insert(neighbor, next_depth);
                             impacted_nodes.insert(neighbor);
+                            node_hops.entry(neighbor).or_insert(next_depth);
 
                             let mut next_path = path.clone();
                             next_path.push(neighbor);
@@ -356,20 +378,62 @@ impl ImpactEngine {
             .collect();
         impacted_entities.sort();
 
-        // Partition into likely_affected vs possibly_affected based on bottleneck confidence grade
+        // Build entity metadata and partition into likely vs possibly affected tiers
+        let mut entity_meta = BTreeMap::new();
         let mut likely_affected = Vec::new();
         let mut possibly_affected = Vec::new();
+
         for sym in &impacted_entities {
-            let is_likely = graph
-                .get_node_index(sym)
+            let idx_opt = graph.get_node_index(sym);
+            let grade = idx_opt
                 .and_then(|idx| node_bottlenecks.get(&idx))
-                .is_some_and(|&grade| grade >= EdgeGrade::Resolved);
-            if is_likely {
+                .copied()
+                .unwrap_or(EdgeGrade::Unrated);
+            let hops = idx_opt
+                .and_then(|idx| node_hops.get(&idx))
+                .copied()
+                .unwrap_or(0);
+            let weakest_link = idx_opt
+                .and_then(|idx| node_weakest_link.get(&idx))
+                .cloned()
+                .flatten();
+
+            entity_meta.insert(
+                sym.clone(),
+                ImpactEntityMeta {
+                    grade,
+                    hops,
+                    weakest_link,
+                },
+            );
+
+            if grade >= EdgeGrade::Resolved {
                 likely_affected.push(sym.clone());
             } else {
                 possibly_affected.push(sym.clone());
             }
         }
+
+        // Ranking inside tiers (L4): bottleneck desc -> hop count asc -> stable id asc
+        likely_affected.sort_by(|a, b| {
+            let meta_a = &entity_meta[a];
+            let meta_b = &entity_meta[b];
+            meta_b
+                .grade
+                .cmp(&meta_a.grade)
+                .then_with(|| meta_a.hops.cmp(&meta_b.hops))
+                .then_with(|| a.cmp(b))
+        });
+
+        possibly_affected.sort_by(|a, b| {
+            let meta_a = &entity_meta[a];
+            let meta_b = &entity_meta[b];
+            meta_b
+                .grade
+                .cmp(&meta_a.grade)
+                .then_with(|| meta_a.hops.cmp(&meta_b.hops))
+                .then_with(|| a.cmp(b))
+        });
 
         // Convert and rank paths deterministically
         // Ranking rule: 1. Shortest path length first, 2. Lexical order of SymbolId sequence
@@ -395,6 +459,7 @@ impl ImpactEngine {
             impacted_entities,
             likely_affected,
             possibly_affected,
+            entity_meta,
             paths: ranked_paths,
             traversal_profile: query.profile.name.clone(),
             truncated,
