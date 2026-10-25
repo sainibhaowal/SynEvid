@@ -9,6 +9,7 @@
 #
 #   $PREFIX/bin/autopsy                    the engine (default PREFIX=~/.local)
 #   $PREFIX/bin/synevid-lsp                the IDE language server
+#   $PREFIX/bin/synevid-ui                 the embedded web dashboard
 #   $PREFIX/share/synevid/mcp-server/index.js   single-file MCP server (agent bridge)
 #   $PREFIX/share/synevid/setup-agent-hosts.py  host-wiring helper
 #   $PREFIX/share/synevid/hooks/*.sh            advisory & task-complete agent hooks
@@ -242,7 +243,7 @@ try_release_triple() {
 
   mkdir -p "$BIN_DIR"
   local name
-  for name in autopsy autopsy.exe synevid-lsp synevid-lsp.exe; do
+  for name in autopsy autopsy.exe synevid-lsp synevid-lsp.exe synevid-ui synevid-ui.exe; do
     if [ -f "$root/$name" ]; then
       cp "$root/$name" "$BIN_DIR/$name"
       chmod +x "$BIN_DIR/$name" 2>/dev/null || true
@@ -291,11 +292,14 @@ source_build() {
     # shellcheck disable=SC1090,SC1091
     . "$HOME/.cargo/env"
   fi
-  (cd "$src" && cargo build --release --locked -p autopsy-cli -p synevid-lsp)
+  (cd "$src" && cargo build --release --locked -p autopsy-cli -p synevid-lsp -p synevid-ui)
   mkdir -p "$BIN_DIR"
   cp "$src/target/release/autopsy" "$BIN_DIR/autopsy"
   if [ -f "$src/target/release/synevid-lsp" ]; then
     cp "$src/target/release/synevid-lsp" "$BIN_DIR/synevid-lsp"
+  fi
+  if [ -f "$src/target/release/synevid-ui" ]; then
+    cp "$src/target/release/synevid-ui" "$BIN_DIR/synevid-ui"
   fi
   # Single-file MCP server, so agent hosts do not need npm at run time.
   if [ "${AUTOPSY_SKIP_MCP:-0}" != "1" ] \
@@ -408,6 +412,7 @@ cmd_check() {
     log "  autopsy: not installed (looked in $BIN_DIR)"
   fi
   if [ -x "$BIN_DIR/synevid-lsp" ]; then "$BIN_DIR/synevid-lsp" --version; fi
+  if [ -x "$BIN_DIR/synevid-ui" ]; then log "  synevid-ui:  $BIN_DIR/synevid-ui (web dashboard)"; fi
   if [ -f "$SHARE_DIR/mcp-server/index.js" ]; then
     log "  MCP server:  $SHARE_DIR/mcp-server/index.js"
   else
@@ -428,7 +433,7 @@ cmd_uninstall() {
   unwire_hosts
   remove_path_block
   local removed=0 name
-  for name in autopsy autopsy.exe synevid-lsp synevid-lsp.exe; do
+  for name in autopsy autopsy.exe synevid-lsp synevid-lsp.exe synevid-ui synevid-ui.exe; do
     if [ -e "$BIN_DIR/$name" ]; then
       rm -f "$BIN_DIR/$name"
       log "  removed $BIN_DIR/$name"
@@ -543,6 +548,7 @@ main() {
   log "SynEvid is installed — one installation serves every repository on this machine."
   log "  autopsy     -> $BIN_DIR/autopsy"
   [ -x "$BIN_DIR/synevid-lsp" ] && log "  synevid-lsp -> $BIN_DIR/synevid-lsp"
+  [ -x "$BIN_DIR/synevid-ui" ] && log "  synevid-ui  -> $BIN_DIR/synevid-ui"
   [ -f "$SHARE_DIR/mcp-server/index.js" ] && log "  MCP server  -> $SHARE_DIR/mcp-server/index.js"
   log ""
   log "Try it:  cd <any-repo> && autopsy init && autopsy doctor   (open a new terminal first)"

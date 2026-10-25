@@ -38,6 +38,9 @@ autopsy-contracts-distributed = { path = "../autopsy-contracts-distributed" }
 autopsy-telemetry = { path = "../autopsy-telemetry" }
 autopsy-mining = { path = "../autopsy-mining" }
 autopsy-catalog = { path = "../autopsy-catalog" }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+notify = { workspace = true }
 
 [dev-dependencies]
 # The lineage fixture builds real git objects without a git subprocess: a loose object is

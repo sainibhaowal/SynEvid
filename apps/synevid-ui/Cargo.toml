@@ -1,0 +1,25 @@
+[package]
+name = "synevid-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "synevid-ui"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+blake3 = { workspace = true }
+autopsy-cli = { path = "../../crates/autopsy-cli" }
+autopsy-domain = { path = "../../crates/autopsy-domain" }
+autopsy-graph = { path = "../../crates/autopsy-graph" }
+autopsy-impact = { path = "../../crates/autopsy-impact" }
+autopsy-report = { path = "../../crates/autopsy-report" }
+autopsy-invariants = { path = "../../crates/autopsy-invariants" }
+autopsy-repo = { path = "../../crates/autopsy-repo" }
+autopsy-storage = { path = "../../crates/autopsy-storage" }
+autopsy-symbols = { path = "../../crates/autopsy-symbols" }

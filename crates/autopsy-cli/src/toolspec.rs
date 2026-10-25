@@ -538,6 +538,42 @@ pub fn toolspec(analyzer_version: &str) -> Toolspec {
                 "self-describing; always verified",
             ),
             tool(
+                "ui",
+                "Launch or inspect embedded web dashboard configuration (synevid-ui)",
+                vec![
+                    arg("--port", "value", "Server port (default 3333)"),
+                    arg(
+                        "--host",
+                        "value",
+                        "Binding host address (default 127.0.0.1)",
+                    ),
+                    arg("--open", "flag", "Open browser upon launch"),
+                ],
+                "(none)",
+                false,
+                "presentation surface; always verified",
+            ),
+            tool(
+                "tui",
+                "Launch interactive terminal dashboard with real-time navigation",
+                vec![],
+                "(worktree-bound)",
+                false,
+                "presentation surface; always verified",
+            ),
+            tool(
+                "watch",
+                "Real-time live watch mode for automatic incremental verification on file edits",
+                vec![arg(
+                    "--debounce",
+                    "value",
+                    "Debounce duration in milliseconds (default 200)",
+                )],
+                "(worktree-bound)",
+                false,
+                "presentation surface; always verified",
+            ),
+            tool(
                 "version",
                 "Display the engine version and adapter capabilities",
                 vec![],

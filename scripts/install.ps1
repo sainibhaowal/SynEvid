@@ -9,6 +9,7 @@
     serves every repository on the machine:
       $Prefix\bin\autopsy.exe                   the engine (default Prefix=~\.local)
       $Prefix\bin\synevid-lsp.exe               the IDE language server
+      $Prefix\bin\synevid-ui.exe                the embedded web dashboard
       $Prefix\share\synevid\mcp-server\index.js single-file MCP server (agent bridge)
       $Prefix\share\synevid\setup-agent-hosts.py host-wiring helper
       $Prefix\share\synevid\hooks\*.sh          advisory & task-complete agent hooks
@@ -199,7 +200,7 @@ if ($Uninstall) {
     Invoke-HostWiring -Unwire
     Remove-UserPathEntry
     $removed = $false
-    foreach ($name in @("autopsy.exe", "autopsy", "synevid-lsp.exe", "synevid-lsp")) {
+    foreach ($name in @("autopsy.exe", "autopsy", "synevid-lsp.exe", "synevid-lsp", "synevid-ui.exe", "synevid-ui")) {
         $p = Join-Path $BinDir $name
         if (Test-Path $p) {
             Remove-Item -Force $p
@@ -300,7 +301,7 @@ if ($env:AUTOPSY_SKIP_BUILD -eq "1") {
             $foundExe = Get-ChildItem -Path $outDir -Recurse -Filter "autopsy.exe" | Select-Object -First 1
             if ($foundExe) {
                 $rootDir = $foundExe.Directory.FullName
-                foreach ($binName in @("autopsy.exe", "synevid-lsp.exe")) {
+                foreach ($binName in @("autopsy.exe", "synevid-lsp.exe", "synevid-ui.exe")) {
                     $srcBin = Join-Path $rootDir $binName
                     if (Test-Path $srcBin) {
                         Copy-Item -Force $srcBin (Join-Path $BinDir $binName)
@@ -329,10 +330,13 @@ if ($env:AUTOPSY_SKIP_BUILD -eq "1") {
         }
         Push-Location $repoCheckout
         try {
-            & cargo build --release --locked -p autopsy-cli -p synevid-lsp
+            & cargo build --release --locked -p autopsy-cli -p synevid-lsp -p synevid-ui
             Copy-Item -Force "target\release\autopsy.exe" (Join-Path $BinDir "autopsy.exe")
             if (Test-Path "target\release\synevid-lsp.exe") {
                 Copy-Item -Force "target\release\synevid-lsp.exe" (Join-Path $BinDir "synevid-lsp.exe")
+            }
+            if (Test-Path "target\release\synevid-ui.exe") {
+                Copy-Item -Force "target\release\synevid-ui.exe" (Join-Path $BinDir "synevid-ui.exe")
             }
             Install-ExtrasFromDir $repoCheckout
         } finally {
@@ -362,6 +366,9 @@ Write-Output "SynEvid is installed - one installation serves every repository on
 Write-Output "  autopsy     -> $installedAutopsy"
 if (Test-Path (Join-Path $BinDir "synevid-lsp.exe")) {
     Write-Output "  synevid-lsp -> $(Join-Path $BinDir 'synevid-lsp.exe')"
+}
+if (Test-Path (Join-Path $BinDir "synevid-ui.exe")) {
+    Write-Output "  synevid-ui  -> $(Join-Path $BinDir 'synevid-ui.exe')"
 }
 if (Test-Path (Join-Path $ShareDir "mcp-server\index.js")) {
     Write-Output "  MCP server  -> $(Join-Path $ShareDir 'mcp-server\index.js')"

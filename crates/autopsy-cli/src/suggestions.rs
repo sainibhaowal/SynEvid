@@ -150,6 +150,9 @@ pub fn record_suggestion(
         crate::Commands::BlastRadius { .. } => "blast-radius",
         crate::Commands::Doctor => "doctor",
         crate::Commands::Tools => "tools",
+        crate::Commands::Ui { .. } => "ui",
+        crate::Commands::Tui => "tui",
+        crate::Commands::Watch { .. } => "watch",
         crate::Commands::Version => "version",
         crate::Commands::Init { .. } => "init",
     };

@@ -11,12 +11,15 @@
 //! - 4: UNSUPPORTED / UNKNOWN (Unsupported syntax or unknown coverage in strict mode)
 
 pub mod extensions;
+pub mod tui;
+pub mod ui;
+pub mod watch;
 
 use autopsy_adapter_api::{LanguageAdapter, ParseContext, ParsedFile};
 mod init;
 mod session;
 mod suggestions;
-mod toolspec;
+pub mod toolspec;
 mod workspace;
 
 pub use init::{InitReport, handle_init};
@@ -699,6 +702,26 @@ pub enum Commands {
     /// Emit the machine-readable tool specification: every subcommand, its flags,
     /// exit-code contract, pinning surface, and envelope semantics (Tier 3.1)
     Tools,
+    /// Launch or connect to the embedded web dashboard (synevid-ui)
+    Ui {
+        /// Server port (default 3333)
+        #[arg(long, default_value_t = 3333)]
+        port: u16,
+        /// Host binding address (default 127.0.0.1)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Automatically open browser on launch
+        #[arg(long)]
+        open: bool,
+    },
+    /// Launch interactive terminal dashboard (TUI) with real-time navigation
+    Tui,
+    /// Real-time live watch mode for automatic incremental verification on file edits
+    Watch {
+        /// Debounce duration in milliseconds before triggering analysis
+        #[arg(long, default_value_t = 200)]
+        debounce: u64,
+    },
     /// Display engine version and adapter capabilities
     Version,
 }
@@ -775,7 +798,7 @@ pub fn run_cli(args: &[String]) -> i32 {
     }
 }
 
-fn execute(cli: &Cli) -> Result<i32, CliError> {
+pub fn execute(cli: &Cli) -> Result<i32, CliError> {
     match &cli.command {
         Commands::Baseline {
             revision,
@@ -1055,6 +1078,9 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
         Commands::Doctor => handle_doctor(cli),
         Commands::Init { force } => handle_init(cli, *force),
         Commands::Tools => handle_tools(cli),
+        Commands::Ui { port, host, open } => ui::handle_ui(cli, *port, host, *open),
+        Commands::Tui => tui::run_tui(cli),
+        Commands::Watch { debounce } => watch::run_watch(cli, *debounce),
         Commands::Version => handle_version(cli),
     }
 }

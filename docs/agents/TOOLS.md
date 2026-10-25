@@ -101,6 +101,14 @@ next_action: <concrete repair step>
 | `tools` | Emit this specification (Tier 3.1) | none | no |
 | `version` | Display the engine version and adapter capabilities | none | no |
 
+### 4.6 Presentation & Real-Time Observation Suite
+
+| Command | Purpose | Pinning | Compact |
+|---|---|---|---|
+| `ui` | Launch or configure embedded web inspector dashboard (`synevid-ui`) | none | no |
+| `tui` | Interactive terminal dashboard with real-time keyboard navigation | worktree-bound | no |
+| `watch` | Real-time live watch mode with debounced incremental re-verification | worktree-bound | no |
+
 ## 5. Coverage semantics
 
 - **verified** — all analyzed files carried full adapter coverage for the construct in question.

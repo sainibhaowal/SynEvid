@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SynEvid — Code Autopsy Dashboard</title>
+<style>
+  :root {
+    --bg-base: #070a10;
+    --bg-surface: #0d121d;
+    --bg-elevated: #131b2a;
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-emerald: #10b981;
+    --accent-amber: #f59e0b;
+    --accent-rose: #f43f5e;
+    --accent-cyan: #06b6d4;
+    --accent-indigo: #6366f1;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  header {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .brand { display: flex; align-items: center; gap: 0.75rem; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; }
+  .brand-badge {
+    background: linear-gradient(135deg, var(--accent-indigo), var(--accent-cyan));
+    color: #fff;
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+  }
+  .header-actions { display: flex; align-items: center; gap: 1rem; }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: var(--accent-emerald);
+    padding: 0.3rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+  }
+  .status-pill.fail { background: rgba(244, 63, 94, 0.1); border-color: rgba(244, 63, 94, 0.3); color: var(--accent-rose); }
+  .btn-refresh {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.15s ease;
+  }
+  .btn-refresh:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--border-strong); }
+  nav.tabs {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 1.5rem;
+    display: flex;
+    gap: 1.5rem;
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.85rem 0.25rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    position: relative;
+    transition: color 0.15s ease;
+  }
+  .tab-btn:hover { color: var(--text-primary); }
+  .tab-btn.active { color: var(--text-primary); }
+  .tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent-cyan);
+  }
+  main { flex: 1; padding: 1.5rem; max-width: 1400px; margin: 0 auto; width: 100%; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 1.25rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  .card-header {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+  .card-value { font-size: 1.85rem; font-weight: 700; color: var(--text-primary); }
+  .card-subtext { font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem; }
+  .panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+  .panel-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; }
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; text-align: left; }
+  table.data-table th { padding: 0.75rem 1rem; background: var(--bg-elevated); color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border-subtle); }
+  table.data-table td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-subtle); }
+  table.data-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+  .badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+  }
+  .badge-pass { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+  .badge-fail { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); border: 1px solid rgba(244, 63, 94, 0.3); }
+  .badge-warn { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+  .badge-info { background: rgba(99, 102, 241, 0.15); color: var(--accent-indigo); border: 1px solid rgba(99, 102, 241, 0.3); }
+  .search-box {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .search-box input {
+    flex: 1;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: var(--font-mono);
+    outline: none;
+  }
+  .search-box input:focus { border-color: var(--accent-cyan); }
+  .search-box button {
+    background: var(--accent-cyan);
+    color: #070a10;
+    border: none;
+    font-weight: 600;
+    padding: 0.6rem 1.25rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .tier-container { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .tier-column { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 1rem; }
+  .tier-header { font-weight: 600; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; font-size: 0.95rem; }
+  .tier-item {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .graph-canvas-container {
+    background: #04060a;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    height: 420px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  canvas#graphCanvas { width: 100%; height: 100%; display: block; }
+  .timeline-item {
+    border-left: 2px solid var(--border-strong);
+    padding-left: 1.25rem;
+    position: relative;
+    margin-bottom: 1.5rem;
+  }
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -6px;
+    top: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-cyan);
+  }
+  .timeline-header { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .timeline-meta { font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono); margin-bottom: 0.5rem; }
+  .timeline-desc { font-size: 0.85rem; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span>SYNEVID</span>
+    <span class="brand-badge">CODE AUTOPSY</span>
+  </div>
+  <div class="header-actions">
+    <div id="coveragePill" class="status-pill">COVERAGE: VERIFIED</div>
+    <div id="verifyPill" class="status-pill">PASS</div>
+    <button class="btn-refresh" onclick="refreshAll()">Refresh</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" onclick="switchTab('overview')">Overview</button>
+  <button class="tab-btn" onclick="switchTab('blast')">Blast Radius</button>
+  <button class="tab-btn" onclick="switchTab('verify')">Invariant Verifications</button>
+  <button class="tab-btn" onclick="switchTab('trajectory')">Forensic Trajectory</button>
+</nav>
+
+<main>
+  <!-- OVERVIEW TAB -->
+  <div id="tab-overview" class="tab-content active">
+    <div class="grid-cards">
+      <div class="card">
+        <div class="card-header">Current Snapshot</div>
+        <div class="card-value" id="statSnapshot" style="font-size:1.1rem; word-break:break-all;">-</div>
+        <div class="card-subtext" id="statRepo">Repository: -</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Semantic Coverage</div>
+        <div class="card-value" id="statCoverage" style="color:var(--accent-emerald);">-</div>
+        <div class="card-subtext" id="statCoverageFiles">Files: -</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Graph Multiverse</div>
+        <div class="card-value" id="statSymbols">-</div>
+        <div class="card-subtext" id="statEdges">Edges: -</div>
+      </div>
+      <div class="card">
+        <div class="card-header">Rule Invariants</div>
+        <div class="card-value" id="statFindings">-</div>
+        <div class="card-subtext" id="statPassRate">Status: -</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Active Workspace Architecture</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody id="overviewProps">
+          <tr><td>Analyzer Version</td><td>0.1.0 (offline, deterministic)</td></tr>
+          <tr><td>Hardware Invariant</td><td>Path normalization (/) / CRLF-LF unified</td></tr>
+          <tr><td>Correctness Model</td><td>Zero-LLM core / Integer ppm confidence grading</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- BLAST RADIUS TAB -->
+  <div id="tab-blast" class="tab-content">
+    <div class="panel">
+      <div class="panel-title">Interactive Blast Radius & Widest-Path Propagation</div>
+      <div class="search-box">
+        <input type="text" id="impactSeedInput" placeholder="Enter seed symbol (e.g. src/services/userService.ts#fn:getService)...">
+        <button onclick="runImpactQuery()">Analyze Impact</button>
+      </div>
+
+      <div class="graph-canvas-container">
+        <canvas id="graphCanvas"></canvas>
+      </div>
+
+      <div class="tier-container">
+        <div class="tier-column">
+          <div class="tier-header">
+            <span style="color:var(--accent-emerald);">● Likely Affected (Grade &ge; Resolved)</span>
+            <span class="badge badge-pass" id="likelyCount">0</span>
+          </div>
+          <div id="likelyList">
+            <div style="color:var(--text-muted); font-size:0.85rem;">Run an impact query to see high-confidence callers/callees.</div>
+          </div>
+        </div>
+
+        <div class="tier-column">
+          <div class="tier-header">
+            <span style="color:var(--accent-amber);">▲ Possibly Affected (Structural / Weakest Link)</span>
+            <span class="badge badge-warn" id="possibleCount">0</span>
+          </div>
+          <div id="possibleList">
+            <div style="color:var(--text-muted); font-size:0.85rem;">Structural or name-level matches will appear here.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VERIFICATION TAB -->
+  <div id="tab-verify" class="tab-content">
+    <div class="panel">
+      <div class="panel-title">
+        <span>Evaluated Invariant Findings</span>
+        <span class="badge badge-info" id="verifySummaryBadge">0 Findings</span>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Severity</th>
+            <th>Rule ID</th>
+            <th>Message</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody id="findingsTableBody">
+          <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Loading findings...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TRAJECTORY TAB -->
+  <div id="tab-trajectory" class="tab-content">
+    <div class="panel">
+      <div class="panel-title">AI Agent Task Forensic Trajectory Ledger</div>
+      <div id="trajectoryTimeline" style="margin-top:1rem;">
+        <div style="color:var(--text-muted); font-size:0.85rem;">Scanning .autopsy/runs/ ledger...</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+    if (name === 'blast') renderDummyGraph();
+  }
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      document.getElementById('statSnapshot').innerText = data.snapshot_id || 'Active Worktree';
+      document.getElementById('statRepo').innerText = 'Repository: ' + (data.repo_root || '.');
+      document.getElementById('statCoverage').innerText = (data.coverage_state || 'VERIFIED').toUpperCase();
+      document.getElementById('statCoverageFiles').innerText = 'Scanned files: ' + (data.files_scanned || 0);
+      document.getElementById('statSymbols').innerText = data.symbol_count || 0;
+      document.getElementById('statEdges').innerText = 'Edges: ' + (data.edge_count || 0);
+      document.getElementById('coveragePill').innerText = 'COVERAGE: ' + (data.coverage_state || 'VERIFIED').toUpperCase();
+    } catch(e) { console.error('Status fetch error:', e); }
+  }
+
+  async function fetchVerify() {
+    try {
+      const res = await fetch('/api/verify');
+      const data = await res.json();
+      const findings = data.findings || [];
+      const tbody = document.getElementById('findingsTableBody');
+      tbody.innerHTML = '';
+      let fails = 0;
+      if (findings.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--accent-emerald);">All invariants satisfied (100% Pass)</td></tr>';
+      } else {
+        findings.forEach(f => {
+          if (f.status === 'fail') fails++;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><span class="badge ${f.status === 'fail' ? 'badge-fail' : 'badge-pass'}">${f.status.toUpperCase()}</span></td>
+            <td><span class="badge ${f.severity === 'error' ? 'badge-fail' : 'badge-warn'}">${f.severity.toUpperCase()}</span></td>
+            <td style="font-family:var(--font-mono); font-weight:600;">${f.rule_id}</td>
+            <td>${f.message}</td>
+            <td style="font-family:var(--font-mono); color:var(--text-muted);">${f.locations && f.locations[0] ? f.locations[0].path : '-'}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+      document.getElementById('statFindings').innerText = findings.length;
+      document.getElementById('statPassRate').innerText = fails === 0 ? 'All Rules Passed' : `${fails} Failing Rules`;
+      document.getElementById('verifyPill').className = fails === 0 ? 'status-pill' : 'status-pill fail';
+      document.getElementById('verifyPill').innerText = fails === 0 ? 'PASS' : 'FAIL';
+      document.getElementById('verifySummaryBadge').innerText = `${findings.length} Evaluated Rules`;
+    } catch(e) { console.error('Verify fetch error:', e); }
+  }
+
+  async function fetchTrajectory() {
+    try {
+      const res = await fetch('/api/trajectory');
+      const data = await res.json();
+      const container = document.getElementById('trajectoryTimeline');
+      container.innerHTML = '';
+      const runs = data.runs || [];
+      if (runs.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">No forensic session runs recorded yet in .autopsy/runs/.</div>';
+        return;
+      }
+      runs.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+        item.innerHTML = `
+          <div class="timeline-header">Session ${r.session_id} &bull; <span class="badge ${r.exit_code === 0 ? 'badge-pass' : 'badge-fail'}">Exit ${r.exit_code}</span></div>
+          <div class="timeline-meta">Digest: ${r.report_digest || '-'} &bull; Snapshots: ${r.started_snapshot || '-'} &rarr; ${r.completed_snapshot || '-'}</div>
+          <div class="timeline-desc">Steps executed: ${r.steps ? r.steps.length : 0}. Guidance: ${r.next_agent_guidance || 'None'}</div>
+        `;
+        container.appendChild(item);
+      });
+    } catch(e) { console.error('Trajectory fetch error:', e); }
+  }
+
+  async function runImpactQuery() {
+    const seed = document.getElementById('impactSeedInput').value.trim();
+    if (!seed) return;
+    try {
+      const res = await fetch(`/api/impact?seed=${encodeURIComponent(seed)}&detail=full`);
+      const data = await res.json();
+      const likely = data.likely_affected || [];
+      const possible = data.possibly_affected || [];
+      document.getElementById('likelyCount').innerText = likely.length;
+      document.getElementById('possibleCount').innerText = possible.length;
+
+      const likelyList = document.getElementById('likelyList');
+      likelyList.innerHTML = '';
+      if (likely.length === 0) likelyList.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">No high-confidence nodes reached.</div>';
+      else {
+        likely.forEach(id => {
+          const div = document.createElement('div');
+          div.className = 'tier-item';
+          div.innerHTML = `<span>${id}</span> <span class="badge badge-pass">RESOLVED</span>`;
+          likelyList.appendChild(div);
+        });
+      }
+
+      const possibleList = document.getElementById('possibleList');
+      possibleList.innerHTML = '';
+      if (possible.length === 0) possibleList.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem;">No secondary structural nodes.</div>';
+      else {
+        possible.forEach(id => {
+          const div = document.createElement('div');
+          div.className = 'tier-item';
+          div.innerHTML = `<span>${id}</span> <span class="badge badge-warn">STRUCTURAL</span>`;
+          possibleList.appendChild(div);
+        });
+      }
+
+      drawGraph(seed, likely, possible);
+    } catch(e) { console.error('Impact query error:', e); }
+  }
+
+  function drawGraph(seed, likely, possible) {
+    const canvas = document.getElementById('graphCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+
+    // Draw seed node
+    ctx.fillStyle = '#06b6d4';
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 14, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('SEED', centerX - 14, centerY - 20);
+
+    // Draw likely nodes in green ring
+    const lRadius = 110;
+    likely.slice(0, 8).forEach((node, i) => {
+      const angle = (i / Math.max(likely.length, 1)) * 2 * Math.PI;
+      const x = centerX + lRadius * Math.cos(angle);
+      const y = centerY + lRadius * Math.sin(angle);
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+
+    // Draw possible nodes in amber outer ring
+    const pRadius = 180;
+    possible.slice(0, 12).forEach((node, i) => {
+      const angle = (i / Math.max(possible.length, 1)) * 2 * Math.PI + 0.3;
+      const x = centerX + pRadius * Math.cos(angle);
+      const y = centerY + pRadius * Math.sin(angle);
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+  }
+
+  function renderDummyGraph() {
+    const canvas = document.getElementById('graphCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+    ctx.fillStyle = '#64748b';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('Enter a symbol above to render interactive blast-radius dependency graph.', 40, canvas.height / 2);
+  }
+
+  function refreshAll() {
+    fetchStatus();
+    fetchVerify();
+    fetchTrajectory();
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    refreshAll();
+  });
+</script>
+</body>
+</html>
