@@ -119,7 +119,7 @@ test('autopsy://tools resource serves the full deterministic toolspec', async (t
   const read = await client.request('resources/read', { uri: 'autopsy://tools' });
   const spec = JSON.parse(read.contents[0].text);
   assert.equal(spec.format_version, '0.0.1');
-  assert.equal(spec.tools.length, 22, 'every subcommand is listed');
+  assert.equal(spec.tools.length, 23, 'every subcommand is listed (incl. init)');
   assert.ok(spec.exit_codes, 'the exit-code contract travels with the spec');
   assert.ok(spec.feedback, 'the feedback channel travels with the spec');
 });

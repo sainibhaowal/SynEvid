@@ -1,14 +1,19 @@
-//! Session receipts (Tier 2.5): a deterministic, agent-facing record of the
-//! repair loop — impact → edit → verify → repair → re-verify.
+//! Session receipts & Task-Completion Forensic Trajectory Ledger (Tier 2.5 + 3.7):
+//! a deterministic, agent- and developer-facing record of the repair loop —
+//! impact → edit → verify → repair → re-verify.
 //!
 //! Design constraints (see AGENTS.md invariants):
 //! - No wall-clock timestamps: identical inputs produce byte-identical store
-//!   contents. Ordering comes from a stable, monotonically assigned step
-//!   index plus the BLAKE3 digest chain of the record.
+//!   contents and forensic run artifacts. Ordering comes from a stable,
+//!   monotonically assigned step index plus the BLAKE3 digest chain of the record.
 //! - The close verdict derives ONLY from recorded steps: the last verify-like
 //!   step's exit code, `unknown` when none was recorded. Honest — never
 //!   `pass` without evidence.
 //! - Store JSON uses `BTreeMap` maps for canonical key order.
+//! - Every `session close` (or `session report`) writes a self-contained
+//!   Forensic Trajectory Report to `.autopsy/runs/<session_id>.{json,md}` and
+//!   `.autopsy/runs/latest.{json,md}` so both human developers and subsequent
+//!   AI models can read what happened on the prior run without repeating mistakes.
 //!
 //! Store location: `<repo_root>/.autopsy/sessions.json`. Writes replace the
 //! file atomically (write + rename), mirroring the engine's storage write.
@@ -64,6 +69,26 @@ pub struct SessionRecord {
     pub receipt: Option<SessionReceipt>,
 }
 
+/// Deterministic Forensic Trajectory Report persisted under `.autopsy/runs/`
+/// on task completion so developers and next-turn AI agents have exact memory
+/// of prior trajectory, snapshots, repair notes, and remaining obligations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskForensicReport {
+    pub format_version: String,
+    pub session_id: String,
+    pub status: String,
+    pub verdict: String,
+    pub evidence_exit_code: Option<i32>,
+    pub evidence_step: String,
+    pub started_snapshot: Option<String>,
+    pub completed_snapshot: Option<String>,
+    pub total_steps: usize,
+    pub failed_steps: usize,
+    pub steps: Vec<SessionStep>,
+    pub next_agent_guidance: String,
+    pub report_digest: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStore {
     pub format_version: String,
@@ -113,11 +138,19 @@ pub enum SessionAction {
         #[arg(long)]
         session_id: String,
     },
-    /// Close the session and emit the honest repair-loop receipt.
+    /// Close the session, persist `.autopsy/runs/{<session_id>,latest}.{json,md}`,
+    /// and emit the honest repair-loop receipt.
     Close {
         /// The session id.
         #[arg(long)]
         session_id: String,
+    },
+    /// Generate (or read) the Forensic Trajectory Report for a session (defaults
+    /// to the latest session) and write `.autopsy/runs/{<session_id>,latest}.{json,md}`.
+    Report {
+        /// Optional session id (defaults to the most recent session in the store).
+        #[arg(long)]
+        session_id: Option<String>,
     },
     /// List every recorded session id with status.
     #[command(name = "list")]
@@ -126,6 +159,10 @@ pub enum SessionAction {
 
 fn store_path(cli: &Cli) -> PathBuf {
     cli.repo_root.join(".autopsy").join("sessions.json")
+}
+
+fn runs_dir(cli: &Cli) -> PathBuf {
+    cli.repo_root.join(".autopsy").join("runs")
 }
 
 fn load_store(cli: &Cli) -> Result<SessionStore, CliError> {
@@ -177,9 +214,6 @@ fn session_id_for(cli: &Cli, counter: u64) -> String {
 }
 
 fn next_counter(store: &SessionStore) -> u64 {
-    // The counter is derived from what the store already holds: for each
-    // session, the id is positional only by convention; uniqueness is what
-    // matters and BTreeMap ordering keeps it deterministic.
     store.sessions.len() as u64
 }
 
@@ -222,6 +256,181 @@ fn close_receipt(session: &SessionRecord, session_id: &str) -> SessionReceipt {
     }
 }
 
+fn latest_stored_snapshot_id(cli: &Cli) -> Option<String> {
+    if let Ok(storage) = get_storage(cli)
+        && let Ok(Some(snapshot)) = storage.get_latest_snapshot()
+    {
+        return Some(snapshot.snapshot_id.to_string());
+    }
+    None
+}
+
+fn build_forensic_report(cli: &Cli, session: &SessionRecord) -> TaskForensicReport {
+    let receipt = session
+        .receipt
+        .clone()
+        .unwrap_or_else(|| close_receipt(session, &session.session_id));
+    let completed_snapshot = session
+        .steps
+        .iter()
+        .rev()
+        .find_map(|s| s.snapshot_id.clone())
+        .or_else(|| latest_stored_snapshot_id(cli))
+        .or_else(|| session.started_snapshot.clone());
+    let failed_steps = session.steps.iter().filter(|s| s.exit_code != 0).count();
+
+    let next_agent_guidance = match receipt.verdict.as_str() {
+        "pass" => format!(
+            "PASS: Prior session {} closed cleanly on step `{}` (exit 0). Safe to start the next task from snapshot {}.",
+            session.session_id,
+            receipt.evidence_step,
+            completed_snapshot.as_deref().unwrap_or("worktree")
+        ),
+        "fail" => {
+            let last_fail = session
+                .steps
+                .iter()
+                .rfind(|s| s.exit_code != 0)
+                .map(|s| s.invoked.join(" "))
+                .unwrap_or_else(|| receipt.evidence_step.clone());
+            format!(
+                "REPAIR REQUIRED: Prior session {} failed on `autopsy {}` (exit {}). Do NOT build new features on top of this state until `autopsy verify` passes with exit 0.",
+                session.session_id,
+                last_fail,
+                receipt.evidence_exit_code.unwrap_or(2)
+            )
+        }
+        _ => format!(
+            "UNVERIFIED: Session {} recorded no conclusive verification step (`{}`). Run `autopsy baseline --persist` and `autopsy verify` before editing.",
+            session.session_id, receipt.evidence_step
+        ),
+    };
+
+    let mut hasher = Hasher::new();
+    hasher.update(b"autopsy-forensic-report-v1");
+    hasher.update(session.session_id.as_bytes());
+    hasher.update(session.status.as_bytes());
+    hasher.update(receipt.verdict.as_bytes());
+    if let Some(code) = receipt.evidence_exit_code {
+        hasher.update(&code.to_le_bytes());
+    }
+    hasher.update(receipt.evidence_step.as_bytes());
+    if let Some(s) = &session.started_snapshot {
+        hasher.update(s.as_bytes());
+    }
+    if let Some(s) = &completed_snapshot {
+        hasher.update(s.as_bytes());
+    }
+    for step in &session.steps {
+        hasher.update(&step.index.to_le_bytes());
+        for arg in &step.invoked {
+            hasher.update(arg.as_bytes());
+        }
+        hasher.update(&step.exit_code.to_le_bytes());
+        if let Some(snap) = &step.snapshot_id {
+            hasher.update(snap.as_bytes());
+        }
+        if let Some(note) = &step.note {
+            hasher.update(note.as_bytes());
+        }
+    }
+    let report_digest = hasher.finalize().to_hex().to_string();
+
+    TaskForensicReport {
+        format_version: SESSION_STORE_FORMAT.to_string(),
+        session_id: session.session_id.clone(),
+        status: session.status.clone(),
+        verdict: receipt.verdict,
+        evidence_exit_code: receipt.evidence_exit_code,
+        evidence_step: receipt.evidence_step,
+        started_snapshot: session.started_snapshot.clone(),
+        completed_snapshot,
+        total_steps: session.steps.len(),
+        failed_steps,
+        steps: session.steps.clone(),
+        next_agent_guidance,
+        report_digest,
+    }
+}
+
+fn render_forensic_markdown(report: &TaskForensicReport) -> String {
+    let mut md = String::new();
+    md.push_str("# SynEvid Task-Completion Forensic Report\n\n");
+    md.push_str(&format!("- **Session ID:** `{}`\n", report.session_id));
+    md.push_str(&format!("- **Status:** `{}`\n", report.status));
+    md.push_str(&format!(
+        "- **Verdict:** `{}` (evidence step: `{}`, exit code: `{}`)\n",
+        report.verdict.to_uppercase(),
+        report.evidence_step,
+        report
+            .evidence_exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    ));
+    md.push_str(&format!(
+        "- **Started Snapshot:** `{}`\n",
+        report.started_snapshot.as_deref().unwrap_or("none")
+    ));
+    md.push_str(&format!(
+        "- **Completed Snapshot:** `{}`\n",
+        report.completed_snapshot.as_deref().unwrap_or("none")
+    ));
+    md.push_str(&format!(
+        "- **Steps Executed:** {} ({} failed)\n",
+        report.total_steps, report.failed_steps
+    ));
+    md.push_str(&format!(
+        "- **Report Digest (BLAKE3):** `{}`\n\n",
+        report.report_digest
+    ));
+
+    md.push_str("## Guidance for Next AI Agent / Developer\n\n");
+    md.push_str(&format!("> {}\n\n", report.next_agent_guidance));
+
+    md.push_str("## Recorded Trajectory\n\n");
+    if report.steps.is_empty() {
+        md.push_str("_No evidence steps were recorded in this session._\n");
+    } else {
+        md.push_str("| Step | Command | Exit Code | Pinned Snapshot | Repair / Evidence Note |\n");
+        md.push_str("| :--- | :--- | :---: | :--- | :--- |\n");
+        for step in &report.steps {
+            let cmd = format!("`autopsy {}`", step.invoked.join(" "));
+            let snap = step.snapshot_id.as_deref().unwrap_or("-");
+            let note = step.note.as_deref().unwrap_or("-");
+            md.push_str(&format!(
+                "| {} | {} | `{}` | `{}` | {} |\n",
+                step.index, cmd, step.exit_code, snap, note
+            ));
+        }
+    }
+    md
+}
+
+fn persist_forensic_report(cli: &Cli, report: &TaskForensicReport) -> Result<(), CliError> {
+    let dir = runs_dir(cli);
+    fs::create_dir_all(&dir).map_err(CliError::Io)?;
+    let json_bytes =
+        serde_json::to_string_pretty(report).map_err(|e| CliError::Storage(e.to_string()))?;
+    let md_bytes = render_forensic_markdown(report);
+
+    let session_json = dir.join(format!("{}.json", report.session_id));
+    let session_md = dir.join(format!("{}.md", report.session_id));
+    let latest_json = dir.join("latest.json");
+    let latest_md = dir.join("latest.md");
+
+    for (target, content) in [
+        (&session_json, json_bytes.as_str()),
+        (&session_md, md_bytes.as_str()),
+        (&latest_json, json_bytes.as_str()),
+        (&latest_md, md_bytes.as_str()),
+    ] {
+        let tmp = target.with_extension("tmp");
+        fs::write(&tmp, content.as_bytes()).map_err(CliError::Io)?;
+        fs::rename(&tmp, target).map_err(CliError::Io)?;
+    }
+    Ok(())
+}
+
 fn emit_json<T: Serialize>(report: &T) -> Result<(), CliError> {
     println!(
         "{}",
@@ -232,16 +441,7 @@ fn emit_json<T: Serialize>(report: &T) -> Result<(), CliError> {
 
 pub fn handle_session_start(cli: &Cli) -> Result<i32, CliError> {
     let mut store = load_store(cli)?;
-    // Latest stored snapshot when available, else None: honest, deterministic.
-    let started_snapshot = {
-        let mut id = None;
-        if let Ok(storage) = get_storage(cli)
-            && let Ok(Some(snapshot)) = storage.get_latest_snapshot()
-        {
-            id = Some(snapshot.snapshot_id.to_string());
-        }
-        id
-    };
+    let started_snapshot = latest_stored_snapshot_id(cli);
     let session_id = session_id_for(cli, next_counter(&store));
     let record = SessionRecord {
         session_id: session_id.clone(),
@@ -358,23 +558,51 @@ pub fn handle_session_close(cli: &Cli, session_id: &str) -> Result<i32, CliError
     let receipt = close_receipt(session, &session_id);
     session.status = "closed".to_string();
     session.receipt = Some(receipt.clone());
+    let session_snapshot = session.clone();
     save_store(cli, &store)?;
+
+    let forensic_report = build_forensic_report(cli, &session_snapshot);
+    persist_forensic_report(cli, &forensic_report)?;
+
     if cli.format == OutputFormat::Json {
         emit_json(&receipt)?;
     } else {
         println!(
-            "session {session_id} closed verdict={} evidence_step={} steps={}",
+            "session {session_id} closed verdict={} evidence_step={} steps={} (forensic report: .autopsy/runs/latest.md)",
             receipt.verdict, receipt.evidence_step, receipt.steps
         );
     }
-    // The close operation mirrors the evidence the verdict is based on: a
-    // failing verify stays a policy failure for the caller (e.g. a pre-commit
-    // hook auto-invoking close), and an unknown verdict is not actionable.
     match receipt.evidence_exit_code {
         Some(0) => Ok(EXIT_PASS),
         Some(code) if code > 0 => Ok(code),
         _ => Ok(EXIT_ANALYSIS_ERROR),
     }
+}
+
+pub fn handle_session_report(cli: &Cli, session_id: Option<&str>) -> Result<i32, CliError> {
+    let store = load_store(cli)?;
+    let target_session = match session_id {
+        Some(id) => store.sessions.get(id.trim()).ok_or_else(|| {
+            CliError::Analysis(format!(
+                "session '{id}' not found; `autopsy session list` shows what exists"
+            ))
+        })?,
+        None => store
+            .sessions
+            .values()
+            .last()
+            .ok_or_else(|| CliError::Analysis("no sessions recorded in .autopsy/sessions.json; start one with `autopsy session start`".to_string()))?,
+    };
+
+    let report = build_forensic_report(cli, target_session);
+    persist_forensic_report(cli, &report)?;
+
+    if cli.format == OutputFormat::Json {
+        emit_json(&report)?;
+    } else {
+        print!("{}", render_forensic_markdown(&report));
+    }
+    Ok(EXIT_PASS)
 }
 
 pub fn handle_session_list(cli: &Cli) -> Result<i32, CliError> {
@@ -397,7 +625,7 @@ pub fn handle_session_list(cli: &Cli) -> Result<i32, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionStep, SessionStore, load_store};
+    use super::{SessionStep, SessionStore, TaskForensicReport, load_store};
     use crate::{Cli, EXIT_ANALYSIS_ERROR, EXIT_PASS, OutputFormat, run_cli};
     use std::{
         fs,
@@ -429,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn session_lifecycle_records_and_closes_honestly() {
+    fn session_lifecycle_records_closes_and_persists_forensic_report() {
         let root = temp_repo();
         assert_eq!(run_cli(&cli_for(&root, &["session", "start"])), EXIT_PASS);
 
@@ -470,6 +698,21 @@ mod tests {
         assert_eq!(receipt.evidence_exit_code, Some(2));
         assert_eq!(receipt.evidence_step, "verify");
         assert_eq!(receipt.steps, 1);
+
+        // Forensic run files written automatically on close:
+        let latest_json = root.join(".autopsy/runs/latest.json");
+        let latest_md = root.join(".autopsy/runs/latest.md");
+        assert!(latest_json.is_file(), "latest.json persisted");
+        assert!(latest_md.is_file(), "latest.md persisted");
+        let report: TaskForensicReport =
+            serde_json::from_slice(&fs::read(&latest_json).unwrap()).unwrap();
+        assert_eq!(report.session_id, session_id);
+        assert_eq!(report.verdict, "fail");
+        assert!(report.next_agent_guidance.contains("REPAIR REQUIRED"));
+        assert!(!report.report_digest.is_empty());
+
+        // `session report` reproduces the exact report deterministically:
+        assert_eq!(run_cli(&cli_for(&root, &["session", "report"])), EXIT_PASS);
 
         // Closing twice is an error; the receipt stays final.
         let close_again = cli_for(&root, &["session", "close", "--session-id", &session_id]);

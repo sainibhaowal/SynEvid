@@ -67,6 +67,18 @@ test('a failing repair loop closes at fail and mirrors exit 2 through MCP', asyn
   assert.equal(show1.envelope.report.receipt.verdict, 'fail');
   assert.ok(!TIMESTAMP.test(show1.text), 'no wall-clock timestamps in the receipt');
 
+  // Forensic trajectory report is persisted automatically on close and readable via `report`:
+  const reportCall = await callTool(client, 'autopsy_session', {
+    action: 'report',
+    session_id: sessionId,
+    repo_root: workspace,
+  });
+  assert.equal(reportCall.envelope.exit_code, 0);
+  assert.equal(reportCall.envelope.report.verdict, 'fail');
+  assert.match(reportCall.envelope.report.next_agent_guidance, /REPAIR REQUIRED/);
+  assert.ok(fs.existsSync(path.join(workspace, '.autopsy', 'runs', 'latest.json')));
+  assert.ok(fs.existsSync(path.join(workspace, '.autopsy', 'runs', 'latest.md')));
+
   // A closed receipt is final: recording another step is refused with advice.
   const late = await callTool(client, 'autopsy_session', {
     action: 'record',

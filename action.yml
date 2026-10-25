@@ -1,0 +1,55 @@
+name: "SynEvid (Code Autopsy) Forensic Gate"
+description: "Offline, deterministic software verification, blast-radius, and architectural invariant gate for CI/CD"
+author: "sainibhaowal"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  repo-root:
+    description: "Target repository root directory"
+    required: false
+    default: "."
+  invariants-file:
+    description: "Optional invariants YAML policy file (defaults to .autopsy/invariants.yml)"
+    required: false
+    default: ""
+  strict:
+    description: "Fail with exit code 4 on partial or unknown coverage"
+    required: false
+    default: "false"
+  sarif-output:
+    description: "Path to write SARIF 2.1.0 report for GitHub Code Scanning"
+    required: false
+    default: "autopsy-report.sarif"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install SynEvid Engine (prebuilt release with SHA-256 verification)
+      shell: bash
+      env:
+        AUTOPSY_SKIP_HOSTS: "1"
+        SYNEVID_NO_PATH: "1"
+      run: |
+        bash "${{ github.action_path }}/scripts/install.sh"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Run SynEvid Baseline & Architectural Invariant Gate
+      shell: bash
+      run: |
+        AUTOPSY="$HOME/.local/bin/autopsy"
+        ROOT="${{ inputs.repo-root }}"
+        "$AUTOPSY" --repo-root "$ROOT" doctor
+        "$AUTOPSY" --repo-root "$ROOT" --persist --format json baseline > /tmp/synevid-baseline.json
+
+        VERIFY_ARGS=(--repo-root "$ROOT" verify)
+        if [ -n "${{ inputs.invariants-file }}" ]; then
+          VERIFY_ARGS+=(--invariants-file "${{ inputs.invariants-file }}")
+        fi
+        if [ "${{ inputs.strict }}" = "true" ]; then
+          VERIFY_ARGS+=(--strict)
+        fi
+
+        "$AUTOPSY" --format sarif "${VERIFY_ARGS[@]}" > "${{ inputs.sarif-output }}" || true
+        "$AUTOPSY" --format text "${VERIFY_ARGS[@]}"

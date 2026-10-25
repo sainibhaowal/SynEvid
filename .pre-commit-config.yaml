@@ -82,6 +82,13 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: vscode-extension-check
+        name: VS Code Extension & Forensic Trajectory Tests (headless, zero-build)
+        entry: bash -c 'cd apps/vscode-extension && npm test'
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: installer-selftest
         name: Installer, Update & Host-Wiring Self-Test (offline, fake release)
         entry: bash scripts/tests/test-install.sh

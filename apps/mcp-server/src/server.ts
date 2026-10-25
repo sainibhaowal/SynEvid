@@ -723,19 +723,20 @@ export function createAutopsyMcpServer(): McpServer {
     }
   );
 
-  // 10. autopsy_session (Tier 2.5): deterministic repair-loop receipts. The store
-  // records every evidence step as the CLI wrote it — no wall-clock time, verdicts
-  // derived only from recorded exit codes.
+  // 10. autopsy_session (Tier 2.5 + 3.7): deterministic repair-loop receipts &
+  // Task-Completion Forensic Trajectory Ledger. The store records every evidence step
+  // as the CLI wrote it — no wall-clock time, verdicts derived only from recorded exit codes.
   server.registerTool(
     'autopsy_session',
     {
       description:
-        'Open, record, close, show, or list a repair-loop session. Closing derives an honest ' +
+        'Open, record, close, report, show, or list a repair-loop session. Closing derives an honest ' +
         'verdict (pass/fail/unknown) from the last recorded evidence step — never invented — ' +
-        'and mirrors its exit code. The exit_code field is 0 for pass, 2 for fail, 3 for unknown.',
+        'mirrors its exit code, and persists the Task-Completion Forensic Trajectory Report to ' +
+        '`.autopsy/runs/latest.{json,md}` for subsequent AI agents and developers.',
       inputSchema: z.object({
         action: z
-          .enum(['start', 'record', 'close', 'show', 'list'])
+          .enum(['start', 'record', 'close', 'report', 'show', 'list'])
           .describe('Which session lifecycle operation to run'),
         repo_root: z
           .string()
@@ -744,7 +745,7 @@ export function createAutopsyMcpServer(): McpServer {
         session_id: z
           .string()
           .optional()
-          .describe('The session id (from start/list); required for record/close/show'),
+          .describe('The session id (from start/list); required for record/close/show, optional for report'),
         invoked: z
           .array(z.string())
           .optional()
@@ -788,6 +789,8 @@ export function createAutopsyMcpServer(): McpServer {
         if (args.snapshot_id) cliArgs.push('--snapshot-id', args.snapshot_id);
         if (args.note) cliArgs.push('--note', args.note);
         cliArgs.push('--', ...args.invoked);
+      } else if (args.action === 'report') {
+        if (args.session_id) cliArgs.push('--session-id', args.session_id);
       } else if (args.action !== 'start' && args.action !== 'list') {
         if (!args.session_id) {
           return {
@@ -995,6 +998,34 @@ export function createAutopsyMcpServer(): McpServer {
           {
             uri: uri.href,
             text: asText(evidenceEnvelope('workspace', result)),
+          },
+        ],
+      };
+    }
+  );
+
+  // Latest Forensic Trajectory Report resource (Tier 3.7): allows any AI model or IDE
+  // to read the prior run's forensic trajectory, verdict, and next-agent guidance
+  // before making edits in a new turn.
+  server.registerResource(
+    'autopsy_runs_latest',
+    new ResourceTemplate('autopsy://runs/latest{?repo_root}', { list: undefined }),
+    {
+      title: 'Latest Task-Completion Forensic Trajectory Report',
+      description:
+        'Deterministic forensic report from the most recent agent session (`autopsy session report`), ' +
+        'including verdict, snapshots, step trajectory, and next_agent_guidance.',
+      mimeType: 'application/json',
+    },
+    async (uri, variables) => {
+      const v = (variables || {}) as Record<string, unknown>;
+      const repoRoot = v.repo_root === undefined ? '.' : String(v.repo_root);
+      const result = await runAutopsy('session', ['report'], { repoRoot });
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: asText(evidenceEnvelope('session', result)),
           },
         ],
       };

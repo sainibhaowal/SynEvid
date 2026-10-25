@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - P0 multi-arch release, native Windows installer, IDE/CI plugin system & task-completion forensic trajectory ledger (2026-10-25)
+
+### Added
+- **Multi-arch & static `musl` release matrix (`.github/workflows/post-merge.yml`):** expanded from 4 targets to 7 targets (`x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`), triggered on both `main` pushes and `v*.*.*` git tags.
+- **Native system packages & package-manager manifests:** added `scripts/build-linux-packages.sh` (builds `.deb` for Debian/Ubuntu and `.rpm` for Fedora/RHEL), `packaging/homebrew/synevid.rb`, `packaging/scoop/synevid.json`, `packaging/winget/sainibhaowal.SynEvid.yaml`, and `scripts/render-package-manifests.py`.
+- **Cryptographic provenance & signing:** GitHub Artifact Attestations (`actions/attest-build-provenance@v2` SLSA Build L2+), keyless Sigstore `cosign sign-blob` bundle (`SHA256SUMS.txt.sigstore.json`), and macOS `codesign` support in `.github/workflows/post-merge.yml`.
+- **Native Windows PowerShell installer (`scripts/install.ps1`):** zero-admin per-user installation (`irm .../install.ps1 | iex`), `-Update`, `-Check`, `-Uninstall`, `-Help`, fail-closed SHA-256 verification against `SHA256SUMS.txt`, automatic User `PATH` setup, and agent-host wiring.
+- **Zero-config onboarding (`autopsy init [--force]`):** new CLI subcommand (`crates/autopsy-cli/src/init.rs`, 23rd tool in `autopsy tools`) that deterministically detects repository languages and architectural layers to scaffold `autopsy.toml` and `.autopsy/invariants.yml` without overwriting existing configs unless `--force` is passed.
+- **VS Code / Cursor / Windsurf IDE plugin (`apps/vscode-extension`):** inline Blast Radius CodeLens, Hover provider, Status Bar item, commands (`synevid.init`, `synevid.verify`, `synevid.impactAtCursor`, `synevid.showForensicReport`, `synevid.doctor`, `synevid.refreshTrajectory`), and Activity Bar `Task Forensic Trajectory` tree view, tested via `apps/vscode-extension/test/extension.test.js`.
+- **Composite GitHub Action plugin (`action.yml`):** 1-step CI integration (`uses: sainibhaowal/SynEvid@v0.1.0`) with inputs for `repo-root`, `strict`, `invariants-file`, `sarif-output`, and `version`.
+- **Task-completion forensic trajectory ledger (`TaskForensicReport`):** `autopsy session close` and `autopsy session report [--session-id <id>]` deterministically generate and persist `.autopsy/runs/<session_id>.{json,md}` and `.autopsy/runs/latest.{json,md}` with `started_snapshot`, `completed_snapshot`, ordered steps, BLAKE3 `report_digest`, and `next_agent_guidance`. Exposed in MCP via `autopsy_session` (`action: "report"`) and resource `autopsy://runs/latest{?repo_root}`.
+- **Automatic end-of-task agent hook (`agents/hooks/autopsy-task-complete.sh`):** runs `baseline --persist`, `verify`, and `session close` to emit `.autopsy/runs/latest.{json,md}` at the end of every agent task; wired into Claude Code `Stop` hooks by `scripts/setup-agent-hosts.py --hooks` and cleaned up on `--unwire` / `--uninstall`.
+- **Evidence `docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md`.**
+
+### Changed
+- `scripts/install.sh`: added `linux-arm64` (`aarch64-unknown-linux-gnu`), static `musl` auto-detection and `--musl` / `SYNEVID_LIBC=musl` flag, and packaging of `autopsy-task-complete.sh`.
+- `scripts/setup-agent-hosts.py`: OS-aware configuration paths for Windows (`%APPDATA%`), macOS (`~/Library/Application Support`), and Linux (`~/.config`); Claude Code `Stop` hook wiring/unwiring.
+- `Makefile`, `.pre-commit-config.yaml` (now 14 hooks), and `.github/workflows/ci.yml`: added `vscode-extension-check`.
+
+---
+
 ## [Unreleased] - Frictionless install, update & uninstall lifecycle (2026-10-18)
 
 One command installs everything a user needs — engine, IDE server, a
@@ -26,32 +47,46 @@ into a multi-minute Rust source build.
   and `test/bundle.test.js`, which spawns the shipped bundle over the real
   stdio protocol (MCP suite now 44 tests).
 - `scripts/tests/test-install.sh`: fully offline installer self-test (fake
-  release + fake `curl` + throwaway HOME) covering install, checksum abort,
-  update idempotency, `--check`, `--uninstall`, and host wiring/unwiring —
-  wired into the pre-commit gate (13 hooks now) and a new CI job
-  `installer-and-wiring-check`.
-- `scripts/setup-agent-hosts.py --unwire`, layout-aware MCP/hook resolution,
-  and installed-binary auto-detection.
+  release + fake `curl` + throwaway HOME and prefix with spaces) covering
+  install, checksum abort, `--hooks` shell-quoted registration, update
+  idempotency, `--check`, `--uninstall` (including Claude Code `PreToolUse`
+  hook cleanup), and host wiring/unwiring — wired into the pre-commit gate
+  (13 hooks now) and a new CI job `installer-and-wiring-check`.
+- `scripts/setup-agent-hosts.py --unwire` (now also unwires registered Claude
+  Code `safe-edit.sh` hooks unconditionally and shell-quotes hook paths with
+  `shlex.quote`), layout-aware MCP/hook resolution, and installed-binary
+  auto-detection.
 - Evidence `docs/evidence/39-install-update-lifecycle.md`.
 
 ### Changed
 - `scripts/install.sh` rewritten: `--update`, `--check`, `--uninstall`,
   `--help`; SHA-256 verification against `SHA256SUMS.txt` with abort-on-mismatch
   (no silent source fallback); managed PATH block in `~/.bashrc`/`~/.zshrc`/
-  `~/.profile`; installs the MCP server + hooks under `$PREFIX/share/synevid/`;
+  `~/.profile` (iterated line-by-line without word splitting on spaces in
+  `$HOME`); installs the MCP server + hooks under `$PREFIX/share/synevid/`;
   wires hosts against the installed bundle; prints a clear final report.
 - README §8 states the install model plainly (per-user, system-wide, never
   inside a repository; update = re-run; no phone-home) and the docs portal
   gained a "Path F: Install & Operate" reading path.
 - `ci.yml`: new `installer-and-wiring-check` job feeding the pre-merge gate.
+- `GEMINI.md`, `CLAUDE.md`, `INSTRUCTIONS.md`, `AGENTS.md`,
+  `.agents/rules/agent-engineering-rules.md`, and
+  `.agents/skills/synevid-core-engineer/SKILL.md`: evidence range updated to
+  `01`–`39` (including `39-install-update-lifecycle.md`) and
+  `bash scripts/tests/test-install.sh` added to the verification command list.
 
 ### Fixed
 - `apps/mcp-server/test/mcp_stdio.js`: `freshWorkspaceCopy` no longer copies
   the engine's live `.autopsy/` store, fixing an intermittent `ENOENT` race in
   the session e2e test when copies ran concurrently with store writes.
+- `scripts/setup-agent-hosts.py`, `scripts/install.sh`, and
+  `agents/hooks/safe-edit.sh`: `--unwire` (and therefore `install.sh --uninstall`)
+  now unconditionally removes any registered Claude Code `PreToolUse`
+  `safe-edit.sh` hook while preserving unrelated hooks; paths containing spaces
+  are shell-quoted via `shlex.quote` and iterated without word-splitting.
 
 ### Verification
-- `bash scripts/tests/test-install.sh` — 39/39 checks.
+- `bash scripts/tests/test-install.sh` — 42/42 checks.
 - `cd apps/mcp-server && npm test` — 44/44.
 - `pre-commit run --all-files` — 13/13 hooks.
 

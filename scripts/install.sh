@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — one-line installer, updater, and uninstaller for SynEvid.
+# install.sh — universal one-line installer, updater, and uninstaller for SynEvid.
 #
 #   curl -fsSL https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.sh | bash
 #
@@ -11,19 +11,21 @@
 #   $PREFIX/bin/synevid-lsp                the IDE language server
 #   $PREFIX/share/synevid/mcp-server/index.js   single-file MCP server (agent bridge)
 #   $PREFIX/share/synevid/setup-agent-hosts.py  host-wiring helper
-#   $PREFIX/share/synevid/hooks/*.sh            advisory agent hooks
+#   $PREFIX/share/synevid/hooks/*.sh            advisory & task-complete agent hooks
 #
 # Strategy, in order:
-#   1. Download the prebuilt release archive for this OS/arch and verify it
-#      against the release's SHA256SUMS.txt (fatal on mismatch).
+#   1. Download the prebuilt release archive for this OS/arch/libc (x86_64/arm64,
+#      glibc or static musl on Linux/Alpine, macOS universal/Apple Silicon/Intel,
+#      Windows x86_64) and verify it against the release's SHA256SUMS.txt (fatal on mismatch).
 #   2. Fall back to a source build (Rust 1.90+; rustup is installed if missing).
 #   3. Configure PATH via one managed block in ~/.bashrc / ~/.zshrc / ~/.profile.
-#   4. Wire detected agent hosts (Claude Code, Cursor, VS Code, Windsurf,
-#      opencode, Gemini CLI) to the MCP server — idempotent, backup-first.
+#   4. Wire detected agent hosts (Claude Code, Claude Desktop, Cursor, VS Code,
+#      Windsurf, opencode, Gemini CLI) to the MCP server — idempotent, backup-first.
 #
 # Commands:
 #   install.sh              install or update to the latest release (idempotent)
 #   install.sh --update     same as above (explicit)
+#   install.sh --musl       prefer the static musl Linux binary (auto-selected on Alpine)
 #   install.sh --check      report what is installed, offline, changing nothing
 #   install.sh --uninstall  remove binaries, share files, PATH block, host entries
 #   install.sh --help
@@ -31,6 +33,7 @@
 # Environment:
 #   SYNEVID_PREFIX=DIR      install prefix                    (default: ~/.local)
 #   SYNEVID_REPO=owner/repo GitHub slug                       (default: sainibhaowal/SynEvid)
+#   SYNEVID_LIBC=gnu|musl   force Linux libc flavor           (default: auto-detected)
 #   SYNEVID_NO_PATH=1       do not touch shell startup files
 #   SYNEVID_STRICT=1        abort when release checksums cannot be verified
 #   AUTOPSY_SKIP_HOSTS=1    skip agent-host wiring
@@ -46,6 +49,7 @@ REPO_SLUG="${SYNEVID_REPO:-sainibhaowal/SynEvid}"
 PREFIX="${SYNEVID_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 SHARE_DIR="$PREFIX/share/synevid"
+FORCE_MUSL="${SYNEVID_LIBC:-}"
 
 MARK_BEGIN="# >>> synevid >>>"
 MARK_END="# <<< synevid <<<"
@@ -58,8 +62,28 @@ usage() {
   if [ -n "$self" ] && [ -f "$self" ]; then
     sed -n '2,/^set -euo pipefail/p' "$self" | sed '$d'
   else
-    printf 'SynEvid installer — install, --update, --check, --uninstall, --help.\nDocs: https://github.com/%s\n' "$REPO_SLUG"
+    printf 'SynEvid installer — install, --update, --musl, --check, --uninstall, --help.\nDocs: https://github.com/%s\n' "$REPO_SLUG"
   fi
+}
+
+detect_linux_libc() {
+  if [ "$FORCE_MUSL" = "musl" ]; then
+    printf '%s\n' "musl"
+    return 0
+  fi
+  if [ "$FORCE_MUSL" = "gnu" ]; then
+    printf '%s\n' "gnu"
+    return 0
+  fi
+  if [ -f /etc/alpine-release ]; then
+    printf '%s\n' "musl"
+    return 0
+  fi
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    printf '%s\n' "musl"
+    return 0
+  fi
+  printf '%s\n' "gnu"
 }
 
 detect_target() {
@@ -81,8 +105,23 @@ detect_target() {
 }
 
 asset_triple() {
+  local libc
+  libc="$(detect_linux_libc)"
   case "$1" in
-    linux-x86_64) printf '%s\n' "x86_64-unknown-linux-gnu" ;;
+    linux-x86_64)
+      if [ "$libc" = "musl" ]; then
+        printf '%s\n' "x86_64-unknown-linux-musl"
+      else
+        printf '%s\n' "x86_64-unknown-linux-gnu"
+      fi
+      ;;
+    linux-arm64)
+      if [ "$libc" = "musl" ]; then
+        printf '%s\n' "aarch64-unknown-linux-musl"
+      else
+        printf '%s\n' "aarch64-unknown-linux-gnu"
+      fi
+      ;;
     macos-arm64) printf '%s\n' "aarch64-apple-darwin" ;;
     macos-x86_64) printf '%s\n' "x86_64-apple-darwin" ;;
     windows-x86_64) printf '%s\n' "x86_64-pc-windows-msvc" ;;
@@ -144,7 +183,7 @@ install_extras_from_dir() {
     fi
   done
   local hook
-  for hook in safe-edit.sh autopsy-session.sh; do
+  for hook in safe-edit.sh autopsy-session.sh autopsy-task-complete.sh; do
     for cand in "$src/hooks/$hook" "$src/agents/hooks/$hook"; do
       if [ -f "$cand" ]; then
         cp "$cand" "$SHARE_DIR/hooks/$hook"
@@ -156,11 +195,9 @@ install_extras_from_dir() {
 }
 
 # --- release download -------------------------------------------------------
-try_release() {
-  local target="$1" tmp ext triple url asset root ok
+try_release_triple() {
+  local triple="$1" ext="$2" tmp url asset root ok
   tmp="$(mktemp -d)"
-  triple="$(asset_triple "$target")" || { rm -rf "$tmp"; return 1; }
-  ext="$(asset_ext "$target")"
   asset="autopsy-${triple}.${ext}"
   url="https://github.com/${REPO_SLUG}/releases/latest/download/${asset}"
 
@@ -173,7 +210,7 @@ try_release() {
   ok=0
   verify_checksum "$tmp/$asset" "$asset" || ok=$?
   case "$ok" in
-    0) log "  checksum verified against SHA256SUMS.txt" ;;
+    0) log "  checksum verified against SHA256SUMS.txt ($asset)" ;;
     2)
       if [ "${SYNEVID_STRICT:-0}" = "1" ]; then
         warn "release checksums unavailable and SYNEVID_STRICT=1; aborting"
@@ -213,9 +250,35 @@ try_release() {
   done
   install_extras_from_dir "$root"
   rm -rf "$tmp"
-  if [ -x "$BIN_DIR/autopsy" ] || [ -x "$BIN_DIR/autopsy.exe" ]; then
+  if [ -x "$BIN_DIR/autopsy" ] && "$BIN_DIR/autopsy" version >/dev/null 2>&1; then
     return 0
   fi
+  if [ -x "$BIN_DIR/autopsy.exe" ]; then
+    return 0
+  fi
+  return 1
+}
+
+try_release() {
+  local target="$1" triple ext rc=0
+  triple="$(asset_triple "$target")" || return 1
+  ext="$(asset_ext "$target")"
+  try_release_triple "$triple" "$ext" || rc=$?
+  if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+    return "$rc"
+  fi
+  # On Linux, if the gnu archive failed or old glibc rejected the binary,
+  # automatically try the static musl archive before falling back to a source build.
+  case "$triple" in
+    x86_64-unknown-linux-gnu)
+      try_release_triple "x86_64-unknown-linux-musl" "$ext" && return 0 || rc=$?
+      [ "$rc" = 2 ] && return 2
+      ;;
+    aarch64-unknown-linux-gnu)
+      try_release_triple "aarch64-unknown-linux-musl" "$ext" && return 0 || rc=$?
+      [ "$rc" = 2 ] && return 2
+      ;;
+  esac
   return 1
 }
 
@@ -274,7 +337,8 @@ rc_files() {
 
 ensure_path_block() {
   local rc tmp
-  for rc in $(rc_files); do
+  while IFS= read -r rc; do
+    [ -n "$rc" ] || continue
     [ -e "$rc" ] || touch "$rc" 2>/dev/null || { warn "  PATH: cannot write $rc"; continue; }
     tmp="$(mktemp)"
     strip_path_block < "$rc" > "$tmp"
@@ -286,13 +350,13 @@ ensure_path_block() {
       log "  PATH: configured in $rc"
     fi
     rm -f "$tmp"
-  done
+  done < <(rc_files)
 }
 
 remove_path_block() {
   local rc tmp removed=0
-  for rc in $(rc_files); do
-    [ -f "$rc" ] || continue
+  while IFS= read -r rc; do
+    [ -n "$rc" ] && [ -f "$rc" ] || continue
     grep -qF "$MARK_BEGIN" "$rc" || continue
     tmp="$(mktemp)"
     strip_path_block < "$rc" > "$tmp"
@@ -300,7 +364,7 @@ remove_path_block() {
     rm -f "$tmp"
     log "  PATH block removed from $rc"
     removed=1
-  done
+  done < <(rc_files)
   [ "$removed" = 1 ] || log "  PATH: no managed block found"
 }
 
@@ -350,11 +414,11 @@ cmd_check() {
     log "  MCP server:  not installed"
   fi
   local rc
-  for rc in $(rc_files); do
-    if [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc"; then
+  while IFS= read -r rc; do
+    if [ -n "$rc" ] && [ -f "$rc" ] && grep -qF "$MARK_BEGIN" "$rc"; then
       log "  PATH block:  $rc"
     fi
-  done
+  done < <(rc_files)
   log "  update:      re-run this installer (or: install.sh --update)"
   log "  uninstall:   install.sh --uninstall"
 }
@@ -382,18 +446,20 @@ cmd_uninstall() {
 
 # --- main -------------------------------------------------------------------
 main() {
-  case "${1:-}" in
-    "") : ;;
-    --update) : ;;
-    --help|-h) usage; return 0 ;;
-    --check) cmd_check; return 0 ;;
-    --uninstall) cmd_uninstall; return 0 ;;
-    *)
-      warn "unknown option: $1"
-      usage >&2
-      return 2
-      ;;
-  esac
+  while [ $# -gt 0 ]; do
+    case "${1:-}" in
+      --update) shift ;;
+      --musl) FORCE_MUSL="musl"; shift ;;
+      --help|-h) usage; return 0 ;;
+      --check) cmd_check; return 0 ;;
+      --uninstall) cmd_uninstall; return 0 ;;
+      *)
+        warn "unknown option: $1"
+        usage >&2
+        return 2
+        ;;
+    esac
+  done
 
   local target=""
   target="$(detect_target 2>/dev/null || true)"
@@ -448,7 +514,7 @@ main() {
 
   case "$target" in
     windows-*)
-      log "PATH: on Windows add \"$BIN_DIR\" to PATH manually (Git Bash / PowerShell profile)"
+      log "PATH: on Windows use scripts/install.ps1 for automatic User PATH, or add \"$BIN_DIR\" to PATH"
       ;;
     *)
       if [ "${SYNEVID_NO_PATH:-0}" = "1" ]; then
@@ -460,7 +526,7 @@ main() {
       ;;
   esac
 
-  log "wiring agent hosts (Claude Code, Cursor, VS Code, Windsurf, opencode, Gemini CLI)..."
+  log "wiring agent hosts (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, opencode, Gemini CLI)..."
   wire_hosts
 
   log "verifying installation..."
@@ -479,7 +545,7 @@ main() {
   [ -x "$BIN_DIR/synevid-lsp" ] && log "  synevid-lsp -> $BIN_DIR/synevid-lsp"
   [ -f "$SHARE_DIR/mcp-server/index.js" ] && log "  MCP server  -> $SHARE_DIR/mcp-server/index.js"
   log ""
-  log "Try it:  cd <any-repo> && autopsy doctor      (open a new terminal first)"
+  log "Try it:  cd <any-repo> && autopsy init && autopsy doctor   (open a new terminal first)"
   log "Editors: restart them once; the synevid MCP tools appear to your agent."
   log "Update:  re-run this installer.   Remove: install.sh --uninstall"
 }

@@ -13,14 +13,17 @@
 pub mod extensions;
 
 use autopsy_adapter_api::{LanguageAdapter, ParseContext, ParsedFile};
+mod init;
 mod session;
 mod suggestions;
 mod toolspec;
 mod workspace;
 
+pub use init::{InitReport, handle_init};
 pub use session::{
-    SessionAction, SessionReceipt, SessionRecord, SessionStep, SessionStore, handle_session_close,
-    handle_session_list, handle_session_record, handle_session_show, handle_session_start,
+    SessionAction, SessionReceipt, SessionRecord, SessionStep, SessionStore, TaskForensicReport,
+    handle_session_close, handle_session_list, handle_session_record, handle_session_report,
+    handle_session_show, handle_session_start,
 };
 pub use workspace::{
     WorkspaceAction, WorkspaceEntry, handle_workspace_list, handle_workspace_register,
@@ -676,6 +679,12 @@ pub enum Commands {
     },
     /// Verify repository configuration, storage integrity, and analyzer health
     Doctor,
+    /// Initialize `autopsy.toml` and `.autopsy/invariants.yml` by detecting repository languages and architectural layers
+    Init {
+        /// Overwrite existing `autopsy.toml` and `.autopsy/invariants.yml` files
+        #[arg(long)]
+        force: bool,
+    },
     /// Emit the machine-readable tool specification: every subcommand, its flags,
     /// exit-code contract, pinning surface, and envelope semantics (Tier 3.1)
     Tools,
@@ -868,6 +877,9 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             ),
             SessionAction::Show { session_id } => handle_session_show(cli, session_id),
             SessionAction::Close { session_id } => handle_session_close(cli, session_id),
+            SessionAction::Report { session_id } => {
+                handle_session_report(cli, session_id.as_deref())
+            }
             SessionAction::List => handle_session_list(cli),
         },
         Commands::Workspace { action } => match action {
@@ -1028,6 +1040,7 @@ fn execute(cli: &Cli) -> Result<i32, CliError> {
             },
         ),
         Commands::Doctor => handle_doctor(cli),
+        Commands::Init { force } => handle_init(cli, *force),
         Commands::Tools => handle_tools(cli),
         Commands::Version => handle_version(cli),
     }

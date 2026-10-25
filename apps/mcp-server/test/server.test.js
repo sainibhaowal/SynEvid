@@ -124,6 +124,10 @@ test('createAutopsyMcpServer registers all 11 tools and resources', () => {
     'Must register the Tier 2.3 workspace registry resource'
   );
   assert.ok(
+    templates.includes('autopsy_runs_latest'),
+    'Must register the Tier 3.7 latest forensic trajectory report resource'
+  );
+  assert.ok(
     resources.includes('autopsy://tools'),
     'Must register the Tier 3.1 toolspec resource as a fixed URI (autopsy://tools)'
   );
@@ -278,7 +282,7 @@ test('autopsy_session schema exposes the lifecycle actions honestly', () => {
     shape.action.options ??
     shape.action._def?.values ??
     shape.action._def?.checks?.[0]?.values;
-  assert.deepEqual([...values], ['start', 'record', 'close', 'show', 'list']);
+  assert.deepEqual([...values], ['start', 'record', 'close', 'report', 'show', 'list']);
 });
 
 // ---------------------------------------------------------------------------------------

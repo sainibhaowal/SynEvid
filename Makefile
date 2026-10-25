@@ -1,4 +1,4 @@
-.PHONY: all check test fmt fmt-check determinism cross-platform boundaries schemas pre-commit mcp-check web-inspector-check
+.PHONY: all check test fmt fmt-check determinism cross-platform boundaries schemas pre-commit mcp-check web-inspector-check vscode-extension-check
 
 export TMPDIR ?= /tmp
 
@@ -32,7 +32,10 @@ mcp-check:
 web-inspector-check:
 	cd apps/web-inspector && npm test
 
-check: fmt-check boundaries schemas determinism cross-platform mcp-check web-inspector-check
+vscode-extension-check:
+	cd apps/vscode-extension && npm test
+
+check: fmt-check boundaries schemas determinism cross-platform mcp-check web-inspector-check vscode-extension-check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace --all-targets
 	cargo test --workspace --doc

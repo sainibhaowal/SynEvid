@@ -1,6 +1,6 @@
 # Mandatory Rules & Operational Protocol for AI Coding Agents
 
-Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly follow these rules without exception across the entire development lifecycle (Phases 0 through 6, v0.0.1 through 4.1, and the Tier-1–3 agent-experience build-out — see `docs/evidence/35`–`38`).
+Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly follow these rules without exception across the entire development lifecycle (Phases 0 through 6, v0.0.1 through 4.1, and the Tier-1–3 agent-experience, install-lifecycle & P0 release/plugin/forensic-trajectory build-out — see `docs/evidence/35`–`40`).
 
 ---
 
@@ -105,6 +105,7 @@ cargo test --workspace --all-targets -- --nocapture   # includes the synevid-lsp
 cargo test --workspace --doc
 ./scripts/verify-determinism.sh
 ./scripts/verify-arch-boundaries.sh
+bash scripts/tests/test-install.sh
 ```
 
 #### B. Python (Benchmarks & Evaluation):
@@ -116,15 +117,13 @@ bandit -r benchmarks/
 pytest
 ```
 
-#### C. TypeScript / Web Apps (MCP Server & Web Inspector):
-If `apps/mcp-server` or `apps/web-inspector` are touched:
+#### C. TypeScript / Web / IDE Apps (MCP Server, Web Inspector & VS Code Extension):
+If `apps/mcp-server`, `apps/web-inspector`, or `apps/vscode-extension` are touched:
 ```bash
-npm run lint      # ESLint with zero errors
-npm run format    # Prettier check
-npm test          # node:test — MCP server CLI integration tests, and the inspector's
-                  # headless render tests (the script the browser runs, in a vm context)
-npx tsc --noEmit  # Strict TypeScript compilation check (mcp-server; the inspector is a
-                  # single zero-build HTML file and has no compilation step)
+npm run lint      # ESLint with zero errors (mcp-server)
+npm test          # node:test — MCP server CLI integration tests, web-inspector headless
+                  # render tests, and vscode-extension headless tests
+npx tsc --noEmit  # Strict TypeScript compilation check (mcp-server)
 ```
 
 #### D. Pre-Commit Enforcement:
@@ -139,7 +138,7 @@ Before any commit:
   - What was changed and why.
   - How the solution works technically.
   - Exact command execution output and test telemetry.
-- Evidence dossiers are numbered `01`–`38` (one record per phase, pillar, or agent tier). The canonical verification checklist is [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), and [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md).
+- Evidence dossiers are numbered `01`–`40` (one record per phase, pillar, agent tier, or lifecycle closure). The canonical verification checklist is [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience, install-lifecycle, and P0 release/plugin/forensic-trajectory records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md), [`39-install-update-lifecycle.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/39-install-update-lifecycle.md), and [`40-p0-release-plugin-and-forensic-trajectory.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md).
 - Update [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md) when functional requirements are addressed.
 - Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md).
 - Keep [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt) synchronized with `git ls-files`.

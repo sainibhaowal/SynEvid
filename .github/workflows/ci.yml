@@ -206,6 +206,9 @@ jobs:
       - name: Test Web Inspector (headless, zero-build)
         run: cd apps/web-inspector && npm test
 
+      - name: Test VS Code Extension (headless, zero-build)
+        run: cd apps/vscode-extension && npm test
+
   installer-and-wiring-check:
     name: Installer, Update & Host-Wiring Self-Test (offline)
     runs-on: ubuntu-latest

@@ -297,7 +297,7 @@ pub fn toolspec(analyzer_version: &str) -> Toolspec {
             ),
             tool(
                 "session",
-                "Repair-loop receipts: record every evidence step, close with an honest verdict (Tier 2.5)",
+                "Repair-loop receipts & Task-Completion Forensic Trajectory Ledger: record every evidence step, close with an honest verdict, and emit .autopsy/runs/{<session_id>,latest}.{json,md} (Tier 2.5 + 3.7)",
                 vec![
                     arg(
                         "start",
@@ -313,7 +313,12 @@ pub fn toolspec(analyzer_version: &str) -> Toolspec {
                     arg(
                         "close",
                         "subcommand",
-                        "Close and emit the receipt; exit mirrors the verdict",
+                        "Close, write .autopsy/runs/{<session_id>,latest}.{json,md}, and emit the receipt; exit mirrors the verdict",
+                    ),
+                    arg(
+                        "report",
+                        "subcommand",
+                        "Generate and persist the Task-Completion Forensic Trajectory Report (.autopsy/runs/latest.{json,md}) for a session (optional --session-id; defaults to latest)",
                     ),
                     arg("list", "subcommand", "List sessions with status"),
                 ],
@@ -511,6 +516,18 @@ pub fn toolspec(analyzer_version: &str) -> Toolspec {
                 "(none)",
                 false,
                 "health report, no coverage gate",
+            ),
+            tool(
+                "init",
+                "Initialize autopsy.toml and .autopsy/invariants.yml by detecting repository languages and architectural layers (Tier 3.6)",
+                vec![arg(
+                    "--force",
+                    "flag",
+                    "Overwrite existing autopsy.toml and .autopsy/invariants.yml files",
+                )],
+                "(worktree-bound)",
+                false,
+                "always verified; non-destructive by default",
             ),
             tool(
                 "tools",

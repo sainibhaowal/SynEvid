@@ -3,6 +3,7 @@ name: Post-Merge Verification & Multi-Platform Release
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -50,21 +51,46 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary_name: autopsy
             pkg_type: tar.gz
+            sys_pkg: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary_name: autopsy
+            pkg_type: tar.gz
+            sys_pkg: false
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary_name: autopsy
+            pkg_type: tar.gz
+            sys_pkg: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            binary_name: autopsy
+            pkg_type: tar.gz
+            sys_pkg: false
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: autopsy
             pkg_type: tar.gz
+            sys_pkg: false
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_name: autopsy
             pkg_type: tar.gz
+            sys_pkg: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: autopsy.exe
             pkg_type: zip
+            sys_pkg: false
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+
+      - name: Install Linux musl & RPM Packaging Tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools rpm
 
       - name: Install Rust Toolchain for Target
         uses: dtolnay/rust-toolchain@stable
@@ -79,6 +105,22 @@ jobs:
       - name: Build Optimized Release Binaries
         run: cargo build --release --target ${{ matrix.target }} -p autopsy-cli -p synevid-lsp
 
+      - name: macOS Code Signing & Notarization (Gatekeeper readiness)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          for bin in "target/${{ matrix.target }}/release/autopsy" "target/${{ matrix.target }}/release/synevid-lsp"; do
+            if [ -f "$bin" ]; then
+              if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+                codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$bin"
+              else
+                codesign --force --sign - "$bin"
+              fi
+            fi
+          done
+
       - name: Set up Node.js 22 (MCP bundle)
         uses: actions/setup-node@v4
         with:
@@ -89,14 +131,12 @@ jobs:
       - name: Build Single-File MCP Server (zero-build agent surface)
         run: cd apps/mcp-server && npm ci --no-audit --no-fund && npm run build:bundle
 
-      - name: Package Release Archive (with License & Metadata)
+      - name: Package Release Archive & System Packages (.deb / .rpm)
         shell: bash
         run: |
           DIST_DIR="autopsy-${{ matrix.target }}"
           mkdir -p "$DIST_DIR"
 
-          # The CLI is required; the IDE surface (synevid-lsp, Tier 3.2) ships in the
-          # same archive so editors and terminals install from one artifact.
           BIN_BASE="${{ matrix.binary_name }}"
           LSP_NAME="${BIN_BASE/autopsy/synevid-lsp}"
           for name in "$BIN_BASE" "$LSP_NAME"; do
@@ -107,22 +147,20 @@ jobs:
             fi
           done
 
-          # Zero-build agent surface: install.sh unpacks these into
-          # $PREFIX/share/synevid/ so hosts never need npm at run time.
           mkdir -p "$DIST_DIR/mcp-server" "$DIST_DIR/hooks"
           cp apps/mcp-server/dist/index.bundle.js "$DIST_DIR/mcp-server/index.js"
           cp scripts/setup-agent-hosts.py "$DIST_DIR/"
-          cp agents/hooks/safe-edit.sh agents/hooks/autopsy-session.sh "$DIST_DIR/hooks/"
-          
+          cp agents/hooks/safe-edit.sh agents/hooks/autopsy-session.sh agents/hooks/autopsy-task-complete.sh "$DIST_DIR/hooks/"
+
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "$DIST_DIR/"
-          
+
           PKG="autopsy-${{ matrix.target }}.${{ matrix.pkg_type }}"
           if [ "${{ matrix.pkg_type }}" == "zip" ]; then
             7z a "$PKG" "$DIST_DIR"
           else
             tar -czvf "$PKG" "$DIST_DIR"
           fi
-          
+
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$PKG" > "$PKG.sha256"
           elif command -v shasum >/dev/null 2>&1; then
@@ -130,9 +168,14 @@ jobs:
           else
             python3 -c "import hashlib, sys; h=hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest(); print(f'{h}  {sys.argv[1]}')" "$PKG" > "$PKG.sha256"
           fi
-          
+
           mkdir -p artifacts
           mv autopsy-${{ matrix.target }}.* artifacts/
+
+          if [ "${{ matrix.sys_pkg }}" == "true" ]; then
+            VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
+            bash scripts/build-linux-packages.sh "$DIST_DIR" "${{ matrix.target }}" "$VERSION" artifacts/
+          fi
           ls -lh artifacts/
 
       - name: Upload Platform Package Artifact
@@ -142,9 +185,13 @@ jobs:
           path: artifacts/
 
   release-manifest:
-    name: Generate Aggregated Release Manifest & Checksums
+    name: Generate Aggregated Release Manifest, SBOM & Provenance
     needs: cross-platform-builds
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -163,20 +210,39 @@ jobs:
         with:
           path: all-artifacts
 
-      - name: Consolidate Release Bundle & Generate SHA256SUMS
+      - name: Consolidate Release Bundle, Manifests & SHA256SUMS
         run: |
           mkdir -p release-bundle
-          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-bundle/ \;
+          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-bundle/ \;
           cp sbom-autopsy-cli.cdx.json release-bundle/
           cd release-bundle
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          cd ..
+          VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
+          python3 scripts/render-package-manifests.py --sums release-bundle/SHA256SUMS.txt --version "$VERSION" --out-dir release-bundle/
+          cd release-bundle
+          sha256sum * > SHA256SUMS.txt
           echo "## Synevid Multi-Platform Release Manifest" >> $GITHUB_STEP_SUMMARY
           echo "| Filename | SHA256 Checksum |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
           while read -r hash fname; do
             echo "| \`$fname\` | \`$hash\` |" >> $GITHUB_STEP_SUMMARY
           done < SHA256SUMS.txt
+
+      - name: Install Cosign (Keyless Sigstore Signing)
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign SHA256SUMS.txt with Sigstore Keyless Cosign
+        run: |
+          cosign sign-blob --yes \
+            --bundle release-bundle/SHA256SUMS.txt.sigstore.json \
+            release-bundle/SHA256SUMS.txt
+
+      - name: Generate SLSA Build Provenance Attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "release-bundle/autopsy-*"
 
       - name: Upload Final Release Bundle
         uses: actions/upload-artifact@v4
@@ -206,11 +272,6 @@ jobs:
           VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # This is what makes `install.sh` work: the one-line installer downloads
-      # https://github.com/<repo>/releases/latest/download/<asset>. The release
-      # for the current workspace version is refreshed in place on every
-      # post-merge run, so "latest" always means "latest main that passed the
-      # full post-merge gate" — users update by simply re-running the installer.
       - name: Publish / Refresh GitHub Release (rolling latest)
         uses: softprops/action-gh-release@v2
         with:

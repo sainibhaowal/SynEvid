@@ -151,6 +151,7 @@ pub fn record_suggestion(
         crate::Commands::Doctor => "doctor",
         crate::Commands::Tools => "tools",
         crate::Commands::Version => "version",
+        crate::Commands::Init { .. } => "init",
     };
     let receipt = Suggestion {
         id: id.clone(),

@@ -69,6 +69,8 @@ flowchart TD
         MCP["apps/mcp-server<br/>(Model Context Protocol Stdio)"]
         WEB["apps/web-inspector<br/>(Forensic Graph Visualizer)"]
         LSP["apps/synevid-lsp<br/>(IDE Impact Hovers, Tier 3.2)"]
+        VSC["apps/vscode-extension<br/>(VS Code / Cursor / Windsurf Plugin)"]
+        ACT["action.yml<br/>(Composite GitHub Action Plugin)"]
         PRG["GitHub Actions PR Gate<br/>(autopsy-pr-gate.yml)"]
     end
 
@@ -266,11 +268,13 @@ autopsy doctor
 # 9. Print engine version and adapter capabilities
 autopsy version
 
-# 10. Agent surfaces: resolve symbols, project the graph, self-describe, record the loop
+# 10. Zero-config onboarding, agent surfaces & task forensic trajectory
+autopsy init                                             # auto-detect languages/layers -> autopsy.toml + invariants.yml (Tier 3.6)
 autopsy find "UserService.create" --format json          # partial name -> ranked stable IDs (Tier 1.1)
 autopsy map --top 25 --format json                       # bounded whole-graph counts + top-N (Tier 1.3)
 autopsy tools --format json                              # machine-readable toolspec for agents (Tier 3.1)
 autopsy session start --format json                      # repair-loop receipts (Tier 2.5)
+autopsy session report --format json                     # task-completion forensic trajectory report (Tier 3.5)
 ```
 
 ---
@@ -317,13 +321,15 @@ SynEvid/
 │       ├── autopsy-adapter-rust/       # Rust AST compiler & tree-sitter bridge (Tier 2)
 │       └── autopsy-repo/               # Discovery, ignore rules, sandboxing & BLAKE3 digests
 ├── apps/
-│   ├── mcp-server/                     # Model Context Protocol adapter (11 read-only tools, stdio)
+│   ├── mcp-server/                     # Model Context Protocol adapter (11 read-only tools, 7 resources, stdio)
 │   ├── synevid-lsp/                    # LSP stdio server: inline impact hovers (Tier 3.2)
+│   ├── vscode-extension/               # VS Code / Cursor / Windsurf extension (CodeLens, Hover, Trajectory Sidebar)
 │   └── web-inspector/                  # Local evidence & dependency graph inspector
+├── packaging/                          # Homebrew formula, Scoop manifest, Winget manifest
 ├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
 ├── schemas/                            # Frozen public JSON Schemas (Draft-07)
-├── scripts/                            # Automated verification & determinism gates
-├── docs/                               # 39 Verification Reports, ADRs, and Traceability
+├── scripts/                            # Automated verification, installers (install.sh / install.ps1) & .deb/.rpm builder
+├── docs/                               # 40 Verification Reports, ADRs, and Traceability
 └── assets/                             # Visual emblems, diagrams, and identity assets
 ```
 
@@ -333,7 +339,7 @@ SynEvid/
 
 SynEvid maintains a zero-tolerance policy for compiler warnings, test regressions, and non-deterministic behavior.
 
-### Automated Pre-Commit Stack (13 Local Hooks)
+### Automated Pre-Commit Stack (14 Local Hooks)
 All commits and pushes are verified locally via `.pre-commit-config.yaml`:
 ```bash
 $ pre-commit run --all-files
@@ -348,6 +354,7 @@ JSON Schema Syntactic Validation................................................
 Engine Config & Invariant Syntax Validation.....................................Passed
 TypeScript MCP Server TypeCheck & Tests.........................................Passed
 Web Inspector Render Tests (headless, zero-build)...............................Passed
+VS Code Extension & Forensic Trajectory Tests (headless, zero-build)............Passed
 Installer, Update & Host-Wiring Self-Test (offline, fake release)...............Passed
 Architectural Boundary Gate (Zero LLM/MCP in Core Crates).......................Passed
 Universal Hardware & Multi-Arch Determinism (Pillar A)..........................Passed
@@ -468,26 +475,30 @@ writes one.
 | MCP server — agent bridge (single file, zero-build) | `~/.local/share/synevid/mcp-server/index.js` |
 | Host-wiring helper + advisory hooks | `~/.local/share/synevid/` |
 
-**A. One-line installer (recommended).** Downloads the prebuilt release for
-your OS/arch and verifies its SHA-256 against the release's `SHA256SUMS.txt`
-(abort on mismatch); falls back to a source build (installs Rust via rustup if
-missing); adds `~/.local/bin` to PATH through one managed block; installs the
-MCP server; and wires every detected agent host (backup-first, re-run safe).
+**A. One-line installer (Linux, macOS, WSL, ARM64, Alpine/musl, and Windows PowerShell).**
+Downloads the prebuilt release for your OS/arch (`linux-x86_64` GNU & static `musl`, `linux-arm64` GNU & static `musl`, `macos-arm64`, `macos-x86_64`, `windows-x86_64`) and verifies its SHA-256 against the release's `SHA256SUMS.txt` (plus GitHub SLSA Build Provenance attestations and Sigstore `cosign` bundle `SHA256SUMS.txt.sigstore.json`); falls back to a source build if needed; adds `~/.local/bin` to `PATH`; installs the MCP server; and wires every detected agent host (backup-first, re-run safe).
+
+* **Linux / macOS / WSL / ARM64 / Alpine (`musl` auto-detected):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.sh | bash
 # then open a new terminal
-autopsy version                                  # verify
-autopsy --repo-root /path/to/your/repo doctor    # expect: Overall Status: HEALTHY
+autopsy init                                     # scaffold autopsy.toml + .autopsy/invariants.yml in any repo
+autopsy doctor                                   # expect: Overall Status: HEALTHY
 ```
-- **Update:** re-run the same one-liner (or `install.sh --update` if you kept
-  the script). Idempotent and takes seconds. Releases are refreshed from every
-  green `main` post-merge run, so "latest" is always the newest gate-passing
-  revision. No silent auto-update by design — SynEvid never phones home.
-- **Inspect / remove:** `install.sh --check` · `install.sh --uninstall`
-  (also unwires hosts and removes the PATH block).
-- **Knobs:** `SYNEVID_PREFIX=~/.local` · `AUTOPSY_SKIP_HOSTS=1` ·
-  `AUTOPSY_SKIP_MCP=1` · `AUTOPSY_SKIP_BUILD=1` · `SYNEVID_NO_PATH=1` ·
-  `SYNEVID_STRICT=1` (require checksum verification).
+* **Native Windows PowerShell (no Git Bash required):**
+```powershell
+irm https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.ps1 | iex
+# then open a new terminal
+autopsy init
+autopsy doctor
+```
+* **System Package Managers (`.deb`, `.rpm`, Homebrew, Scoop, Winget):**
+  * **Debian / Ubuntu (`.deb`):** `sudo dpkg -i synevid_0.1.0_amd64.deb` (or `arm64.deb` from GitHub Releases)
+  * **Fedora / RHEL / Rocky (`.rpm`):** `sudo rpm -Uvh synevid-0.1.0-1.x86_64.rpm` (or `aarch64.rpm` from GitHub Releases)
+  * **Homebrew / Scoop / Winget:** Manifests shipped in [`packaging/homebrew/synevid.rb`](packaging/homebrew/synevid.rb), [`packaging/scoop/synevid.json`](packaging/scoop/synevid.json), and [`packaging/winget/sainibhaowal.SynEvid.yaml`](packaging/winget/sainibhaowal.SynEvid.yaml).
+- **Update:** re-run the same one-liner (or `install.sh --update` / `install.ps1 -Update`). Idempotent and takes seconds. Releases are refreshed from every green `main` post-merge run and `v*` tag. No silent auto-update by design — SynEvid never phones home.
+- **Inspect / remove:** `install.sh --check` · `install.sh --uninstall` (or `install.ps1 -Check` · `install.ps1 -Uninstall` on Windows).
+- **Knobs:** `SYNEVID_PREFIX=~/.local` · `SYNEVID_LIBC=musl` (`--musl`) · `AUTOPSY_SKIP_HOSTS=1` · `AUTOPSY_SKIP_MCP=1` · `AUTOPSY_SKIP_BUILD=1` · `SYNEVID_NO_PATH=1` · `SYNEVID_STRICT=1` (require checksum verification).
 
 **B. CLI binary from source.** Prerequisites: Rust 1.90+.
 ```bash
@@ -525,9 +536,23 @@ Opt-in agent guidance lives in `agents/skills/synevid-forensics.md`, and
 `agents/hooks/safe-edit.sh` is an advisory, fail-open pre-edit blast-radius
 prompt (never blocks an edit).
 
-**D. PR gate (team use).** Copy `.github/workflows/autopsy-pr-gate.yml` into
-your repository. Every PR then gets: invariant verdict (fails the merge on
-exit 2), per-file caller blast radius, and JSON + SARIF artifacts.
+**D. IDE Plugin (`apps/vscode-extension`) & GitHub Action Plugin (`action.yml`).**
+* **VS Code / Cursor / Windsurf Extension:** Located in [`apps/vscode-extension/`](apps/vscode-extension/). Provides inline Blast Radius **CodeLens** above declarations, semantic **Hover** impact cards, a live **Status Bar** verification indicator, and a **Task Forensic Trajectory** sidebar in the Activity Bar.
+* **Composite GitHub Action (`action.yml`):** Add SynEvid to any repository workflow in 4 lines:
+  ```yaml
+  - uses: sainibhaowal/SynEvid@v0.1.0
+    with:
+      strict: "true"
+      sarif-output: autopsy.sarif
+  ```
+* **Full PR Gate Workflow:** Copy [`.github/workflows/autopsy-pr-gate.yml`](.github/workflows/autopsy-pr-gate.yml) into your repository for automatic per-file caller blast radius and JSON + SARIF artifacts.
+
+**E. Automatic Task-Completion Forensic Trajectory Ledger (`.autopsy/runs/`).**
+Every time an AI coding session closes (`autopsy session close`) or the Claude Code `Stop` hook ([`agents/hooks/autopsy-task-complete.sh`](agents/hooks/autopsy-task-complete.sh)) runs at the end of an agentic task, SynEvid generates a deterministic, BLAKE3-signed forensic trajectory report at:
+* `.autopsy/runs/<session_id>.json` & `.autopsy/runs/<session_id>.md`
+* `.autopsy/runs/latest.json` & `.autopsy/runs/latest.md` (also exposed via MCP resource `autopsy://runs/latest`)
+
+Both human developers and subsequent AI agent turns read `.autopsy/runs/latest.md` (or `autopsy session report`) to inspect the exact starting snapshot, ending snapshot, ordered verification steps, verdict (`PASS` / `FAIL` / `INCOMPLETE`), and concrete `next_agent_guidance` so subsequent turns never repeat prior mistakes.
 
 **Language coverage:** TypeScript/JavaScript, Python, **Go, and Rust** adapters (all
 deterministic, tree-sitter, conformance-tested). Others land only when a
@@ -615,7 +640,7 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 * **Architecture Decision Records:** [`docs/adr/`](docs/adr/) (ADR-0001 through ADR-0009).
 * **AI Coding Agent Engineering Rules:** [`AGENTS.md`](AGENTS.md) and [`.agents/rules/agent-engineering-rules.md`](.agents/rules/agent-engineering-rules.md).
 
-### Complete 39-Report Verification Evidence Suite
+### Complete 40-Report Verification Evidence Suite
 
 | Phase / Pillar | Evidence Record | Focus Area & Verified Invariants |
 | :--- | :--- | :--- |
@@ -657,7 +682,8 @@ Synevid enforces strict, verifiable evidence documentation for every subsystem a
 | | [`36-tier2-agent-quality.md`](docs/evidence/36-tier2-agent-quality.md) | Deterministic repair advice, Go/Rust adapters, workspace registry, pinned browse, session receipts |
 | | [`37-tier3-polish.md`](docs/evidence/37-tier3-polish.md) | Machine-readable toolspec, `synevid-lsp` editor surface, suggestion receipts, performance ceilings |
 | | [`38-agent-gate-closure.md`](docs/evidence/38-agent-gate-closure.md) | Protocol-level MCP agent-loop tests (real stdio JSON-RPC) & honest promotion-gate status |
-| **Install & Lifecycle (39)** | [`39-install-update-lifecycle.md`](docs/evidence/39-install-update-lifecycle.md) | One-command install/update/check/uninstall, checksum-verified releases, bundled zero-build MCP server, offline installer self-test |
+| **Install & Lifecycle (39–40)** | [`39-install-update-lifecycle.md`](docs/evidence/39-install-update-lifecycle.md) | One-command install/update/check/uninstall, checksum-verified releases, bundled zero-build MCP server, offline installer self-test |
+| | [`40-p0-release-plugin-and-forensic-trajectory.md`](docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md) | Multi-arch GNU/musl + `.deb`/`.rpm` release matrix, SLSA/Sigstore provenance, `install.ps1`, `autopsy init`, VS Code plugin, composite `action.yml`, and `.autopsy/runs/` forensic trajectory ledger |
 
 ---
 

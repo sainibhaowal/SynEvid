@@ -17,7 +17,7 @@ Depending on your role and interest, follow the designated reading path below:
         |                       |               |                       |
         v                       v               v                       v
 [Architecture & Design]   [Requirements & Trace] [Safety & Invariants]  [Evidence & Receipts]
-docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..39
+docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/THREAT_MODEL.md  docs/evidence/01..40
         |                       |               |                       |
         v                       v               v                       v
    ADR-0001..0009         schemas/*.json   scripts/verify-arch-*.sh  docs/benchmark/PROTOCOL.md
@@ -47,13 +47,13 @@ docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/
 
 ### Path D: Empirical Benchmarks & Production Evidence
 1. [**Benchmark Protocol**](benchmark/PROTOCOL.md): Pre-registered evaluation methodology across 50 refactoring tasks and 5 TypeScript target repositories.
-2. [**Evidence Dossier (39 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out and the install lifecycle (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md), [39: Install Lifecycle](evidence/39-install-update-lifecycle.md)).
+2. [**Evidence Dossier (40 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out, the install lifecycle, and P0 multi-arch distribution/plugin/forensic-trajectory closure (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md), [39: Install Lifecycle](evidence/39-install-update-lifecycle.md), [40: P0 Release, Plugin & Forensic Trajectory](evidence/40-p0-release-plugin-and-forensic-trajectory.md)).
 
 ### Path E: AI Agent Surfaces & Integration
-1. [**Agent Tool Reference**](agents/TOOLS.md): the one envelope, the exit-code contract, all 22 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 6 resources, environment variables, and the `synevid-lsp` editor surface (Tier 1–3).
+1. [**Agent Tool Reference**](agents/TOOLS.md): the one envelope, the exit-code contract, all 23 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 7 resources, environment variables, and the `synevid-lsp` and VS Code plugin editor surfaces (Tier 1–3).
 2. [**Agent recipes**](../agents/recipes/repair-loop.md): step-by-step playbooks — [repair loop](../agents/recipes/repair-loop.md), [pinned evidence](../agents/recipes/pinned-evidence.md), [PR gate](../agents/recipes/pr-gate.md), [multi-repo](../agents/recipes/multi-repo.md).
-3. [**Agent skill & hooks**](../agents/skills/synevid-forensics.md): opt-in host guidance, session-receipt hook ([`autopsy-session.sh`](../agents/hooks/autopsy-session.sh)), and the advisory fail-open [safe-edit hook](../agents/hooks/safe-edit.sh). Index: [Agent Documentation](agents/README.md).
-4. [**Tier evidence & gate closure**](evidence/38-agent-gate-closure.md): what each tier added and how it is verified (35–38), including the protocol-level MCP agent-loop tests.
+3. [**Agent skill & hooks**](../agents/skills/synevid-forensics.md): opt-in host guidance, session-receipt hook ([`autopsy-session.sh`](../agents/hooks/autopsy-session.sh)), the advisory fail-open [safe-edit hook](../agents/hooks/safe-edit.sh), and the automatic task-completion forensic trajectory hook ([`autopsy-task-complete.sh`](../agents/hooks/autopsy-task-complete.sh)). Index: [Agent Documentation](agents/README.md).
+4. [**Tier evidence & gate closure**](evidence/38-agent-gate-closure.md): what each tier added and how it is verified (35–40), including the protocol-level MCP agent-loop tests.
 
 ### Path F: Install & Operate (users)
 1. [**One-line install / update / uninstall**](../README.md#8-developer--agent-workflow): per-user install under `~/.local` (one install serves every repository), checksum-verified release downloads, managed PATH block, a bundled single-file MCP server, automatic agent-host wiring — update by re-running the same command; `--check` and `--uninstall` supported. Releases are refreshed from every green `main` post-merge run.
@@ -128,7 +128,8 @@ SynEvid operates via a unified CLI (`autopsy`):
 | `autopsy explain` | Provides an evidence trace and recommended agent repair strategy for any finding. | `0` (Informational) |
 | `autopsy find` | Resolves a partial name/path/ID to ranked stable symbol IDs (Tier 1.1). | `0` (Verified), `3` (Blank pattern) |
 | `autopsy map` | Bounded whole-graph projection: counts plus top-N ranked nodes (Tier 1.3). | `0` (Verified), `4` (`--strict`, unknown coverage) |
-| `autopsy session` | Repair-loop receipts: `start` / `record` / `show` / `close` / `list` (Tier 2.5). | `0` (Pass), `2` (Fail), `3` (Refused) |
+| `autopsy session` | Repair-loop receipts & task forensic trajectory: `start` / `record` / `show` / `close` / `list` / `report` (Tier 2.5, 3.5). | `0` (Pass), `2` (Fail), `3` (Refused) |
+| `autopsy init` | Scaffolds `autopsy.toml` and `.autopsy/invariants.yml` by detecting repository languages and layers (Tier 3.6). | `0` (Success) |
 | `autopsy tools` | Emits the machine-readable toolspec for agents (Tier 3.1). | `0` (Success) |
 
-All 22 subcommands — including `symbols`, `edges`, `workspace`, `temporal`, `test-select`, `contract-dist`, `telemetry`, `cochange`, `blast-radius`, `doctor`, and `version` — are documented in [Agent Tool Reference](agents/TOOLS.md) and emitted by `autopsy tools --format json`.
+All 23 subcommands — including `symbols`, `edges`, `workspace`, `temporal`, `test-select`, `contract-dist`, `telemetry`, `cochange`, `blast-radius`, `doctor`, and `version` — are documented in [Agent Tool Reference](agents/TOOLS.md) and emitted by `autopsy tools --format json`.

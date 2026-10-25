@@ -54,7 +54,7 @@ fi
 
 OUT="$("$BIN" --repo-root "$REPO" impact -s "$REL" --profile callers --top-k 5 --format json 2>/dev/null)" || exit 0
 printf '%s' "$OUT" | python3 -c "
-import json, sys
+import json, shlex, sys
 d = json.load(sys.stdin)
 imp = d.get('impact', {}) or {}
 top = imp.get('ranked_top', []) or imp.get('impacted_entities', [])
@@ -64,6 +64,6 @@ print(json.dumps({
     'top': top[:5],
     'total': total,
     'digest': d.get('result_digest', ''),
-    'command': 'autopsy impact -s ' + sys.argv[1] + ' --profile callers --top-k 5',
+    'command': 'autopsy impact -s ' + shlex.quote(sys.argv[1]) + ' --profile callers --top-k 5',
 }))
 " "$REL"

@@ -1,0 +1,25 @@
+{
+  "version": "0.1.0",
+  "description": "Offline, deterministic software verification, blast-radius, and agent forensic engine",
+  "homepage": "https://github.com/sainibhaowal/SynEvid",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/sainibhaowal/SynEvid/releases/download/v0.1.0/autopsy-x86_64-pc-windows-msvc.zip",
+      "hash": "REPLACE_WITH_SHA256_X86_64_PC_WINDOWS_MSVC",
+      "extract_dir": "autopsy-x86_64-pc-windows-msvc"
+    }
+  },
+  "bin": [
+    "autopsy.exe",
+    "synevid-lsp.exe"
+  ],
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/sainibhaowal/SynEvid/releases/download/v$version/autopsy-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  }
+}

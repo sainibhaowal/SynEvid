@@ -87,6 +87,7 @@ case "$(uname -m)" in
 esac
 case "$OS-$ARCH" in
   linux-x86_64) TRIPLE=x86_64-unknown-linux-gnu ;;
+  linux-arm64) TRIPLE=aarch64-unknown-linux-gnu ;;
   macos-arm64) TRIPLE=aarch64-apple-darwin ;;
   macos-x86_64) TRIPLE=x86_64-apple-darwin ;;
   *) echo "SKIP: no release mapping for $OS-$ARCH"; exit 0 ;;
@@ -94,16 +95,17 @@ esac
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-FAKE_HOME="$TMP/home"
+FAKE_HOME="$TMP/home with space"
 FAKE_BIN="$TMP/fakebin"
 FAKE_RELEASE="$TMP/release"
-PREFIX="$TMP/prefix"
+PREFIX="$TMP/prefix with space"
 PREFIX_BAD="$TMP/prefix-bad"
 mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.config/Code/User" "$FAKE_BIN" "$FAKE_RELEASE"
 
 printf 'export EDITOR=vim\n' > "$FAKE_HOME/.bashrc"
 printf '{\n  "mcpServers": {\n    "other": {\n      "command": "x"\n    }\n  }\n}\n' > "$FAKE_HOME/.cursor/mcp.json"
 printf '{}\n' > "$FAKE_HOME/.config/Code/User/mcp.json"
+printf '{\n  "hooks": {\n    "PreToolUse": [\n      {\n        "matcher": "Bash",\n        "hooks": [\n          {\n            "type": "command",\n            "command": "echo keep"\n          }\n        ]\n      }\n    ]\n  }\n}\n' > "$FAKE_HOME/.claude.json"
 
 # --- fake curl shim ---------------------------------------------------------
 cat > "$FAKE_BIN/curl" <<'SHIM'
@@ -157,6 +159,7 @@ printf 'console.error("fake mcp server");\n' > "$STAGE/$ROOT_DIR/mcp-server/inde
 cp "$HOST_SETUP" "$STAGE/$ROOT_DIR/setup-agent-hosts.py"
 cp "$REPO_ROOT/agents/hooks/safe-edit.sh" "$STAGE/$ROOT_DIR/hooks/safe-edit.sh"
 cp "$REPO_ROOT/agents/hooks/autopsy-session.sh" "$STAGE/$ROOT_DIR/hooks/autopsy-session.sh"
+cp "$REPO_ROOT/agents/hooks/autopsy-task-complete.sh" "$STAGE/$ROOT_DIR/hooks/autopsy-task-complete.sh"
 tar -czf "$FAKE_RELEASE/autopsy-$TRIPLE.tar.gz" -C "$STAGE" "$ROOT_DIR"
 
 sha256_of() {
@@ -200,6 +203,7 @@ check "MCP server installed" test -f "$PREFIX/share/synevid/mcp-server/index.js"
 check "wiring helper installed" test -f "$PREFIX/share/synevid/setup-agent-hosts.py"
 check "safe-edit hook installed" test -x "$PREFIX/share/synevid/hooks/safe-edit.sh"
 check "session hook installed" test -x "$PREFIX/share/synevid/hooks/autopsy-session.sh"
+check "task-complete forensic hook installed" test -x "$PREFIX/share/synevid/hooks/autopsy-task-complete.sh"
 check_contains "installed engine reports version" "9.9.9-fake" \
   "$("$PREFIX/bin/autopsy" version 2>&1)"
 check "PATH block added to .bashrc" grep -qF "# >>> synevid >>>" "$FAKE_HOME/.bashrc"
@@ -212,6 +216,18 @@ check_json "Cursor's other entries preserved" "$FAKE_HOME/.cursor/mcp.json" \
   "d['mcpServers']['other']['command'] == 'x'"
 check_json "VS Code wired (servers key, stdio type)" "$FAKE_HOME/.config/Code/User/mcp.json" \
   "d['servers']['synevid']['type'] == 'stdio' and d['servers']['synevid']['args'][0].endswith('mcp-server/index.js')"
+
+# Opt-in --hooks wiring with paths containing spaces (shlex.quote verification)
+HOME="$FAKE_HOME" python3 "$PREFIX/share/synevid/setup-agent-hosts.py" \
+  --autopsy-bin "$PREFIX/bin/autopsy" \
+  --mcp-server "$PREFIX/share/synevid/mcp-server/index.js" \
+  --hooks >/dev/null 2>&1
+check_json "Claude Code safe-edit hook registered and shell-quoted for spaces" "$FAKE_HOME/.claude.json" \
+  "len(__import__('shlex').split([h['command'] for e in d['hooks']['PreToolUse'] for h in e.get('hooks', []) if 'safe-edit.sh' in h.get('command', '')][0])) == 2 and __import__('shlex').split([h['command'] for e in d['hooks']['PreToolUse'] for h in e.get('hooks', []) if 'safe-edit.sh' in h.get('command', '')][0])[1].endswith('share/synevid/hooks/safe-edit.sh')"
+check_json "Claude Code Stop hook registered for autopsy-task-complete.sh" "$FAKE_HOME/.claude.json" \
+  "any('autopsy-task-complete.sh' in str(h.get('command', '')) for e in d['hooks'].get('Stop', []) for h in e.get('hooks', []))"
+check_json "Claude Code unrelated PreToolUse hooks preserved" "$FAKE_HOME/.claude.json" \
+  "any(h.get('command') == 'echo keep' for e in d['hooks']['PreToolUse'] for h in e.get('hooks', []))"
 
 # --- 3. update run is idempotent --------------------------------------------
 out="$(run_installer "$PREFIX" --update 2>&1)"
@@ -256,6 +272,8 @@ check_json "Cursor unwired" "$FAKE_HOME/.cursor/mcp.json" \
   "'synevid' not in d['mcpServers'] and d['mcpServers']['other']['command'] == 'x'"
 check_json "VS Code unwired" "$FAKE_HOME/.config/Code/User/mcp.json" \
   "'synevid' not in d.get('servers', {})"
+check_json "Claude Code safe-edit and Stop hooks unwired by --uninstall and unrelated hook preserved" "$FAKE_HOME/.claude.json" \
+  "'synevid' not in d.get('mcpServers', {}) and not any('safe-edit.sh' in str(h.get('command', '')) for e in d.get('hooks', {}).get('PreToolUse', []) for h in e.get('hooks', [])) and not any('autopsy-task-complete.sh' in str(h.get('command', '')) for e in d.get('hooks', {}).get('Stop', []) for h in e.get('hooks', [])) and any(h.get('command') == 'echo keep' for e in d.get('hooks', {}).get('PreToolUse', []) for h in e.get('hooks', []))"
 
 # --- summary ----------------------------------------------------------------
 echo

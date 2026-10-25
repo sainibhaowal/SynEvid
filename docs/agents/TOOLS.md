@@ -76,7 +76,7 @@ next_action: <concrete repair step>
 
 | Command | Purpose | Pinning | Compact |
 |---|---|---|---|
-| `session` | Repair-loop receipts: record every evidence step, close with an honest verdict (Tier 2.5) | steps carry `--snapshot-id` | no |
+| `session` | Repair-loop receipts and forensic trajectory ledger: `start` / `record` / `close` / `show` / `list` / `report` (Tier 2.5, Tier 3.5) | steps carry `--snapshot-id` | no |
 | `workspace` | Multi-repo registry with honest per-repo accessibility and analysis status (Tier 2.3) | none | no |
 
 ### 4.4 Evidence (Pillar 1–6)
@@ -92,10 +92,11 @@ next_action: <concrete repair step>
 | `catalog` | Ingest Backstage catalog entities and dependency manifests (Pillar 6) | worktree-bound | yes |
 | `blast-radius` | Organisational blast radius of one catalog component | worktree-bound | yes |
 
-### 4.5 Bookkeeping
+### 4.5 Bookkeeping & Onboarding
 
 | Command | Purpose | Pinning | Compact |
 |---|---|---|---|
+| `init` | Auto-detect repository languages and architectural layers to scaffold `autopsy.toml` and `.autopsy/invariants.yml` (Tier 3.6) | worktree-bound | no |
 | `doctor` | Verify repository configuration, storage integrity, and analyzer health | none | no |
 | `tools` | Emit this specification (Tier 3.1) | none | no |
 | `version` | Display the engine version and adapter capabilities | none | no |
@@ -158,14 +159,14 @@ never silent.
 | `autopsy_test_selection` | Conservative test selection for a changed file set |
 | `autopsy_contract_diff` | OpenAPI / AsyncAPI / Pact breaking-change diff |
 | `autopsy_distributed_blast_radius` | Organisational blast radius of one catalog component |
-| `autopsy_session` | Repair-loop receipts: `start` / `record` / `close` / `show` / `list` (Tier 2.5) |
+| `autopsy_session` | Repair-loop receipts & task forensic trajectory: `start` / `record` / `close` / `show` / `list` / `report` (Tier 2.5, Tier 3.5) |
 
 Every tool returns the one envelope of §1. Every path-taking tool accepts `repo_root` and
 `snapshot_id`, and honours `AUTOPSY_SNAPSHOT`. The canonical golden-path loop is exactly
 three calls — `autopsy_find` → `autopsy_impact` → `autopsy_verify` — pinned by
 `apps/mcp-server/test/e2e_agent_find_and_envelope.test.js`.
 
-## 11. MCP resources
+## 11. MCP resources (7)
 
 | URI | Description |
 |---|---|
@@ -174,6 +175,7 @@ three calls — `autopsy_find` → `autopsy_impact` → `autopsy_verify` — pin
 | `autopsy://graph/symbols{?limit,offset,kind,repo_root,snapshot}` | Paginated symbol index |
 | `autopsy://graph/edges{?source,direction,kind,limit,offset,repo_root,snapshot}` | Paginated 1-hop neighborhood |
 | `autopsy://workspace{?repo_root}` | Multi-repo registry |
+| `autopsy://runs/latest{?repo_root}` | Latest task-completion forensic trajectory report (`TaskForensicReport`, `.autopsy/runs/latest.json`) |
 | `autopsy://tools` | This specification (Tier 3.1, fixed URI) |
 
 ## 12. Environment variables
@@ -233,8 +235,11 @@ vim.lsp.start({
 - [`agents/recipes/pr-gate.md`](../../agents/recipes/pr-gate.md) — wire the PR forensic gate into CI.
 - [`agents/recipes/multi-repo.md`](../../agents/recipes/multi-repo.md) — workspace registration and cross-repo queries.
 - [`agents/skills/synevid-forensics.md`](../../agents/skills/synevid-forensics.md) — the host-agnostic skill file installed by `scripts/setup-agent-hosts.py`.
-- [`agents/hooks/autopsy-session.sh`](../../agents/hooks/autopsy-session.sh) — opt-in pre-commit session-receipt hook; [`agents/hooks/safe-edit.sh`](../../agents/hooks/safe-edit.sh) — advisory fail-open pre-edit blast-radius prompt.
+- [`agents/hooks/autopsy-session.sh`](../../agents/hooks/autopsy-session.sh) — opt-in pre-commit session-receipt hook; [`agents/hooks/safe-edit.sh`](../../agents/hooks/safe-edit.sh) — advisory fail-open pre-edit blast-radius prompt; [`agents/hooks/autopsy-task-complete.sh`](../../agents/hooks/autopsy-task-complete.sh) — end-of-task forensic trajectory hook that persists `.autopsy/runs/latest.{json,md}` on every agent task completion.
+- [`apps/vscode-extension/`](../../apps/vscode-extension/) — VS Code / Cursor / Windsurf IDE plugin with inline Blast Radius CodeLens, Hover, Status Bar, and Task Forensic Trajectory sidebar.
+- [`action.yml`](../../action.yml) — Composite GitHub Action for zero-boilerplate PR verification.
 - [`docs/evidence/12-agent-lifecycle-protocol.md`](../evidence/12-agent-lifecycle-protocol.md) — the documented lifecycle these tools automate.
 - [`docs/evidence/38-agent-gate-closure.md`](../evidence/38-agent-gate-closure.md) — protocol-level verification of this surface through the MCP server.
+- [`docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md`](../evidence/40-p0-release-plugin-and-forensic-trajectory.md) — P0 multi-arch release, native Windows installer, VS Code plugin, `autopsy init`, and task-completion forensic trajectory ledger.
 
 

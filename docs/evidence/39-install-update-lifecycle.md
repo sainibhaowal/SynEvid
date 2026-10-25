@@ -65,7 +65,13 @@ commit `3fbe51b` found:
 
 ### Host wiring — `scripts/setup-agent-hosts.py`
 
-- `--unwire` (inverse mode; dry-runnable with `--check`; backup-first).
+- `--unwire` (inverse mode; dry-runnable with `--check`; backup-first; also
+  removes any registered Claude Code `PreToolUse` `safe-edit.sh` hook so
+  `install.sh --uninstall` never leaves a dangling hook entry behind).
+- Shell-safe hook command construction (`shlex.quote` on `AUTOPSY_BIN` and the
+  `safe-edit.sh` path, plus `shlex.quote` on the rerun seed in `safe-edit.sh`)
+  and newline-delimited `rc_files` iteration in `install.sh` so prefixes,
+  `$HOME`, or repository paths containing spaces work cleanly.
 - Layout-aware MCP resolution (installed `share/synevid/mcp-server/index.js`,
   repo `dist/index.js` or the esbuild bundle, then
   `~/.local/share/synevid/…`) and hook resolution next to the installed script.
@@ -83,10 +89,13 @@ commit `3fbe51b` found:
 
 ### Offline self-test — `scripts/tests/test-install.sh`
 
-Fake GitHub release + fake `curl` shim + throwaway HOME; 39 assertions:
-install, checksum verification and mismatch abort, update idempotency (exactly
+Fake GitHub release + fake `curl` shim + throwaway HOME (with spaces in both
+`$HOME` and `$SYNEVID_PREFIX`); 42 assertions:
+install, checksum verification and mismatch abort, `--hooks` registration with
+shell-quoted paths, update idempotency (exactly
 one PATH block), `--check` read-only behavior, `--uninstall` (binaries, share
-dir, PATH block, Cursor/VS Code entries removed, unrelated config preserved).
+dir, PATH block, Cursor/VS Code entries, and Claude Code `PreToolUse`
+`safe-edit.sh` hook removed while unrelated config and hooks are preserved).
 Wired into `.pre-commit-config.yaml` (now 13 hooks) and a new CI job
 `installer-and-wiring-check`, which feeds the pre-merge gate.
 
@@ -96,7 +105,7 @@ Wired into `.pre-commit-config.yaml` (now 13 hooks) and a new CI job
 
 | Check | Command | Result |
 | :--- | :--- | :--- |
-| Installer self-test (offline) | `bash scripts/tests/test-install.sh` | 39/39 checks |
+| Installer self-test (offline) | `bash scripts/tests/test-install.sh` | 42/42 checks |
 | MCP suite (incl. shipped bundle) | `cd apps/mcp-server && npm test` | 44/44 |
 | Gate | `pre-commit run --all-files` | 13/13 hooks |
 | Shell syntax | `bash -n scripts/install.sh` | clean |

@@ -1,0 +1,97 @@
+{
+  "name": "synevid-vscode",
+  "displayName": "SynEvid (Code Autopsy) — Blast Radius, Invariants & Agent Forensics",
+  "description": "Offline, deterministic software verification, inline blast-radius CodeLens & hover (synevid-lsp), and agentic task-completion forensic trajectory viewer.",
+  "version": "0.1.0",
+  "publisher": "sainibhaowal",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Testing",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:python",
+    "onLanguage:go",
+    "onLanguage:rust"
+  ],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node --test test/extension.test.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "synevid.init",
+        "title": "SynEvid: Initialize Repository (autopsy init)"
+      },
+      {
+        "command": "synevid.verify",
+        "title": "SynEvid: Verify Architectural Invariants & Contracts"
+      },
+      {
+        "command": "synevid.impactAtCursor",
+        "title": "SynEvid: Compute Blast Radius for Symbol"
+      },
+      {
+        "command": "synevid.showForensicReport",
+        "title": "SynEvid: Open Latest Task Forensic Trajectory Report"
+      },
+      {
+        "command": "synevid.doctor",
+        "title": "SynEvid: Run Engine Diagnostics (autopsy doctor)"
+      },
+      {
+        "command": "synevid.refreshTrajectory",
+        "title": "SynEvid: Refresh Forensic Trajectory View"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "synevid-forensics",
+          "title": "SynEvid Forensics",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "synevid-forensics": [
+        {
+          "id": "synevidTrajectoryView",
+          "name": "Task Forensic Trajectory"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SynEvid (Code Autopsy)",
+      "properties": {
+        "synevid.autopsyPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit path to the `autopsy` binary (auto-detected from ~/.local/bin, ~/.cargo/bin, or PATH when blank)."
+        },
+        "synevid.lspPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional explicit path to the `synevid-lsp` binary."
+        },
+        "synevid.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline Blast Radius & Verify CodeLens actions above declarations."
+        }
+      }
+    }
+  }
+}

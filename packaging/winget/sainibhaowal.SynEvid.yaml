@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+PackageIdentifier: sainibhaowal.SynEvid
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: sainibhaowal
+PublisherUrl: https://github.com/sainibhaowal
+PackageName: SynEvid (Code Autopsy)
+PackageUrl: https://github.com/sainibhaowal/SynEvid
+License: Apache-2.0
+LicenseUrl: https://github.com/sainibhaowal/SynEvid/blob/main/LICENSE
+ShortDescription: Offline, deterministic software verification, blast-radius, and agent forensic engine
+Commands:
+  - autopsy
+  - synevid-lsp
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: autopsy-x86_64-pc-windows-msvc\autopsy.exe
+        PortableCommandAlias: autopsy
+      - RelativeFilePath: autopsy-x86_64-pc-windows-msvc\synevid-lsp.exe
+        PortableCommandAlias: synevid-lsp
+    InstallerUrl: https://github.com/sainibhaowal/SynEvid/releases/download/v0.1.0/autopsy-x86_64-pc-windows-msvc.zip
+    InstallerSha256: REPLACE_WITH_SHA256_X86_64_PC_WINDOWS_MSVC
+ManifestType: singleton
+ManifestVersion: 1.6.0

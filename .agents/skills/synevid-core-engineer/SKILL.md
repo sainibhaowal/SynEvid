@@ -96,11 +96,13 @@ cargo test -p autopsy-repo -- test_compute_snapshot_id_golden_100_runs
 # 7. JSON Schema validation
 for s in schemas/*.json; do python3 -m json.tool "$s" >/dev/null; done
 
-# 8. MCP server and Web Inspector suites
+# 8. MCP server, Web Inspector, VS Code Extension, and Installer suites
 cd apps/mcp-server && npm run typecheck && npm run lint && npm test
 cd ../web-inspector && npm test
+cd ../vscode-extension && npm test
+cd ../.. && bash scripts/tests/test-install.sh
 
-# 9. Pre-commit all-files check (13 hooks — the aggregated gate)
+# 9. Pre-commit all-files check (14 hooks — the aggregated gate)
 make check
 ```
 
@@ -112,5 +114,5 @@ When implementing features:
 1. Identify affected requirements in [`docs/requirements/TRACEABILITY.md`](file:///home/ravi/Projects/SynEvid/docs/requirements/TRACEABILITY.md).
 2. Follow established Architecture Decision Records in [`docs/adr/`](file:///home/ravi/Projects/SynEvid/docs/adr/).
 3. Add end-to-end integration tests in [`tests/tests/`](file:///home/ravi/Projects/SynEvid/tests/tests/) using `autopsy-tests::TestSandbox`.
-4. Document all changes and verification evidence in [`docs/evidence/`](file:///home/ravi/Projects/SynEvid/docs/evidence/) — dossiers are numbered `01`–`38` (one per phase, pillar, or agent tier). Start with the verification checklist [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), and [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md).
+4. Document all changes and verification evidence in [`docs/evidence/`](file:///home/ravi/Projects/SynEvid/docs/evidence/) — dossiers are numbered `01`–`40` (one per phase, pillar, agent tier, or lifecycle closure). Start with the verification checklist [`33-verification-procedures.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/33-verification-procedures.md); the agent-experience, install-lifecycle, and P0 release/plugin/forensic-trajectory records are [`35-tier1-agent-experience.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/35-tier1-agent-experience.md), [`36-tier2-agent-quality.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/36-tier2-agent-quality.md), [`37-tier3-polish.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/37-tier3-polish.md), [`38-agent-gate-closure.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/38-agent-gate-closure.md), [`39-install-update-lifecycle.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/39-install-update-lifecycle.md), and [`40-p0-release-plugin-and-forensic-trajectory.md`](file:///home/ravi/Projects/SynEvid/docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md).
 5. Update [`CHANGELOG.md`](file:///home/ravi/Projects/SynEvid/CHANGELOG.md) and [`MANIFEST.txt`](file:///home/ravi/Projects/SynEvid/MANIFEST.txt).
