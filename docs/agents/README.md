@@ -9,7 +9,7 @@ This directory indexes the material an agent — or the engineer wiring it — n
 
 | Document | What it gives you |
 |---|---|
-| [`TOOLS.md`](TOOLS.md) | The human rendering of the toolspec: the envelope, exit-code contract, all 22 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 6 resources, environment variables, and the LSP surface. |
+| [`TOOLS.md`](TOOLS.md) | The human rendering of the toolspec: the envelope, exit-code contract, all 23 subcommands, snapshot pinning, token budgets, the 11 MCP tools and 7 resources, environment variables, and the LSP/IDE plugin surfaces. |
 | [`agents/recipes/repair-loop.md`](../../agents/recipes/repair-loop.md) | The end-to-end repair-loop playbook with session receipts. |
 | [`agents/recipes/pinned-evidence.md`](../../agents/recipes/pinned-evidence.md) | Locking every answer to one immutable snapshot. |
 | [`agents/recipes/pr-gate.md`](../../agents/recipes/pr-gate.md) | The CI merge gate: blocking exit codes and SARIF artifacts. |
