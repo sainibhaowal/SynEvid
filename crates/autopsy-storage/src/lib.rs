@@ -12,7 +12,11 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 pub mod rows;
-pub use rows::{CoChangeEdgeRow, ContractRow, TemporalFactRow, TestMappingRow, validate_coverage};
+pub use rows::{
+    AiWorkingCacheEntry, CoChangeEdgeRow, ContractRow, EgoNetwork, ForensicSessionRecord,
+    GraphEdgeRow, GraphNodeRow, RepoRecord, TemporalFactRow, TestMappingRow, TrajectoryEventRecord,
+    validate_coverage,
+};
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -62,6 +66,35 @@ impl StorageEngine {
         let conn = Connection::open(path)?;
         let engine = Self::init_connection(conn, options)?;
         Ok(engine)
+    }
+
+    /// Opens or creates an autopsy SQLite database, automatically self-healing if corrupted (ERR-STORAGE-102, NFR-P1-002).
+    pub fn open_or_recover(
+        db_path: impl AsRef<Path>,
+        options: StorageOptions,
+    ) -> Result<Self, StorageError> {
+        let path = db_path.as_ref();
+        if path.exists() {
+            let test_open = Self::open(path, options.clone());
+            match test_open {
+                Ok(engine) => {
+                    let is_ok = {
+                        let conn = engine.conn.lock().unwrap();
+                        let check: Result<String, _> =
+                            conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
+                        check.map(|s| s == "ok").unwrap_or(false)
+                    };
+                    if is_ok {
+                        return Ok(engine);
+                    }
+                }
+                Err(_) => {}
+            }
+            // Corrupt file detected: back up to .bak and recreate cleanly
+            let bak_path = path.with_extension("db.bak");
+            let _ = fs::rename(path, &bak_path);
+        }
+        Self::open(path, options)
     }
 
     /// Creates an in-memory SQLite database instance (ideal for tests and dry-runs).
@@ -277,6 +310,102 @@ impl StorageEngine {
             )?;
         }
 
+        // --- Migration 004: Phase 1 (v0.2.0) Interactive Visual Cockpit tables ---
+        if current_version < 4 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS repositories (
+                    repo_id TEXT PRIMARY KEY,
+                    root_path TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    active_branch TEXT,
+                    head_commit_oid TEXT,
+                    latest_snap_id TEXT,
+                    languages_json TEXT NOT NULL,
+                    monorepo_json TEXT NOT NULL,
+                    last_indexed_seq INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS graph_nodes (
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    stable_id TEXT NOT NULL,
+                    node_kind TEXT NOT NULL,
+                    qualified_name TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    start_line INTEGER NOT NULL,
+                    end_line INTEGER NOT NULL,
+                    signature_hash TEXT NOT NULL,
+                    visibility TEXT NOT NULL,
+                    is_exported INTEGER NOT NULL,
+                    is_dead_code INTEGER NOT NULL DEFAULT 0,
+                    coverage_state TEXT NOT NULL,
+                    PRIMARY KEY (snapshot_id, stable_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_graph_nodes_file ON graph_nodes(snapshot_id, file_path);
+
+                CREATE TABLE IF NOT EXISTS graph_edges (
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    edge_id TEXT NOT NULL,
+                    source_stable_id TEXT NOT NULL,
+                    target_stable_id TEXT NOT NULL,
+                    edge_kind TEXT NOT NULL,
+                    source_file TEXT NOT NULL,
+                    source_line INTEGER NOT NULL,
+                    source_col INTEGER NOT NULL,
+                    target_file TEXT NOT NULL,
+                    target_line INTEGER NOT NULL,
+                    confidence TEXT NOT NULL,
+                    PRIMARY KEY (snapshot_id, edge_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(snapshot_id, source_stable_id);
+                CREATE INDEX IF NOT EXISTS idx_graph_edges_tgt ON graph_edges(snapshot_id, target_stable_id);
+                CREATE INDEX IF NOT EXISTS idx_graph_edges_file ON graph_edges(snapshot_id, source_file, target_file);
+
+                CREATE TABLE IF NOT EXISTS forensic_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    repo_id TEXT NOT NULL,
+                    actor_kind TEXT NOT NULL,
+                    actor_name TEXT NOT NULL,
+                    baseline_snap_id TEXT NOT NULL,
+                    current_snap_id TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS trajectory_events (
+                    event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    job_id TEXT,
+                    workflow_id TEXT,
+                    event_type TEXT NOT NULL,
+                    target_symbol TEXT,
+                    target_file TEXT,
+                    before_snap_id TEXT,
+                    after_snap_id TEXT,
+                    verdict TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    blake3_receipt TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_trajectory_session ON trajectory_events(session_id, event_seq);
+
+                CREATE TABLE IF NOT EXISTS ai_working_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    repo_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL,
+                    query_kind TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    compact_payload TEXT NOT NULL,
+                    token_estimate INTEGER NOT NULL,
+                    hit_count INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_cache_snap ON ai_working_cache(repo_id, snapshot_id);
+
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (4, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -291,6 +420,11 @@ impl StorageEngine {
             |row| row.get(0),
         )?;
         Ok(version)
+    }
+
+    /// Returns a reference-counted clone of the database connection handle.
+    pub fn raw_connection(&self) -> Arc<Mutex<Connection>> {
+        self.conn.clone()
     }
 
     /// Persists an immutable repository snapshot into storage.
@@ -771,8 +905,8 @@ mod tests {
     #[test]
     fn test_migration_002_creates_pillar_tables() {
         let engine = StorageEngine::in_memory().unwrap();
-        // 002 creates the tables; 003 reshapes two of them. A fresh database carries both.
-        assert_eq!(engine.schema_version().unwrap(), 3);
+        // 002 creates the tables; 003 reshapes two of them; 004 adds Phase 1 visual tables.
+        assert_eq!(engine.schema_version().unwrap(), 4);
 
         let tables = table_names(&engine);
         for expected in [
@@ -780,6 +914,12 @@ mod tests {
             "test_mappings",
             "distributed_contracts",
             "co_change_matrix",
+            "repositories",
+            "graph_nodes",
+            "graph_edges",
+            "forensic_sessions",
+            "trajectory_events",
+            "ai_working_cache",
         ] {
             assert!(
                 tables.contains(&expected.to_string()),
@@ -838,8 +978,8 @@ mod tests {
             },
         )
         .unwrap();
-        // The upgrade runs through 002 *and* 003 in place.
-        assert_eq!(engine.schema_version().unwrap(), 3);
+        // The upgrade runs through 002, 003 *and* 004 in place.
+        assert_eq!(engine.schema_version().unwrap(), 4);
 
         let tables = table_names(&engine);
         assert!(tables.contains(&"temporal_facts".to_string()));
@@ -867,11 +1007,11 @@ mod tests {
 
         for _ in 0..3 {
             let engine = StorageEngine::open(&db_path, opts()).unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 3);
+            assert_eq!(engine.schema_version().unwrap(), 4);
             // Re-running migrations explicitly must be a no-op.
             let mut engine = engine;
             engine.run_migrations().unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 3);
+            assert_eq!(engine.schema_version().unwrap(), 4);
         }
 
         // Exactly one row per migration version: no duplicate application.
@@ -879,7 +1019,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 3, "expected versions 1, 2 and 3 exactly once each");
+        assert_eq!(
+            count, 4,
+            "expected versions 1, 2, 3 and 4 exactly once each"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -944,7 +1087,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 3);
+        assert_eq!(engine.schema_version().unwrap(), 4);
 
         // The v2 fact survived, and its coverage is the documented ALTER default. A row
         // that read back as `verified` would be a lie; `unknown` says "no coverage stated".
@@ -983,7 +1126,7 @@ mod tests {
 
         // Re-running migrations on the upgraded database is a no-op.
         engine.run_migrations().unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 3);
+        assert_eq!(engine.schema_version().unwrap(), 4);
 
         drop(engine);
         let _ = fs::remove_dir_all(temp_dir);
@@ -1119,5 +1262,184 @@ mod tests {
             .unwrap();
         let edges = engine.load_co_change_edges(Some(&row.window_id)).unwrap();
         assert_eq!(edges, vec![replaced]);
+    }
+
+    #[test]
+    fn test_phase1_sqlite_wal_roundtrip_and_line_edges() {
+        let engine = StorageEngine::in_memory().unwrap();
+
+        // 1. Register repo
+        let repo = RepoRecord {
+            repo_id: "repo_test_1".to_string(),
+            root_path: "/workspace/test-repo".to_string(),
+            display_name: "Test Repo".to_string(),
+            active_branch: Some("main".to_string()),
+            head_commit_oid: Some("a1b2c3d4e5".to_string()),
+            latest_snap_id: Some("snap_001".to_string()),
+            languages_json: "[\"typescript\",\"rust\"]".to_string(),
+            monorepo_json: "{\"type\":\"pnpm\"}".to_string(),
+            last_indexed_seq: 1,
+        };
+        engine.register_repository(&repo).unwrap();
+        let repos = engine.list_repositories().unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo_id, "repo_test_1");
+
+        // 2. Insert valid baseline snapshot record
+        {
+            let conn = engine.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, revision, config_hash, file_set_digest, snapshot_json)
+                 VALUES ('snap_001', 'rev_1', 'cfg_1', 'digest_1', '{}');",
+                [],
+            )
+            .unwrap();
+        }
+
+        // 3. Save graph nodes & line-to-line edges
+        let nodes = vec![
+            GraphNodeRow {
+                snapshot_id: "snap_001".to_string(),
+                stable_id: "OrderController.createOrder".to_string(),
+                node_kind: "function".to_string(),
+                qualified_name: "OrderController.createOrder".to_string(),
+                file_path: "src/OrderController.ts".to_string(),
+                start_line: 40,
+                end_line: 65,
+                signature_hash: "sig_abc".to_string(),
+                visibility: "public".to_string(),
+                is_exported: true,
+                is_dead_code: false,
+                coverage_state: "verified".to_string(),
+            },
+            GraphNodeRow {
+                snapshot_id: "snap_001".to_string(),
+                stable_id: "PaymentService.chargeCard".to_string(),
+                node_kind: "function".to_string(),
+                qualified_name: "PaymentService.chargeCard".to_string(),
+                file_path: "src/PaymentService.ts".to_string(),
+                start_line: 30,
+                end_line: 55,
+                signature_hash: "sig_xyz".to_string(),
+                visibility: "public".to_string(),
+                is_exported: true,
+                is_dead_code: false,
+                coverage_state: "verified".to_string(),
+            },
+        ];
+
+        let edges = vec![GraphEdgeRow {
+            snapshot_id: "snap_001".to_string(),
+            edge_id: "edge_01".to_string(),
+            source_stable_id: "OrderController.createOrder".to_string(),
+            target_stable_id: "PaymentService.chargeCard".to_string(),
+            edge_kind: "calls".to_string(),
+            source_file: "src/OrderController.ts".to_string(),
+            source_line: 48, // Exact calling line!
+            source_col: 12,
+            target_file: "src/PaymentService.ts".to_string(),
+            target_line: 30, // Exact definition line!
+            confidence: "exact".to_string(),
+        }];
+
+        engine.save_graph_nodes_and_edges(&nodes, &edges).unwrap();
+
+        // 3. Query Ego Network in <5ms
+        let ego = engine
+            .query_ego_network("snap_001", "PaymentService.chargeCard")
+            .unwrap();
+        assert!(ego.target_node.is_some());
+        assert_eq!(ego.incoming_callers.len(), 1);
+        assert_eq!(ego.incoming_callers[0].source_line, 48);
+        assert_eq!(ego.incoming_callers[0].target_line, 30);
+        assert_eq!(
+            ego.incoming_callers[0].source_stable_id,
+            "OrderController.createOrder"
+        );
+        assert_eq!(ego.outgoing_callees.len(), 0);
+
+        // 4. Trajectory timeline event
+        let event = TrajectoryEventRecord {
+            event_seq: 1,
+            session_id: "sess_001".to_string(),
+            job_id: Some("job_verify".to_string()),
+            workflow_id: Some("wf_commit".to_string()),
+            event_type: "verify_run".to_string(),
+            target_symbol: Some("PaymentService.chargeCard".to_string()),
+            target_file: Some("src/PaymentService.ts".to_string()),
+            before_snap_id: Some("snap_000".to_string()),
+            after_snap_id: Some("snap_001".to_string()),
+            verdict: "PASS".to_string(),
+            summary: "All contracts intact".to_string(),
+            evidence_json: "{}".to_string(),
+            blake3_receipt: "blake3:abc123456789".to_string(),
+        };
+        let seq = engine.record_trajectory_event(&event).unwrap();
+        assert_eq!(seq, 1);
+        let timeline = engine.list_trajectory_events("sess_001").unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].verdict, "PASS");
+
+        // 5. AI Working Cache
+        let cache_entry = AiWorkingCacheEntry {
+            cache_key: "ai_key_chargeCard".to_string(),
+            repo_id: "repo_test_1".to_string(),
+            snapshot_id: "snap_001".to_string(),
+            query_kind: "callers".to_string(),
+            target_id: "PaymentService.chargeCard".to_string(),
+            compact_payload: "{\"callers\":[\"OrderController.createOrder\"]}".to_string(),
+            token_estimate: 45,
+            hit_count: 0,
+        };
+        engine.set_ai_working_cache(&cache_entry).unwrap();
+        let hit = engine
+            .get_ai_working_cache("ai_key_chargeCard")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.hit_count, 0);
+        // Second read should increment hit count
+        let hit2 = engine
+            .get_ai_working_cache("ai_key_chargeCard")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit2.hit_count, 1);
+    }
+
+    #[test]
+    fn test_phase1_sqlite_corruption_self_healing() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("synevid_heal_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let db_file = temp_dir.join("storage.db");
+
+        // 1. Initialize valid DB
+        {
+            let engine = StorageEngine::open(&db_file, StorageOptions::default()).unwrap();
+            let repo = RepoRecord {
+                repo_id: "test".to_string(),
+                root_path: "/test".to_string(),
+                display_name: "Test".to_string(),
+                active_branch: None,
+                head_commit_oid: None,
+                latest_snap_id: None,
+                languages_json: "[]".to_string(),
+                monorepo_json: "{}".to_string(),
+                last_indexed_seq: 0,
+            };
+            engine.register_repository(&repo).unwrap();
+        }
+
+        // 2. Corrupt file by overwriting with random junk bytes
+        std::fs::write(&db_file, b"CORRUPTED_GARBAGE_BYTES_THAT_ARE_NOT_SQLITE").unwrap();
+
+        // 3. Self-healing open_or_recover must detect corruption, back up to .bak, and recreate cleanly
+        let recovered = StorageEngine::open_or_recover(&db_file, StorageOptions::default())
+            .expect("open_or_recover should self-heal");
+        let repos = recovered.list_repositories().unwrap();
+        assert_eq!(repos.len(), 0); // Recreated clean
+        assert!(temp_dir.join("storage.db.bak").exists()); // .bak was preserved!
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

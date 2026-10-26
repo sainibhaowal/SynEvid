@@ -23,3 +23,5 @@ autopsy-invariants = { path = "../../crates/autopsy-invariants" }
 autopsy-repo = { path = "../../crates/autopsy-repo" }
 autopsy-storage = { path = "../../crates/autopsy-storage" }
 autopsy-symbols = { path = "../../crates/autopsy-symbols" }
+autopsy-plugin-api = { path = "../../crates/autopsy-plugin-api" }
+autopsy-graph-layout = { path = "../../crates/autopsy-graph-layout" }

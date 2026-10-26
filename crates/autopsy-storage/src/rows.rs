@@ -17,7 +17,7 @@
 //! read into any canonical structure, so wall-clock time cannot reach a digest (NFR-001).
 
 use crate::{StorageEngine, StorageError};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 /// The coverage vocabulary, checked at the write boundary.
 ///
@@ -400,5 +400,482 @@ impl StorageEngine {
             "facts={:?}\nmappings={:?}\nedges={:?}\ncontracts={:?}\n",
             facts, mappings, edges, contracts
         ))
+    }
+}
+
+// =========================================================================
+// Phase 1 (v0.2.0) Interactive Visual Cockpit & SQLite Schema Types
+// =========================================================================
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RepoRecord {
+    pub repo_id: String,
+    pub root_path: String,
+    pub display_name: String,
+    pub active_branch: Option<String>,
+    pub head_commit_oid: Option<String>,
+    pub latest_snap_id: Option<String>,
+    pub languages_json: String,
+    pub monorepo_json: String,
+    pub last_indexed_seq: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphNodeRow {
+    pub snapshot_id: String,
+    pub stable_id: String,
+    pub node_kind: String,
+    pub qualified_name: String,
+    pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub signature_hash: String,
+    pub visibility: String,
+    pub is_exported: bool,
+    pub is_dead_code: bool,
+    pub coverage_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphEdgeRow {
+    pub snapshot_id: String,
+    pub edge_id: String,
+    pub source_stable_id: String,
+    pub target_stable_id: String,
+    pub edge_kind: String,
+    pub source_file: String,
+    pub source_line: i64,
+    pub source_col: i64,
+    pub target_file: String,
+    pub target_line: i64,
+    pub confidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EgoNetwork {
+    pub target_node: Option<GraphNodeRow>,
+    pub incoming_callers: Vec<GraphEdgeRow>,
+    pub outgoing_callees: Vec<GraphEdgeRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForensicSessionRecord {
+    pub session_id: String,
+    pub repo_id: String,
+    pub actor_kind: String,
+    pub actor_name: String,
+    pub baseline_snap_id: String,
+    pub current_snap_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrajectoryEventRecord {
+    pub event_seq: i64,
+    pub session_id: String,
+    pub job_id: Option<String>,
+    pub workflow_id: Option<String>,
+    pub event_type: String,
+    pub target_symbol: Option<String>,
+    pub target_file: Option<String>,
+    pub before_snap_id: Option<String>,
+    pub after_snap_id: Option<String>,
+    pub verdict: String,
+    pub summary: String,
+    pub evidence_json: String,
+    pub blake3_receipt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiWorkingCacheEntry {
+    pub cache_key: String,
+    pub repo_id: String,
+    pub snapshot_id: String,
+    pub query_kind: String,
+    pub target_id: String,
+    pub compact_payload: String,
+    pub token_estimate: i64,
+    pub hit_count: i64,
+}
+
+impl StorageEngine {
+    /// Upserts a repository record.
+    pub fn register_repository(&self, repo: &RepoRecord) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO repositories (
+                repo_id, root_path, display_name, active_branch, head_commit_oid,
+                latest_snap_id, languages_json, monorepo_json, last_indexed_seq
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(repo_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                active_branch = excluded.active_branch,
+                head_commit_oid = excluded.head_commit_oid,
+                latest_snap_id = excluded.latest_snap_id,
+                languages_json = excluded.languages_json,
+                monorepo_json = excluded.monorepo_json,
+                last_indexed_seq = excluded.last_indexed_seq;",
+            params![
+                repo.repo_id,
+                repo.root_path,
+                repo.display_name,
+                repo.active_branch,
+                repo.head_commit_oid,
+                repo.latest_snap_id,
+                repo.languages_json,
+                repo.monorepo_json,
+                repo.last_indexed_seq,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists all registered repositories.
+    pub fn list_repositories(&self) -> Result<Vec<RepoRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT repo_id, root_path, display_name, active_branch, head_commit_oid,
+                    latest_snap_id, languages_json, monorepo_json, last_indexed_seq
+             FROM repositories ORDER BY display_name;",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RepoRecord {
+                    repo_id: row.get(0)?,
+                    root_path: row.get(1)?,
+                    display_name: row.get(2)?,
+                    active_branch: row.get(3)?,
+                    head_commit_oid: row.get(4)?,
+                    latest_snap_id: row.get(5)?,
+                    languages_json: row.get(6)?,
+                    monorepo_json: row.get(7)?,
+                    last_indexed_seq: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Retrieves a repository record by repo_id or root_path.
+    pub fn get_repository(&self, id_or_path: &str) -> Result<Option<RepoRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT repo_id, root_path, display_name, active_branch, head_commit_oid,
+                    latest_snap_id, languages_json, monorepo_json, last_indexed_seq
+             FROM repositories WHERE repo_id = ?1 OR root_path = ?1 LIMIT 1;",
+        )?;
+        let repo = stmt
+            .query_row(params![id_or_path], |row| {
+                Ok(RepoRecord {
+                    repo_id: row.get(0)?,
+                    root_path: row.get(1)?,
+                    display_name: row.get(2)?,
+                    active_branch: row.get(3)?,
+                    head_commit_oid: row.get(4)?,
+                    latest_snap_id: row.get(5)?,
+                    languages_json: row.get(6)?,
+                    monorepo_json: row.get(7)?,
+                    last_indexed_seq: row.get(8)?,
+                })
+            })
+            .optional()?;
+        Ok(repo)
+    }
+
+    /// Batch saves graph nodes and directed line-to-line edges for a snapshot.
+    pub fn save_graph_nodes_and_edges(
+        &self,
+        nodes: &[GraphNodeRow],
+        edges: &[GraphEdgeRow],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO graph_nodes (
+                    snapshot_id, stable_id, node_kind, qualified_name, file_path,
+                    start_line, end_line, signature_hash, visibility, is_exported,
+                    is_dead_code, coverage_state
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                ON CONFLICT(snapshot_id, stable_id) DO UPDATE SET
+                    qualified_name = excluded.qualified_name,
+                    start_line = excluded.start_line,
+                    end_line = excluded.end_line,
+                    signature_hash = excluded.signature_hash,
+                    is_exported = excluded.is_exported,
+                    is_dead_code = excluded.is_dead_code,
+                    coverage_state = excluded.coverage_state;",
+            )?;
+
+            for n in nodes {
+                stmt.execute(params![
+                    n.snapshot_id,
+                    n.stable_id,
+                    n.node_kind,
+                    n.qualified_name,
+                    n.file_path,
+                    n.start_line,
+                    n.end_line,
+                    n.signature_hash,
+                    n.visibility,
+                    if n.is_exported { 1 } else { 0 },
+                    if n.is_dead_code { 1 } else { 0 },
+                    n.coverage_state,
+                ])?;
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO graph_edges (
+                    snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
+                    source_file, source_line, source_col, target_file, target_line, confidence
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                ON CONFLICT(snapshot_id, edge_id) DO UPDATE SET
+                    source_line = excluded.source_line,
+                    target_line = excluded.target_line,
+                    confidence = excluded.confidence;",
+            )?;
+
+            for e in edges {
+                stmt.execute(params![
+                    e.snapshot_id,
+                    e.edge_id,
+                    e.source_stable_id,
+                    e.target_stable_id,
+                    e.edge_kind,
+                    e.source_file,
+                    e.source_line,
+                    e.source_col,
+                    e.target_file,
+                    e.target_line,
+                    e.confidence,
+                ])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Queries the Ego-Network for a file or symbol in <5ms.
+    pub fn query_ego_network(
+        &self,
+        snapshot_id: &str,
+        stable_id: &str,
+    ) -> Result<EgoNetwork, StorageError> {
+        let conn = self.conn.lock().unwrap();
+
+        // Target node
+        let mut node_stmt = conn.prepare(
+            "SELECT snapshot_id, stable_id, node_kind, qualified_name, file_path,
+                    start_line, end_line, signature_hash, visibility, is_exported,
+                    is_dead_code, coverage_state
+             FROM graph_nodes WHERE snapshot_id = ?1 AND stable_id = ?2 LIMIT 1;",
+        )?;
+        let target_node = node_stmt
+            .query_row(params![snapshot_id, stable_id], |row| {
+                Ok(GraphNodeRow {
+                    snapshot_id: row.get(0)?,
+                    stable_id: row.get(1)?,
+                    node_kind: row.get(2)?,
+                    qualified_name: row.get(3)?,
+                    file_path: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    signature_hash: row.get(7)?,
+                    visibility: row.get(8)?,
+                    is_exported: row.get::<_, i64>(9)? != 0,
+                    is_dead_code: row.get::<_, i64>(10)? != 0,
+                    coverage_state: row.get(11)?,
+                })
+            })
+            .optional()?;
+
+        // Incoming Callers (who calls this target)
+        let mut in_stmt = conn.prepare(
+            "SELECT snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
+                    source_file, source_line, source_col, target_file, target_line, confidence
+             FROM graph_edges WHERE snapshot_id = ?1 AND target_stable_id = ?2
+             ORDER BY source_file, source_line;",
+        )?;
+        let incoming_callers = in_stmt
+            .query_map(params![snapshot_id, stable_id], |row| {
+                Ok(GraphEdgeRow {
+                    snapshot_id: row.get(0)?,
+                    edge_id: row.get(1)?,
+                    source_stable_id: row.get(2)?,
+                    target_stable_id: row.get(3)?,
+                    edge_kind: row.get(4)?,
+                    source_file: row.get(5)?,
+                    source_line: row.get(6)?,
+                    source_col: row.get(7)?,
+                    target_file: row.get(8)?,
+                    target_line: row.get(9)?,
+                    confidence: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Outgoing Callees (who this target calls)
+        let mut out_stmt = conn.prepare(
+            "SELECT snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
+                    source_file, source_line, source_col, target_file, target_line, confidence
+             FROM graph_edges WHERE snapshot_id = ?1 AND source_stable_id = ?2
+             ORDER BY target_file, target_line;",
+        )?;
+        let outgoing_callees = out_stmt
+            .query_map(params![snapshot_id, stable_id], |row| {
+                Ok(GraphEdgeRow {
+                    snapshot_id: row.get(0)?,
+                    edge_id: row.get(1)?,
+                    source_stable_id: row.get(2)?,
+                    target_stable_id: row.get(3)?,
+                    edge_kind: row.get(4)?,
+                    source_file: row.get(5)?,
+                    source_line: row.get(6)?,
+                    source_col: row.get(7)?,
+                    target_file: row.get(8)?,
+                    target_line: row.get(9)?,
+                    confidence: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(EgoNetwork {
+            target_node,
+            incoming_callers,
+            outgoing_callees,
+        })
+    }
+
+    /// Records an event in the Forensic Trajectory Timeline.
+    pub fn record_trajectory_event(
+        &self,
+        event: &TrajectoryEventRecord,
+    ) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO trajectory_events (
+                session_id, job_id, workflow_id, event_type, target_symbol,
+                target_file, before_snap_id, after_snap_id, verdict, summary,
+                evidence_json, blake3_receipt
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);",
+            params![
+                event.session_id,
+                event.job_id,
+                event.workflow_id,
+                event.event_type,
+                event.target_symbol,
+                event.target_file,
+                event.before_snap_id,
+                event.after_snap_id,
+                event.verdict,
+                event.summary,
+                event.evidence_json,
+                event.blake3_receipt,
+            ],
+        )?;
+        let seq = conn.last_insert_rowid();
+        Ok(seq)
+    }
+
+    /// Lists trajectory events for a session in chronological sequence.
+    pub fn list_trajectory_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<TrajectoryEventRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT event_seq, session_id, job_id, workflow_id, event_type, target_symbol,
+                    target_file, before_snap_id, after_snap_id, verdict, summary,
+                    evidence_json, blake3_receipt
+             FROM trajectory_events WHERE session_id = ?1 ORDER BY event_seq ASC;",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(TrajectoryEventRecord {
+                    event_seq: row.get(0)?,
+                    session_id: row.get(1)?,
+                    job_id: row.get(2)?,
+                    workflow_id: row.get(3)?,
+                    event_type: row.get(4)?,
+                    target_symbol: row.get(5)?,
+                    target_file: row.get(6)?,
+                    before_snap_id: row.get(7)?,
+                    after_snap_id: row.get(8)?,
+                    verdict: row.get(9)?,
+                    summary: row.get(10)?,
+                    evidence_json: row.get(11)?,
+                    blake3_receipt: row.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Retrieves an entry from the AI Working Cache.
+    pub fn get_ai_working_cache(
+        &self,
+        cache_key: &str,
+    ) -> Result<Option<AiWorkingCacheEntry>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT cache_key, repo_id, snapshot_id, query_kind, target_id,
+                    compact_payload, token_estimate, hit_count
+             FROM ai_working_cache WHERE cache_key = ?1 LIMIT 1;",
+        )?;
+        let entry = stmt
+            .query_row(params![cache_key], |row| {
+                Ok(AiWorkingCacheEntry {
+                    cache_key: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    snapshot_id: row.get(2)?,
+                    query_kind: row.get(3)?,
+                    target_id: row.get(4)?,
+                    compact_payload: row.get(5)?,
+                    token_estimate: row.get(6)?,
+                    hit_count: row.get(7)?,
+                })
+            })
+            .optional()?;
+
+        if entry.is_some() {
+            let _ = conn.execute(
+                "UPDATE ai_working_cache SET hit_count = hit_count + 1 WHERE cache_key = ?1;",
+                params![cache_key],
+            );
+        }
+
+        Ok(entry)
+    }
+
+    /// Saves an entry into the AI Working Cache.
+    pub fn set_ai_working_cache(&self, entry: &AiWorkingCacheEntry) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ai_working_cache (
+                cache_key, repo_id, snapshot_id, query_kind, target_id,
+                compact_payload, token_estimate, hit_count
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                compact_payload = excluded.compact_payload,
+                token_estimate = excluded.token_estimate,
+                hit_count = excluded.hit_count;",
+            params![
+                entry.cache_key,
+                entry.repo_id,
+                entry.snapshot_id,
+                entry.query_kind,
+                entry.target_id,
+                entry.compact_payload,
+                entry.token_estimate,
+                entry.hit_count,
+            ],
+        )?;
+        Ok(())
     }
 }

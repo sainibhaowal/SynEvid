@@ -39,6 +39,8 @@ Every AI coding assistant working on **Synevid (Code Autopsy)** must strictly fo
    - Resource bounds (`max_traversal_nodes` for traversal, `max_file_bytes` per-file read cap with explicit `skipped_oversize_files` record) are enforced to prevent denial-of-service on adversarial cyclic graphs and multi-gigabyte files.
    - Zero code execution (in-memory AST parsing only, zero sub-processes).
    - Zero network socket requests (100% air-gapped, offline analysis).
+11. **Permanent Zero-Major Versioning Invariant (`v0.xx.xxx`):**
+    - SynEvid permanently operates under `v0.`. The version format is strictly `v0.<milestone>.<fix>` (where `v0` is the unchangeable super-major anchor, NEVER incrementing to `v1.0.0`; `<milestone>` ranges `1..99` for major architectural capabilities; and `<fix>` ranges `0..999` incrementing continuously with commits, bugfixes, and verified tests).
 
 ---
 

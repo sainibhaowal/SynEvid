@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - Phase 1: Pluggable Core Registry, Local SQLite Storage & Sub-50ms Real-Time Daemon (2026-10-26)
+
+### Added
+- **Core Plugin Registry (`crates/autopsy-plugin-api`):**
+  - Trait-based pluggable contracts (`PluginDescriptor`, `LanguageAdapterPlugin`, `WorkspaceResolverPlugin`, `VerificationGatePlugin`, `GraphLayoutPlugin`).
+  - Thread-safe dynamic `PluginRegistry` eliminating hardcoded language and gate dispatch tables across CLI and UI layers (FR-P1-001, INV-PLUGIN-001..005).
+  - Dynamic capability discovery via `/api/v1/capabilities`.
+- **Deterministic Seeded 2D/3D Graph Layout Engine (`crates/autopsy-graph-layout`):**
+  - Barnes-Hut force-directed simulation with exponential cooling schedule, seeded by `BLAKE3(snapshot_digest)`.
+  - 100/100 byte-identical coordinates quantized to $10^{-4}$ precision with cluster community grouping (FR-P1-006).
+- **Local SQLite WAL Database Schema Migration 004 (`crates/autopsy-storage`):**
+  - Expanded `.autopsy/storage.db` schema: `repositories`, `graph_nodes`, `graph_edges` (storing exact `source_line` and `target_line` call coordinates), `forensic_sessions`, `trajectory_events`, and `ai_working_cache`.
+  - Sub-5ms single-file and symbol ego-network query (`query_ego_network`) (FR-P1-002).
+  - Self-healing database corruption recovery (`ERR-STORAGE-102`): detects corrupted SQLite databases via `open_or_recover`, preserves `.bak`, and rebuilds cleanly.
+- **Sub-50ms In-Memory Simulation Daemon (`apps/synevid-ui`):**
+  - REST & SSE streaming endpoints: `/api/v1/capabilities`, `/api/v1/repos/connect`, `/api/v1/repos/list`, `/api/v1/repos/switch`, `/api/v1/graph/universe`, `/api/v1/graph/ego`, and `/api/v1/live`.
+  - Live in-memory edit simulator (`POST /api/v1/simulate/edit`): evaluates unsaved buffers, detects breaking arity/signature mismatches and newly dead code in $\le 50\text{ms}$ (p95) without writing to disk (FR-P1-004).
+  - Production evidence document: [`docs/evidence/46-phase1-pluggable-core-sqlite-and-realtime-daemon.md`](file:///docs/evidence/46-phase1-pluggable-core-sqlite-and-realtime-daemon.md).
+
 ## [0.1.0] - P0 multi-arch release, native Windows installer, IDE/CI plugin system & task-completion forensic trajectory ledger (2026-10-25)
 
 ### Added

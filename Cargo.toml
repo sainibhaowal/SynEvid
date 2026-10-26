@@ -18,6 +18,8 @@ members = [
     "crates/autopsy-invariants",
     "crates/autopsy-evidence",
     "crates/autopsy-storage",
+    "crates/autopsy-plugin-api",
+    "crates/autopsy-graph-layout",
     "crates/autopsy-report",
     "crates/autopsy-cli",
     "crates/autopsy-temporal",

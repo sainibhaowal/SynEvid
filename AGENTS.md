@@ -13,6 +13,7 @@ You are an expert systems engineer working on **Synevid (Code Autopsy)**, an off
 - **Clean Architectural Inversion:** Presentation, GUI, MCP, LSP, and IDE plugin layers (`apps/*`) depend on core public interfaces, never the reverse (`ARCH_NO_CORE_TO_MCP`).
 - **Ground Truth Integrity:** Never alter benchmark ground truth to improve benchmark scores.
 - **Universal Hardware & Sandboxing Invariants (INV-CROSS-001, INV-SANDBOX-001..004):** Strict path normalization (`/`) and CRLF/LF line-ending determinism across Linux, macOS, and Windows. Symlink escape containment (`follow_links(false)`), path traversal sanitization (rejection of `..` sequences), traversal resource bounds (`max_traversal_nodes`, `max_file_bytes` with explicit `skipped_oversize_files` record), zero sub-process execution, and zero outbound network sockets.
+- **Permanent Zero-Major Versioning Invariant (`v0.xx.xxx`):** SynEvid permanently remains under `v0.`. The version format is strictly `v0.<major_milestone>.<fix_patch>` (where `v0` is constant and NEVER increments to `v1.0.0`; the middle milestone number ranges `1..99`, and the last patch/fix number ranges `0..999` incrementing with commits, bugfixes, and verified tests).
 - **Do-Not-Build Prohibitions (4.1 Ch.13):** No LLM in core, no vector DB/RAG, no Neo4j, no K8s, one language first (TypeScript), no fake claims of perfect blast radius.
 
 ---

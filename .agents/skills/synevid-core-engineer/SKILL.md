@@ -30,6 +30,8 @@ This skill encodes the mandatory standards, non-negotiable boundaries, and verif
    - Never modify benchmark ground truth simply to increase benchmark scores.
 7. **Clean Dependency Inversion:**
    - Presentation, GUI, and MCP layers depend on core public interfaces, NEVER the reverse.
+8. **Permanent Zero-Major Versioning Invariant (`v0.xx.xxx`):**
+   - SynEvid permanently operates under `v0.`. The version format is strictly `v0.<milestone>.<fix>` (where `v0` is constant and NEVER increments to `v1.0.0`; `<milestone>` ranges `1..99` for major capabilities; and `<fix>` ranges `0..999` incrementing continuously with commits, bugfixes, and verified tests).
 
 ---
 
