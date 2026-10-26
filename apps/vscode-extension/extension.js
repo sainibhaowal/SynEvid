@@ -60,6 +60,34 @@ function resolveBinary(name, explicitPath, workspaceRoot) {
   return exe;
 }
 
+function formatCodeLensLabel(symbol, callers, tests) {
+  if (typeof callers === 'number' && typeof tests === 'number') {
+    return `$(pulse) ${callers} caller${callers === 1 ? '' : 's'} · ${tests} test${tests === 1 ? '' : 's'}`;
+  }
+  if (typeof callers === 'number') {
+    return `$(pulse) ${callers} caller${callers === 1 ? '' : 's'}`;
+  }
+  return `$(pulse) SynEvid: Blast Radius (${symbol})`;
+}
+
+function parseBlastRadiusMetrics(reportJson) {
+  if (!reportJson || typeof reportJson !== 'object') {
+    return { callers: 0, tests: 0 };
+  }
+  const imp = reportJson.impact || {};
+  const entities = Array.isArray(imp.impacted_entities) ? imp.impacted_entities : [];
+  const callers = imp.total_impacted ?? entities.length;
+  let tests = 0;
+  for (const entity of entities) {
+    const symId = String(entity.symbol_id || entity.target_symbol || entity.symbol || '').toLowerCase();
+    const kind = String(entity.kind || '').toLowerCase();
+    if (kind === 'test' || symId.includes('test') || symId.includes('spec') || symId.includes('__test__')) {
+      tests += 1;
+    }
+  }
+  return { callers, tests };
+}
+
 function extractDeclarationSymbols(text) {
   const lines = String(text || '').split(/\r?\n/);
   const hits = [];
@@ -173,20 +201,59 @@ function activate(context) {
     vscode.window.registerTreeDataProvider('synevidTrajectoryView', treeProvider)
   );
 
-  // CodeLens Provider
+  // CodeLens Provider with cached caller/test metrics
+  const codeLensCache = new Map();
   const codeLensProvider = {
     provideCodeLenses(document) {
       const cfg = vscode.workspace.getConfiguration('synevid');
       if (!cfg.get('enableCodeLens', true)) return [];
       const hits = extractDeclarationSymbols(document.getText());
+      const root = getRoot();
+      const rel = path.relative(root, document.uri.fsPath).split(path.sep).join('/');
       return hits.map((h) => {
         const range = new vscode.Range(h.line, 0, h.line, 0);
-        return new vscode.CodeLens(range, {
-          title: `$(pulse) SynEvid: Blast Radius (${h.symbol})`,
+        const cacheKey = `${rel}::${h.symbol}`;
+        const cached = codeLensCache.get(cacheKey);
+        const title = cached
+          ? formatCodeLensLabel(h.symbol, cached.callers, cached.tests)
+          : formatCodeLensLabel(h.symbol);
+        const lens = new vscode.CodeLens(range, {
+          title,
           command: 'synevid.impactAtCursor',
           arguments: [h.symbol],
         });
+        lens.symbol = h.symbol;
+        lens.seed = cacheKey;
+        return lens;
       });
+    },
+    async resolveCodeLens(codeLens) {
+      if (!codeLens.symbol || !codeLens.seed) return codeLens;
+      const root = getRoot();
+      try {
+        const res = await runAutopsyCommand(getAutopsyBin(), root, [
+          '--format',
+          'json',
+          'impact',
+          '-s',
+          codeLens.seed,
+          '--profile',
+          'callers',
+          '--detail',
+          'summary',
+        ]);
+        if (res.exitCode === 0 || res.exitCode === 4) {
+          const data = JSON.parse(res.stdout);
+          const metrics = parseBlastRadiusMetrics(data);
+          codeLensCache.set(codeLens.seed, metrics);
+          if (codeLens.command) {
+            codeLens.command.title = formatCodeLensLabel(codeLens.symbol, metrics.callers, metrics.tests);
+          }
+        }
+      } catch {
+        // Fallback silently if engine query cannot finish in time
+      }
+      return codeLens;
     },
   };
   for (const lang of SUPPORTED_LANGUAGES) {
@@ -333,5 +400,7 @@ module.exports = {
   extractDeclarationSymbols,
   loadLatestForensicReport,
   formatTrajectoryItems,
+  formatCodeLensLabel,
+  parseBlastRadiusMetrics,
   SUPPORTED_LANGUAGES,
 };

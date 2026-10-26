@@ -1,0 +1,26 @@
+- id: synevid-verify
+  name: Synevid Invariant Verification
+  description: Offline, deterministic invariant verification and change-impact check.
+  entry: autopsy verify
+  language: system
+  pass_filenames: false
+  always_run: true
+  stages: [pre-commit, pre-push]
+
+- id: synevid-doctor
+  name: Synevid Doctor
+  description: Verify repository setup, adapter coverage, and invariant health.
+  entry: autopsy doctor
+  language: system
+  pass_filenames: false
+  always_run: true
+  stages: [pre-commit, pre-push]
+
+- id: synevid-baseline
+  name: Synevid Snapshot Baseline
+  description: Record clean snapshot baseline for deterministic change tracking.
+  entry: autopsy baseline
+  language: system
+  pass_filenames: false
+  always_run: true
+  stages: [post-commit]

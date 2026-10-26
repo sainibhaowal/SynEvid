@@ -90,6 +90,42 @@ test('loadLatestForensicReport and formatTrajectoryItems render deterministic fo
   }
 });
 
+test('formatCodeLensLabel renders caller and test metrics correctly', () => {
+  assert.equal(
+    ext.formatCodeLensLabel('createOrder', 12, 3),
+    '$(pulse) 12 callers · 3 tests'
+  );
+  assert.equal(
+    ext.formatCodeLensLabel('OrderService', 1, 1),
+    '$(pulse) 1 caller · 1 test'
+  );
+  assert.equal(
+    ext.formatCodeLensLabel('calcTax', 5),
+    '$(pulse) 5 callers'
+  );
+  assert.equal(
+    ext.formatCodeLensLabel('OrderService'),
+    '$(pulse) SynEvid: Blast Radius (OrderService)'
+  );
+});
+
+test('parseBlastRadiusMetrics extracts caller and test counts from impact report', () => {
+  const fakeReport = {
+    impact: {
+      total_impacted: 4,
+      impacted_entities: [
+        { symbol_id: 'src/services/order.ts::createOrder', kind: 'method' },
+        { symbol_id: 'src/api/routes.ts::handlePost', kind: 'function' },
+        { symbol_id: 'tests/order.test.ts::testCreateOrder', kind: 'test' },
+        { symbol_id: 'tests/e2e.spec.ts::specWorkflow', kind: 'function' },
+      ],
+    },
+  };
+  const metrics = ext.parseBlastRadiusMetrics(fakeReport);
+  assert.equal(metrics.callers, 4);
+  assert.equal(metrics.tests, 2);
+});
+
 test('resolveBinary respects explicit path override', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-bin-test-'));
   try {

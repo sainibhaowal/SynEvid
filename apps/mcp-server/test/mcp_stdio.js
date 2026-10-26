@@ -23,8 +23,17 @@ export const REPO_API_ROOT = path.join(WORKSPACE_ROOT, 'benchmarks', 'corpus', '
  * validate old behavior instead of the code under test.
  */
 function pinnedBinary() {
-  const candidate = path.join(WORKSPACE_ROOT, 'target', 'debug', 'autopsy');
-  return fs.existsSync(candidate) ? candidate : null;
+  const isWin = process.platform === 'win32';
+  const exe = isWin ? 'autopsy.exe' : 'autopsy';
+  for (const cand of [
+    path.join(WORKSPACE_ROOT, 'target', 'release', exe),
+    path.join(WORKSPACE_ROOT, 'target', 'debug', exe),
+    path.join(WORKSPACE_ROOT, 'target', 'release', 'autopsy'),
+    path.join(WORKSPACE_ROOT, 'target', 'debug', 'autopsy'),
+  ]) {
+    if (fs.existsSync(cand)) return cand;
+  }
+  return null;
 }
 
 /** A throwaway copy of the corpus fixture, so receipts never touch committed ground truth. */

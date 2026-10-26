@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synevid"
+version = "0.1.0"
+description = "Zero-install Python & uvx launcher for SynEvid (Code Autopsy) deterministic verification engine"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "sainibhaowal", email = "sainibhaowal@gmail.com" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/sainibhaowal/SynEvid"
+Documentation = "https://github.com/sainibhaowal/SynEvid#readme"
+Repository = "https://github.com/sainibhaowal/SynEvid.git"
+Issues = "https://github.com/sainibhaowal/SynEvid/issues"
+
+[project.scripts]
+synevid = "synevid_cli:main"
+autopsy = "synevid_cli:main"
+synevid-ui = "synevid_cli:ui_main"

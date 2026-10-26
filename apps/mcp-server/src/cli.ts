@@ -109,34 +109,28 @@ export function resolveAutopsyBinary(): string {
     return process.env.AUTOPSY_BIN;
   }
 
-  // Check the one-line installer's default prefix first (~/.local/bin), then
-  // the cargo install prefix. Both are checked before workspace builds so a
-  // user-installed binary wins over a developer build unless AUTOPSY_BIN says
-  // otherwise.
-  const localBin = path.join(process.env.HOME || '', '.local', 'bin', 'autopsy');
-  if (fs.existsSync(localBin)) {
-    return localBin;
-  }
+  const isWin = process.platform === 'win32';
+  const exe = isWin ? 'autopsy.exe' : 'autopsy';
+  const home = process.env.HOME || process.env.USERPROFILE || '';
 
-  // Check user cargo bin
-  const cargoBin = path.join(process.env.HOME || '', '.cargo', 'bin', 'autopsy');
-  if (fs.existsSync(cargoBin)) {
-    return cargoBin;
-  }
+  const candidates = [
+    path.join(home, '.local', 'bin', exe),
+    path.join(home, '.cargo', 'bin', exe),
+    path.join(home, '.gemini', 'antigravity', 'bin', exe),
+    path.join(home, 'AppData', 'Roaming', 'Antigravity', 'bin', exe),
+    path.resolve(process.cwd(), '../../target/release', exe),
+    path.resolve(process.cwd(), '../../target/debug', exe),
+    '/usr/local/bin/autopsy',
+  ];
 
-  // Check workspace target dirs relative to apps/mcp-server
-  const releasePath = path.resolve(process.cwd(), '../../target/release/autopsy');
-  if (fs.existsSync(releasePath)) {
-    return releasePath;
-  }
-
-  const debugPath = path.resolve(process.cwd(), '../../target/debug/autopsy');
-  if (fs.existsSync(debugPath)) {
-    return debugPath;
+  for (const cand of candidates) {
+    if (cand && fs.existsSync(cand)) {
+      return cand;
+    }
   }
 
   // Fallback to searching on system PATH
-  return 'autopsy';
+  return exe;
 }
 
 /**

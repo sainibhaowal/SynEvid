@@ -3,6 +3,19 @@ name = "autopsy-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Offline, deterministic software verification, change-impact, and agent forensic engine"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/autopsy-{ target }.tar.gz"
+bin-dir = "autopsy"
+pkg-fmt = "tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+pkg-url = "{ repo }/releases/download/v{ version }/autopsy-{ target }.zip"
+bin-dir = "autopsy.exe"
 
 [[bin]]
 name = "autopsy"

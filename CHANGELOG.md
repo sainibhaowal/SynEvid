@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - P0 multi-arch release, native Windows installer, IDE/CI plugin system & task-completion forensic trajectory ledger (2026-10-25)
 
 ### Added
+- **Distribution Channels & Developer Adoption Ecosystem:**
+  - **Homebrew Formula (`Formula/synevid.rb`):** Multi-arch formula for macOS and Linux supporting `brew install synevid` with symlinks for `autopsy`, `synevid`, and `synevid-ui`.
+  - **Cargo Binstall Support (`crates/autopsy-cli/Cargo.toml`):** Configured `[package.metadata.binstall]` pointing to GitHub release archives for instant binary installation without local compilation.
+  - **Zero-Install MCP Package (`apps/mcp-server/package.json`):** Scoped package `@synevid/mcp` with executables `synevid-mcp` and `@synevid/mcp` for `npx @synevid/mcp`.
+  - **Python / `uvx` Wrapper (`packaging/python/`):** Standard `pyproject.toml` distribution with platform-specific release binary bootstrapping via `pip install synevid` and `uvx synevid`.
+  - **Docker Multi-Arch Container (`Dockerfile`, `.github/workflows/docker.yml`):** Non-root scratch/distroless multi-arch container published to `ghcr.io/sainibhaowal/synevid`.
+  - **Marketplace GitHub Action (`action.yml`):** Upgraded `uses: sainibhaowal/synevid-action@v1` with outputs (`verdict`, `exit-code`, `snapshot-id`, `sarif-path`), Markdown step summaries via `$GITHUB_STEP_SUMMARY`, and SARIF 2.1.0 generation.
+  - **VS Code & Cursor Inline Blast Radius CodeLens (`apps/vscode-extension`):** Dynamic CodeLens (`$(pulse) 12 callers · 3 tests`), caller and test metric parsing, caching, and hover inspection.
+  - **Zero-Config Architecture Layer Detection (`crates/autopsy-cli/src/init.rs`):** Expanded heuristics detecting presentation, application, domain, and infrastructure layers across root and monorepo folders (`pkg`, `packages`, `crates`, `internal`, `domain`, `infra`, `services`).
+  - **Pre-Commit Hook Repository (`.pre-commit-hooks.yaml`):** Exposing `synevid-verify`, `synevid-doctor`, and `synevid-baseline` for single-line pre-commit configuration.
+  - **Evidence `docs/evidence/43-distribution-channels-and-developer-adoption.md`.**
 - **Presentation & Real-Time Observation Suite (`autopsy ui`, `autopsy tui`, `autopsy watch`):**
   - **Embedded zero-npm local web dashboard (`apps/synevid-ui`, `autopsy ui`):** Standalone zero-npm HTTP server (`tiny_http`) serving an enterprise dark-mode SPA dashboard directly from embedded memory (`dashboard.html`), with live REST endpoints (`/api/status`, `/api/verify`, `/api/impact`, `/api/trajectory`, `/api/graph`). Preserves the zero-network-socket invariant in core crates.
   - **Interactive Terminal Dashboard (`crates/autopsy-cli/src/tui.rs`, `autopsy tui`):** Full-screen terminal dashboard built on `ratatui 0.29` and `crossterm 0.28` with 5 keyboard-navigable tabs (`Overview`, `Invariants (Verify)`, `Blast Radius`, `Trajectory`, `Help`), interactive seed symbol search (`/`), findings inspector, and forensic trajectory runs browser.

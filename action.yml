@@ -18,10 +18,32 @@ inputs:
     description: "Fail with exit code 4 on partial or unknown coverage"
     required: false
     default: "false"
+  fail-on-breach:
+    description: "Fail step on invariant verification failure"
+    required: false
+    default: "true"
   sarif-output:
     description: "Path to write SARIF 2.1.0 report for GitHub Code Scanning"
     required: false
     default: "autopsy-report.sarif"
+  step-summary:
+    description: "Render rich markdown table in GitHub Actions Job Summary"
+    required: false
+    default: "true"
+
+outputs:
+  snapshot-id:
+    description: "Computed deterministic BLAKE3 snapshot digest"
+    value: ${{ steps.verify-step.outputs.snapshot-id }}
+  verdict:
+    description: "Verification verdict: PASS, FAIL, or UNKNOWN"
+    value: ${{ steps.verify-step.outputs.verdict }}
+  exit-code:
+    description: "Exit code from autopsy verify"
+    value: ${{ steps.verify-step.outputs.exit-code }}
+  sarif-path:
+    description: "Path to SARIF 2.1.0 file"
+    value: ${{ inputs.sarif-output }}
 
 runs:
   using: "composite"
@@ -32,16 +54,30 @@ runs:
         AUTOPSY_SKIP_HOSTS: "1"
         SYNEVID_NO_PATH: "1"
       run: |
-        bash "${{ github.action_path }}/scripts/install.sh"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        if command -v autopsy >/dev/null 2>&1; then
+          echo "Autopsy binary already available on PATH."
+        else
+          bash "${{ github.action_path }}/scripts/install.sh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        fi
 
     - name: Run SynEvid Baseline & Architectural Invariant Gate
+      id: verify-step
       shell: bash
       run: |
-        AUTOPSY="$HOME/.local/bin/autopsy"
+        AUTOPSY="${AUTOPSY_BIN:-autopsy}"
+        if ! command -v "$AUTOPSY" >/dev/null 2>&1; then
+          AUTOPSY="$HOME/.local/bin/autopsy"
+        fi
+
         ROOT="${{ inputs.repo-root }}"
         "$AUTOPSY" --repo-root "$ROOT" doctor
-        "$AUTOPSY" --repo-root "$ROOT" --persist --format json baseline > /tmp/synevid-baseline.json
+
+        # Generate baseline snapshot
+        BASELINE_JSON="/tmp/synevid-baseline.json"
+        "$AUTOPSY" --repo-root "$ROOT" --persist --format json baseline > "$BASELINE_JSON"
+        SNAP_ID=$(jq -r '.snapshot.snapshot_id // "unknown"' "$BASELINE_JSON" 2>/dev/null || echo "unknown")
+        echo "snapshot-id=${SNAP_ID}" >> "$GITHUB_OUTPUT"
 
         VERIFY_ARGS=(--repo-root "$ROOT" verify)
         if [ -n "${{ inputs.invariants-file }}" ]; then
@@ -51,5 +87,53 @@ runs:
           VERIFY_ARGS+=(--strict)
         fi
 
-        "$AUTOPSY" --format sarif "${VERIFY_ARGS[@]}" > "${{ inputs.sarif-output }}" || true
-        "$AUTOPSY" --format text "${VERIFY_ARGS[@]}"
+        # Generate SARIF report for GitHub Code Scanning
+        "$AUTOPSY" --format sarif "${VERIFY_ARGS[@]}" > "${{ inputs.sarif-output }}" 2>/dev/null || true
+
+        # Run verification and capture exit code
+        set +e
+        VERIFY_OUTPUT=$("$AUTOPSY" --format text "${VERIFY_ARGS[@]}")
+        EXIT_CODE=$?
+        set -e
+
+        echo "$VERIFY_OUTPUT"
+        echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+        VERDICT="PASS"
+        if [ $EXIT_CODE -eq 2 ]; then
+          VERDICT="FAIL"
+        elif [ $EXIT_CODE -eq 4 ]; then
+          VERDICT="UNKNOWN"
+        elif [ $EXIT_CODE -ne 0 ]; then
+          VERDICT="ERROR"
+        fi
+        echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT"
+
+        # GitHub Step Summary
+        if [ "${{ inputs.step-summary }}" = "true" ] && [ -n "$GITHUB_STEP_SUMMARY" ]; then
+          STATUS_ICON="✅ PASS"
+          if [ "$VERDICT" = "FAIL" ]; then
+            STATUS_ICON="❌ FAIL (Invariant Breach)"
+          elif [ "$VERDICT" = "UNKNOWN" ]; then
+            STATUS_ICON="⚠️ UNKNOWN (Partial Coverage)"
+          fi
+
+          cat << EOF >> "$GITHUB_STEP_SUMMARY"
+        ### 🛡️ SynEvid Forensic Gate: ${STATUS_ICON}
+
+        | Metric | Value |
+        |---|---|
+        | **Verdict** | \`${VERDICT}\` |
+        | **Snapshot ID** | \`${SNAP_ID:0:16}\` |
+        | **Exit Code** | \`${EXIT_CODE}\` |
+        | **Engine** | Offline, Deterministic (Zero-LLM) |
+        | **SARIF Report** | \`${{ inputs.sarif-output }}\` |
+
+        > *SynEvid ensures 100% deterministic software correctness and zero probabilistic hallucination.*
+        EOF
+        fi
+
+        if [ "${{ inputs.fail-on-breach }}" = "true" ] && [ $EXIT_CODE -ne 0 ]; then
+          echo "::error::SynEvid architectural invariant breach detected (exit code: $EXIT_CODE)"
+          exit $EXIT_CODE
+        fi

@@ -1,20 +1,34 @@
 {
-  "name": "@code-autopsy/mcp-server",
+  "name": "@synevid/mcp",
   "version": "0.1.0",
-  "private": true,
+  "description": "Zero-install Model Context Protocol (MCP) server for SynEvid (Code Autopsy)",
+  "homepage": "https://github.com/sainibhaowal/SynEvid",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22"
   },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "@synevid/mcp": "./dist/index.js",
+    "synevid-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "build:bundle": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.bundle.js --log-level=warning",
     "start": "node dist/index.js",
     "pretest": "npm run build && npm run build:bundle",
-    "test": "node --test test/server.test.js test/e2e_agent_find_and_envelope.test.js test/e2e_agent_session.test.js test/bundle.test.js",
+    "test": "node --test --test-concurrency=1 test/server.test.js test/e2e_agent_find_and_envelope.test.js test/e2e_agent_session.test.js test/bundle.test.js",
     "lint": "eslint src/ test/"
   },
   "dependencies": {

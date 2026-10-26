@@ -38,6 +38,8 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+repository = "https://github.com/sainibhaowal/SynEvid"
+homepage = "https://github.com/sainibhaowal/SynEvid"
 # The floor is measured, not inferred. The language sets a 1.88 minimum (`let`-chains,
 # `if let Some(x) = y && let Some(z) = w`, are used throughout the adapters and engines),
 # and the dependency graph sets 1.90: `tree-sitter-language@0.1.8` declares rustc 1.90.
