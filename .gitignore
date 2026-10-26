@@ -58,4 +58,3 @@ tmp/
 Resource/
 
 # Private Web Application (deployed separately, not part of core open-source repo)
-/web/

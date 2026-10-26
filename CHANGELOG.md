@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - Production Next.js 16 & React 19 Visual Cockpit with Three.js 3D Universe (2026-10-26)
+
+### Added
+- **Full Operational Web Cockpit (`apps/web`):**
+  - Completely redesigned `apps/web` into a production-grade operational developer cockpit using Next.js 16.4.2 (Turbopack), React 19.3.0, Three.js 0.186, TypeScript 5, and Tailwind CSS v4.
+  - **Full Dual-Theme Architecture (`apps/web/src/context/ThemeContext.tsx`):** Complete, accessible, high-contrast support for both **Enterprise Dark Mode** and **Enterprise Light Mode** with persistent `localStorage` synchronization.
+  - **Interactive WebGL Three.js 3D/2D Code Universe (`CodeUniverse3D.tsx`):** Renders Barnes-Hut PRNG seeded node coordinates with spatial 3D orbit controls, 2D planar toggle, glowing shaders, and click-to-ego navigation.
+  - **Line-to-Line Symbol Ego Network Inspector (`EgoNetworkInspector.tsx`):** Sub-5ms SQLite WAL query showing target symbol cards and inbound callers with **exact calling line coordinates** (`source_file:source_line`).
+  - **Sub-50ms Real-Time Edit Damage Simulator (`LiveEditSimulator.tsx`):** In-memory keystroke buffer editor triggering real-time incremental AST simulation (&le; 50ms p95) displaying Crimson Red broken callers and Grey dead symbols.
+  - **Reactive Live Event Bus (`api.subscribeLiveEvents`):** SSE stream subscriber feeding real-time sequence events into the command bar and overview panel.
+  - **CLI & MCP Terminal Workbench:** Integrated terminal emulator for running `autopsy verify`, `autopsy impact`, and inspecting JSON envelopes.
+- **Production Evidence Document:** [`docs/evidence/48-nextjs-web-cockpit-and-threejs-redesign.md`](file:///docs/evidence/48-nextjs-web-cockpit-and-threejs-redesign.md).
+
 ## [0.2.1] - Phase 1: End-to-End Reactive Dashboard UI & CLI Embedded Router Wiring (2026-10-26)
 
 ### Added

@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'SynevidDisplay';
+  src: url('/fonts/synevid-display.woff2') format('woff2'),
+       url('/fonts/synevid-display.ttf') format('truetype');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SynevidSlab';
+  src: url('/fonts/synevid-slab.woff2') format('woff2'),
+       url('/fonts/synevid-slab.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SynevidLibre';
+  src: url('/fonts/synevid-libre.woff2') format('woff2'),
+       url('/fonts/synevid-libre.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-brand: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  --font-orbitron: var(--font-orbitron), 'Orbitron', sans-serif;
+  --font-syncopate: var(--font-syncopate), 'Syncopate', sans-serif;
+  --font-display: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  --font-slab: 'SynevidSlab', serif;
+  --font-libre: 'SynevidLibre', sans-serif;
+  --font-sans: var(--font-space), 'Space Grotesk', -apple-system, sans-serif;
+  --font-mono: var(--font-mono), 'SF Mono', Consolas, monospace;
+}
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-elevated: #f1f5f9;
+  --card-border: #e2e8f0;
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --cyan: #0284c7;
+  --cyan-glow: rgba(2, 132, 199, 0.25);
+  --purple: #6366f1;
+  --purple-glow: rgba(99, 102, 241, 0.25);
+  --green: #059669;
+}
+
+html.dark {
+  --background: #060911;
+  --foreground: #f8fafc;
+  --card: #0c111e;
+  --card-elevated: #11182a;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --cyan: #00f0ff;
+  --cyan-glow: rgba(0, 240, 255, 0.4);
+  --purple: #7928ca;
+  --purple-glow: rgba(121, 40, 202, 0.4);
+  --green: #00e676;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-family: var(--font-space), 'Space Grotesk', sans-serif;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  overflow-x: hidden;
+  font-family: var(--font-space), 'Space Grotesk', sans-serif;
+  letter-spacing: -0.015em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ==========================================================================
+   Cybernetic Sci-Fi Brand Typography (Rebranded SynEvid Display Letterforms)
+   ========================================================================== */
+.font-brand {
+  font-family: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+}
+
+.font-orbitron {
+  font-family: var(--font-orbitron), 'Orbitron', sans-serif;
+}
+
+.font-syncopate {
+  font-family: var(--font-syncopate), 'Syncopate', sans-serif;
+}
+
+.font-display {
+  font-family: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+}
+
+.font-slab {
+  font-family: 'SynevidSlab', serif;
+}
+
+.font-libre {
+  font-family: 'SynevidLibre', sans-serif;
+}
+
+/* 1:1 Accurate Sci-Fi Wordmark Matching Uploaded Banner */
+.synevid-banner-title {
+  font-family: 'SynevidBrand', 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ffffff;
+  -webkit-text-stroke: 2px #00f0ff;
+  text-shadow:
+    0 0 15px rgba(0, 240, 255, 1),
+    0 0 30px rgba(0, 240, 255, 0.95),
+    0 0 60px rgba(0, 240, 255, 0.75),
+    0 0 100px rgba(0, 240, 255, 0.5);
+  filter: drop-shadow(0 0 22px rgba(0, 240, 255, 0.9)) drop-shadow(0 0 40px rgba(0, 240, 255, 0.6));
+}
+
+.synevid-logo-title {
+  font-family: 'SynevidBrand', 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffffff;
+  -webkit-text-stroke: 1.2px #00f0ff;
+  text-shadow:
+    0 0 10px rgba(0, 240, 255, 0.95),
+    0 0 25px rgba(0, 240, 255, 0.8),
+    0 0 45px rgba(0, 240, 255, 0.55);
+  filter: drop-shadow(0 0 16px rgba(0, 240, 255, 0.7)) drop-shadow(0 0 30px rgba(0, 240, 255, 0.4));
+}
+
+.neon-banner-glow {
+  text-shadow: 
+    0 0 10px rgba(0, 240, 255, 0.95),
+    0 0 25px rgba(0, 240, 255, 0.7),
+    0 0 50px rgba(0, 240, 255, 0.4),
+    0 0 80px rgba(0, 240, 255, 0.2);
+}
+
+.neon-sub-glow {
+  text-shadow: 
+    0 0 10px rgba(0, 240, 255, 0.6),
+    0 0 20px rgba(0, 240, 255, 0.3);
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-chakra), 'Chakra Petch', var(--font-space), sans-serif;
+  text-wrap: balance;
+}
+
+code, pre, .font-mono {
+  font-family: var(--font-mono);
+  letter-spacing: -0.015em;
+}
+
+/* Precision Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #04060a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #00f0ff 0%, #7928ca 50%, #00e676 100%);
+  border-radius: 9999px;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  transition: all 0.2s ease-in-out;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #4ef4ff 0%, #9d00ff 50%, #2bf790 100%);
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.9);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #00f0ff #04060a;
+}
+
+/* Dedicated Sleek Scrollbar for Terminal Workbench */
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 240, 255, 0.4) rgba(5, 8, 14, 0.6);
+}
+
+.terminal-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.terminal-scroll::-webkit-scrollbar-track {
+  background: rgba(5, 8, 14, 0.6);
+  border-radius: 4px;
+}
+
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.35);
+  border-radius: 4px;
+}
+
+.terminal-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 240, 255, 0.7);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+}
+
+/* Custom Cyber Mesh and Animations */
+.glow-cyan {
+  box-shadow: 0 0 25px rgba(0, 240, 255, 0.35);
+}
+
+.glow-purple {
+  box-shadow: 0 0 25px rgba(121, 40, 202, 0.35);
+}
+
+.text-glow {
+  text-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+}
+
+.glass-panel {
+  background: rgba(12, 17, 28, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(0, 240, 255, 0.14);
+}
+
+.glass-panel:hover {
+  border-color: rgba(0, 240, 255, 0.35);
+}
+
+/* Grid overlay */
+.cyber-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
