@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - P0 multi-arch release, native Windows installer, IDE/CI plugin system & task-completion forensic trajectory ledger (2026-10-25)
 
 ### Added
+- **Experimental Research Crates Isolation (`experimental/*`):**
+  - Moved exploratory research crates (`autopsy-behavior-research`, `autopsy-incidents`, `autopsy-hidden-coupling`, `autopsy-schema-registry`) from `crates/` to `experimental/`.
+  - Clarified the core SynEvid v0.1 production verification scope while preserving research prototypes and test coverage.
+  - Expanded architectural boundary checks (`scripts/verify-arch-boundaries.sh`) across both `crates/` and `experimental/`.
+  - Evidence document: [`docs/evidence/45-research-crates-isolation.md`](file:///docs/evidence/45-research-crates-isolation.md).
 - **Enterprise Language & Monorepo Depth (Java/Kotlin & C#, Monorepo Topologies):**
   - **Deep Java & Kotlin Language Adapter (`crates/autopsy-adapter-java`):** Production-grade tree-sitter AST analysis (`tree-sitter-java = "0.23.5"`), Spring/Jakarta DI semantic awareness (`@Service`, `@Component`, `@Repository`, `@RestController`, `@Autowired`, `@Inject`, `@Bean`), class/interface inheritance hierarchies, method and constructor call edges, normalized contract extraction, and honest reflection/dynamic escape detection (`Class.forName`, `Method.invoke`, `Proxy.newProxyInstance`, `sun.misc.Unsafe`, `native`) degrading to `CoverageState::Partial`/`Unknown` (FR-014, FR-030).
   - **Deep C# Language Adapter (`crates/autopsy-adapter-csharp`):** Production-grade tree-sitter AST analysis (`tree-sitter-c-sharp = "0.23.1"`), ASP.NET Core & DI attribute awareness (`[ApiController]`, `[Route]`, `[HttpGet]`, `[HttpPost]`, `[Inject]`, `[Service]`), file-scoped/block namespaces, classes, interfaces, structs, records, properties, methods, base type list inheritance, call edges, normalized contracts, and honest reflection/dynamic escape detection (`Type.GetType`, `MethodInfo.Invoke`, `Activator.CreateInstance`, `dynamic`, `unsafe`, `[DllImport]`).

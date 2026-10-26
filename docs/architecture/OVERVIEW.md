@@ -126,15 +126,16 @@ The monorepo contains 28 core Rust crates (plus the `synevid-lsp` presentation a
 - **`autopsy-contracts-distributed`**: OpenAPI 3.2.1, AsyncAPI 3.1.0, and Pact 4.0.0 breaking change diff engine.
 - **`autopsy-telemetry`**: OpenTelemetry SemConv 1.44 trace sanitizer, PII redaction, and runtime service topology graph.
 - **`autopsy-mining`**: Sliding-window Git co-change miner calculating support, confidence, and lift without claiming causation.
-- **`autopsy-hidden-coupling`**: Conservative extractors for environment variables, config keys, message-queue topics, and database table names — every report carries `CoverageState::Partial` and a non-causality disclaimer.
 - **`autopsy-catalog`**: Backstage `catalog-info.yaml` and multi-ecosystem package manifest ingestion engine.
+- **`autopsy-workspace-registry`**: Read-only multi-repo / tenant federation metadata, monorepo topology detection, and honest live accessibility status (FR-ADV-010..012).
+- **`autopsy-cli`**: Unified CLI application orchestrating all core engine commands and deterministic exit codes.
 
-### Research & Federation Layer
+### Experimental & Research Prototypes (`experimental/*`)
+Isolated in `experimental/` to preserve a clean, laser-focused core v0.1 production verification surface:
+- **`autopsy-hidden-coupling`**: Conservative extractors for environment variables, config keys, message-queue topics, and database table names — every report carries `CoverageState::Partial` and a non-causality disclaimer.
 - **`autopsy-behavior-research`**: Confidence-scored behavioral research analyzers (FR-ADV-023/024); never emits a hard PASS without a formal proof.
 - **`autopsy-incidents`**: Read-only incident correlation with candidate ranking only — never claims root cause (FR-ADV-025/026).
 - **`autopsy-schema-registry`**: Pluggable schema-registry compatibility policies over field sets (FR-ADV-015).
-- **`autopsy-workspace-registry`**: Read-only multi-repo / tenant federation metadata and honest live accessibility status (FR-ADV-010..012).
-- **`autopsy-cli`**: Unified CLI application orchestrating all core engine commands and deterministic exit codes.
 
 ---
 

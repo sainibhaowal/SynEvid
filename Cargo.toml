@@ -26,14 +26,15 @@ members = [
     "crates/autopsy-telemetry",
     "crates/autopsy-mining",
     "crates/autopsy-catalog",
-    "crates/autopsy-hidden-coupling",
-    "crates/autopsy-incidents",
-    "crates/autopsy-behavior-research",
-    "crates/autopsy-schema-registry",
     "crates/autopsy-workspace-registry",
     "apps/synevid-lsp",
     "apps/synevid-ui",
-    "tests"
+    "tests",
+    # Experimental research prototypes (isolated from core v0.1 engine surface)
+    "experimental/autopsy-hidden-coupling",
+    "experimental/autopsy-incidents",
+    "experimental/autopsy-behavior-research",
+    "experimental/autopsy-schema-registry",
 ]
 
 [workspace.package]

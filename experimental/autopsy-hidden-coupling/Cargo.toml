@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-autopsy-domain = { path = "../autopsy-domain" }
+autopsy-domain = { path = "../../crates/autopsy-domain" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { workspace = true }

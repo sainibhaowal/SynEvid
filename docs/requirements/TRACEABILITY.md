@@ -113,15 +113,15 @@ Build-vs-integrate per `00_4.6`: Synevid owns semantic impact/contracts/evidence
 
 | Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
 |---|---|---|---|---|
-| **FR-ADV-021** | Hidden-coupling extractors for env vars, config keys, queue topics, DB tables (text-based, conservative, partial coverage, non-causality disclaimer) | `crates/autopsy-hidden-coupling` | 3 tests: shared env var, empty root unknown, deterministic digest | **VERIFIED** |
-| **FR-ADV-023/024** | Behavioral differential comparator (research-only, confidence-scored, never hard PASS) | `crates/autopsy-behavior-research` | 3 tests: divergence, length mismatch, deterministic digest | **VERIFIED** |
-| **FR-ADV-025/026** | Incident correlation: deployment/window candidate ranking with mandatory non-causality disclaimer | `crates/autopsy-incidents` | 3 tests: in-window, empty unknown, invalid window | **VERIFIED** |
+| **FR-ADV-021** | Hidden-coupling extractors for env vars, config keys, queue topics, DB tables (text-based, conservative, partial coverage, non-causality disclaimer) | `experimental/autopsy-hidden-coupling` | 3 tests: shared env var, empty root unknown, deterministic digest | **VERIFIED** |
+| **FR-ADV-023/024** | Behavioral differential comparator (research-only, confidence-scored, never hard PASS) | `experimental/autopsy-behavior-research` | 3 tests: divergence, length mismatch, deterministic digest | **VERIFIED** |
+| **FR-ADV-025/026** | Incident correlation: deployment/window candidate ranking with mandatory non-causality disclaimer | `experimental/autopsy-incidents` | 3 tests: in-window, empty unknown, invalid window | **VERIFIED** |
 
 ## Phase 4.4 — Additional Capability
 
 | Requirement ID | Description | Crates / Artifacts | Verification / Tests | Status |
 |---|---|---|---|---|
-| **FR-ADV-015** | Pluggable schema compatibility policies (Strict/Backward/Forward/Full) over field sets | `crates/autopsy-schema-registry` | 4 tests: backward allows addition, backward rejects removal, strict requires exact, deterministic digest | **VERIFIED** |
+| **FR-ADV-015** | Pluggable schema compatibility policies (Strict/Backward/Forward/Full) over field sets | `experimental/autopsy-schema-registry` | 4 tests: backward allows addition, backward rejects removal, strict requires exact, deterministic digest | **VERIFIED** |
 
 ## Tier 1 — Agent Experience (Roadmap `Resource/Agent_Advancement_Roadmap.md`)
 
