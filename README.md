@@ -559,6 +559,7 @@ repos:
 ```
 
 **E. Wire your agents (Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, opencode, Gemini CLI).**
+See the complete [**Master Integration & Connection Guide**](docs/agents/INTEGRATION_AND_USAGE_GUIDE.md) for detailed JSON configurations, host file locations, and MCP stdio protocols.
 The installer wires them automatically; to (re)wire from a checkout — backup-first, unwire-able:
 ```bash
 python3 scripts/setup-agent-hosts.py --check            # dry run: what would change
