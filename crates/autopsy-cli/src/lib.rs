@@ -742,6 +742,12 @@ pub fn run_cli(args: &[String]) -> i32 {
     let cli = match Cli::try_parse_from(args) {
         Ok(c) => c,
         Err(e) => {
+            if !e.use_stderr() {
+                let stdout = std::io::stdout();
+                let mut handle = stdout.lock();
+                let _ = write!(handle, "{}", e);
+                return EXIT_PASS;
+            }
             let stderr = std::io::stderr();
             let mut handle = stderr.lock();
             let _ = writeln!(handle, "{}", e);
