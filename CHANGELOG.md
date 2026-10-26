@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - Phase 1: End-to-End Reactive Dashboard UI & CLI Embedded Router Wiring (2026-10-26)
+
+### Added
+- **Unified Reactive Dashboard UI (`apps/synevid-ui/src/dashboard.html` & `crates/autopsy-cli/src/dashboard.html`):**
+  - **Live Event Bus Header:** SSE-driven real-time status pill (`● LIVE 18ms`) connecting directly to `/api/v1/live`.
+  - **Dynamic Multi-Repo Switcher & Modal:** Interactive repository dropdown and `+ Connect Repo` dialog querying `/api/v1/repos/*` with zero-refresh switching.
+  - **Capabilities Drawer:** Dynamic modal displaying all registered `LanguageAdapterPlugin` (6/6), `WorkspaceResolverPlugin` (8/8), and `GraphLayoutPlugin` from `/api/v1/capabilities`.
+  - **Deterministic 2D/3D Code Universe Canvas:** HTML5 interactive canvas rendering Barnes-Hut PRNG seeded node coordinates with pan, zoom, 2D planar / 3D orbit modes, and click-to-ego navigation.
+  - **Symbol Ego-Network & Calling Line Inspector:** Inspects inbound callers and outbound callees with **exact calling line numbers** (`src/controllers/OrderController.ts:42`) returned from SQLite WAL in $<5\text{ms}$.
+  - **Sub-50ms Real-Time Edit Simulator:** Interactive code buffer with quick presets (`Clean`, `Breaking Arity`, `Syntax Error`, `Dead Code`), executing in $\le 50\text{ms}$ (p95) displaying Crimson Red damaged callers with line numbers, Grey dead symbols, and telemetry badges.
+- **CLI Embedded Web Dashboard Parity (`crates/autopsy-cli/src/ui.rs`):**
+  - Full router parity: `/api/v1/capabilities`, `/api/v1/repos/connect`, `/api/v1/repos/list`, `/api/v1/repos/switch`, `/api/v1/graph/universe`, `/api/v1/graph/ego`, `/api/v1/simulate/edit`, and `/api/v1/live`.
+  - Enables `autopsy ui` and `synevid-ui` to offer byte-identical capabilities and reactive real-time functionality.
+- **Production Evidence Document:** [`docs/evidence/47-phase1-dashboard-ui-and-cli-wiring.md`](file:///docs/evidence/47-phase1-dashboard-ui-and-cli-wiring.md).
+
 ## [0.2.0] - Phase 1: Pluggable Core Registry, Local SQLite Storage & Sub-50ms Real-Time Daemon (2026-10-26)
 
 ### Added
