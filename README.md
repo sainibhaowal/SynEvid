@@ -492,15 +492,53 @@ irm https://raw.githubusercontent.com/sainibhaowal/SynEvid/main/scripts/install.
 autopsy init
 autopsy doctor
 ```
-* **System Package Managers (`.deb`, `.rpm`, Homebrew, Scoop, Winget):**
-  * **Debian / Ubuntu (`.deb`):** `sudo dpkg -i synevid_0.1.0_amd64.deb` (or `arm64.deb` from GitHub Releases)
-  * **Fedora / RHEL / Rocky (`.rpm`):** `sudo rpm -Uvh synevid-0.1.0-1.x86_64.rpm` (or `aarch64.rpm` from GitHub Releases)
-  * **Homebrew / Scoop / Winget:** Manifests shipped in [`packaging/homebrew/synevid.rb`](packaging/homebrew/synevid.rb), [`packaging/scoop/synevid.json`](packaging/scoop/synevid.json), and [`packaging/winget/sainibhaowal.SynEvid.yaml`](packaging/winget/sainibhaowal.SynEvid.yaml).
+* **Modern Package Managers & Distribution Channels:**
+  * **Homebrew (macOS & Linux):**
+    ```bash
+    brew install sainibhaowal/synevid/synevid
+    # or using local formula: brew install Formula/synevid.rb
+    ```
+  * **Cargo Binstall (instant pre-compiled binary):**
+    ```bash
+    cargo binstall autopsy-cli
+    ```
+  * **Zero-Install MCP Server (`npx @synevid/mcp`):**
+    ```bash
+    npx @synevid/mcp
+    ```
+  * **Python / `uvx` Wrapper:**
+    ```bash
+    pip install synevid    # installs console scripts: autopsy, synevid, synevid-ui
+    uvx synevid doctor     # zero-install instant execution via uv
+    ```
+  * **Docker Multi-Arch Container (`ghcr.io/sainibhaowal/synevid`):**
+    ```bash
+    docker run --rm -v "$PWD:/repo" ghcr.io/sainibhaowal/synevid verify
+    docker run --rm -it -v "$PWD:/repo" ghcr.io/sainibhaowal/synevid tui
+    ```
+  * **System Packages (`.deb`, `.rpm`, Scoop, Winget):**
+    * **Debian / Ubuntu (`.deb`):** `sudo dpkg -i synevid_0.1.0_amd64.deb` (or `arm64.deb`)
+    * **Fedora / RHEL / Rocky (`.rpm`):** `sudo rpm -Uvh synevid-0.1.0-1.x86_64.rpm` (or `aarch64.rpm`)
+    * **Windows Scoop / Winget:** Manifests shipped in [`packaging/scoop/synevid.json`](packaging/scoop/synevid.json) and [`packaging/winget/sainibhaowal.SynEvid.yaml`](packaging/winget/sainibhaowal.SynEvid.yaml).
 - **Update:** re-run the same one-liner (or `install.sh --update` / `install.ps1 -Update`). Idempotent and takes seconds. Releases are refreshed from every green `main` post-merge run and `v*` tag. No silent auto-update by design — SynEvid never phones home.
 - **Inspect / remove:** `install.sh --check` · `install.sh --uninstall` (or `install.ps1 -Check` · `install.ps1 -Uninstall` on Windows).
 - **Knobs:** `SYNEVID_PREFIX=~/.local` · `SYNEVID_LIBC=musl` (`--musl`) · `AUTOPSY_SKIP_HOSTS=1` · `AUTOPSY_SKIP_MCP=1` · `AUTOPSY_SKIP_BUILD=1` · `SYNEVID_NO_PATH=1` · `SYNEVID_STRICT=1` (require checksum verification).
 
-**B. CLI binary from source.** Prerequisites: Rust 1.90+.
+**B. Presentation & Real-Time Observation Suite (Web UI, TUI, Live Watch).**
+* **Local Web Dashboard (`autopsy ui` / `synevid-ui`):** Standalone, embedded zero-npm web inspector served directly from binary memory with live REST API (`/api/status`, `/api/verify`, `/api/impact`, `/api/graph`, `/api/contracts`, `/api/trajectory`):
+  ```bash
+  autopsy ui --port 3333 --open
+  ```
+* **Interactive Terminal Dashboard (`autopsy tui`):** Full-screen dark-mode keyboard-navigable terminal dashboard built on `ratatui` with live coverage meters, findings inspector, and blast-radius search bar (`/`):
+  ```bash
+  autopsy tui
+  ```
+* **Real-Time Watch Mode (`autopsy watch`):** Filesystem watcher with 200ms debouncing, live pass/fail ticker, and interactive hotkeys (`v` for force-verify, `b` for new baseline, `c` for clear, `q` for quit):
+  ```bash
+  autopsy watch
+  ```
+
+**C. CLI binary from source.** Prerequisites: Rust 1.90+.
 ```bash
 git clone https://github.com/sainibhaowal/SynEvid.git && cd SynEvid
 cargo build --release -p autopsy-cli -p synevid-lsp
@@ -508,46 +546,55 @@ export PATH="$PWD/target/release:$PATH"
 autopsy --repo-root /path/to/your/repo version
 ```
 
-**C. Wire your agents (Claude Code, Claude Desktop, Cursor, Windsurf,
-VS Code, opencode, Gemini CLI).** The installer wires them automatically; to
-(re)wire from a checkout — backup-first, unwire-able:
+**D. Pre-Commit Hook Repository Integration.**
+Add SynEvid's offline, deterministic architectural verification to your project in one line:
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/sainibhaowal/synevid
+    rev: v0.1.0
+    hooks:
+      - id: synevid-verify    # validates invariants and contracts on every commit
+      - id: synevid-doctor    # verifies repository coverage and engine configuration
+```
+
+**E. Wire your agents (Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, opencode, Gemini CLI).**
+The installer wires them automatically; to (re)wire from a checkout — backup-first, unwire-able:
 ```bash
 python3 scripts/setup-agent-hosts.py --check            # dry run: what would change
 python3 scripts/setup-agent-hosts.py --hooks            # MCP + advisory safe-edit hook
 python3 scripts/setup-agent-hosts.py --unwire           # remove the entries again
 ```
-Manual alternative for any MCP client (Node 22+; expand `~` before pasting):
+Manual alternative for any MCP client (Node 22+; or `npx @synevid/mcp`):
 ```json
 {
   "mcpServers": {
     "synevid": {
-      "command": "node",
-      "args": ["/home/you/.local/share/synevid/mcp-server/index.js"],
-      "env": { "AUTOPSY_BIN": "/home/you/.local/bin/autopsy" }
+      "command": "npx",
+      "args": ["-y", "@synevid/mcp"],
+      "env": { "AUTOPSY_BIN": "autopsy" }
     }
   }
 }
 ```
-Developers can point `args` at `/absolute/path/to/SynEvid/apps/mcp-server/dist/index.js`
-instead. `AUTOPSY_BIN` is optional: without it the server tries
-`~/.local/bin/autopsy`, then `~/.cargo/bin/autopsy`, then workspace
-`target/release` and `target/debug` builds, then `PATH`.
-Opt-in agent guidance lives in `agents/skills/synevid-forensics.md`, and
-`agents/hooks/safe-edit.sh` is an advisory, fail-open pre-edit blast-radius
-prompt (never blocks an edit).
 
-**D. IDE Plugin (`apps/vscode-extension`) & GitHub Action Plugin (`action.yml`).**
-* **VS Code / Cursor / Windsurf Extension:** Located in [`apps/vscode-extension/`](apps/vscode-extension/). Provides inline Blast Radius **CodeLens** above declarations, semantic **Hover** impact cards, a live **Status Bar** verification indicator, and a **Task Forensic Trajectory** sidebar in the Activity Bar.
-* **Composite GitHub Action (`action.yml`):** Add SynEvid to any repository workflow in 4 lines:
+**F. IDE Plugin (`apps/vscode-extension`) & GitHub Action (`action.yml`).**
+* **VS Code / Cursor / Windsurf Extension:** Located in [`apps/vscode-extension/`](apps/vscode-extension/).
+  - **Inline CodeLens:** Live caller and test metrics right above functions and classes (e.g. `$(pulse) 12 callers · 3 tests`).
+  - **Semantic Hover:** Real-time blast radius breakdown, edge confidence grades, and cryptographic digests.
+  - **Status Bar & Trajectory Sidebar:** One-click invariant verification and task-completion forensic trajectory inspection.
+* **Marketplace GitHub Action (`action.yml`):**
+  Add SynEvid to any GitHub Actions workflow:
   ```yaml
-  - uses: sainibhaowal/SynEvid@v0.1.0
+  - name: SynEvid Invariant Verification
+    uses: sainibhaowal/synevid-action@v1
     with:
       strict: "true"
       sarif-output: autopsy.sarif
   ```
-* **Full PR Gate Workflow:** Copy [`.github/workflows/autopsy-pr-gate.yml`](.github/workflows/autopsy-pr-gate.yml) into your repository for automatic per-file caller blast radius and JSON + SARIF artifacts.
+  Automatically appends an actionable Markdown report to `$GITHUB_STEP_SUMMARY` and uploads SARIF 2.1.0 to GitHub Code Scanning.
 
-**E. Automatic Task-Completion Forensic Trajectory Ledger (`.autopsy/runs/`).**
+**G. Automatic Task-Completion Forensic Trajectory Ledger (`.autopsy/runs/`).**
 Every time an AI coding session closes (`autopsy session close`) or the Claude Code `Stop` hook ([`agents/hooks/autopsy-task-complete.sh`](agents/hooks/autopsy-task-complete.sh)) runs at the end of an agentic task, SynEvid generates a deterministic, BLAKE3-signed forensic trajectory report at:
 * `.autopsy/runs/<session_id>.json` & `.autopsy/runs/<session_id>.md`
 * `.autopsy/runs/latest.json` & `.autopsy/runs/latest.md` (also exposed via MCP resource `autopsy://runs/latest`)
