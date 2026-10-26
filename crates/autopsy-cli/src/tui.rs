@@ -29,7 +29,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Tabs},
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -617,19 +617,18 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
     // 1. Header with brand badges and status pill
     let header_text = vec![Line::from(vec![
         Span::styled(
-            " SYNEVID ",
+            " ⬢ SYNEVID ",
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Rgb(6, 182, 212))
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " CODE AUTOPSY ENGINE ",
+            "CODE AUTOPSY ENGINE ",
             Style::default()
-                .fg(Color::Rgb(6, 182, 212))
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
         Span::styled("Snapshot: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             &app.snapshot_id[..12.min(app.snapshot_id.len())],
@@ -645,7 +644,7 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
         ),
         Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("Symbols: {} | Edges: {}", app.symbol_count, app.edge_count),
+            format!("Symbols: {} │ Edges: {}", app.symbol_count, app.edge_count),
             Style::default().fg(Color::Cyan),
         ),
     ])];
@@ -721,11 +720,9 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
             Span::styled(
                 " 🔍 SEARCH SEED: ",
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(245, 158, 11))
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" "),
             Span::styled(
                 &app.input_buffer,
                 Style::default()
@@ -733,7 +730,7 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " █ [Press Enter to Submit | Esc to Cancel]",
+                " █  [Enter: Submit │ Esc: Cancel]",
                 Style::default().fg(Color::DarkGray),
             ),
         ])
@@ -798,48 +795,85 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(Color::Cyan),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Engine    : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Deterministic / Zero-LLM",
+                Style::default().fg(Color::White),
+            ),
+        ]),
     ];
     let info_card = Paragraph::new(info_text).block(
         Block::default()
             .title(" Workspace Telemetry ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_style(Style::default().fg(Color::Rgb(71, 85, 105))),
     );
     f.render_widget(info_card, top_cols[0]);
 
-    // Coverage Gauge Card
-    let gauge = Gauge::default()
-        .block(
-            Block::default()
-                .title(" Semantic Coverage (Honest) ")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Rgb(16, 185, 129))),
-        )
-        .gauge_style(Style::default().fg(Color::Rgb(16, 185, 129)))
-        .percent(100)
-        .label("100% Verified (0% Unknown)");
-    f.render_widget(gauge, top_cols[1]);
+    // Coverage Telemetry Card (Dark mode, high contrast, readable)
+    let coverage_text = vec![
+        Line::from(vec![
+            Span::styled("Status   : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                &app.coverage_state,
+                Style::default()
+                    .fg(Color::Rgb(16, 185, 129))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Coverage : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "100% ",
+                Style::default()
+                    .fg(Color::Rgb(16, 185, 129))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "[████████████████████]",
+                Style::default().fg(Color::Rgb(16, 185, 129)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Gaps     : ", Style::default().fg(Color::DarkGray)),
+            Span::styled("0% Unknown / Dynamic", Style::default().fg(Color::White)),
+        ]),
+    ];
+    let coverage_card = Paragraph::new(coverage_text).block(
+        Block::default()
+            .title(" Semantic Coverage (Honest) ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Rgb(16, 185, 129))),
+    );
+    f.render_widget(coverage_card, top_cols[1]);
 
     // Metrics Card
     let metrics_text = vec![
         Line::from(vec![
-            Span::styled("Nodes : ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Symbols  : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("{} symbols", app.symbol_count),
-                Style::default().fg(Color::Yellow),
+                format!("{} nodes", app.symbol_count),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Edges : ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Edges    : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} dependencies", app.edge_count),
-                Style::default().fg(Color::Cyan),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
+        Line::from(""),
         Line::from(vec![
-            Span::styled("State : ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Hashing  : ", Style::default().fg(Color::DarkGray)),
             Span::styled("Deterministic BLAKE3", Style::default().fg(Color::Green)),
         ]),
     ];
@@ -848,7 +882,7 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
             .title(" Multigraph Stats ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow)),
+            .border_style(Style::default().fg(Color::Rgb(71, 85, 105))),
     );
     f.render_widget(metrics_card, top_cols[2]);
 
@@ -923,26 +957,23 @@ fn render_verify(f: &mut Frame, app: &TuiApp, area: Rect) {
             let is_selected = i == app.findings_selected;
             let status_badge = if item.status == "PASS" {
                 Span::styled(
-                    " ✔ PASS ",
+                    "[✔ PASS] ",
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(16, 185, 129))
+                        .fg(Color::Rgb(16, 185, 129))
                         .add_modifier(Modifier::BOLD),
                 )
             } else if item.status == "FAIL" {
                 Span::styled(
-                    " ✖ FAIL ",
+                    "[✖ FAIL] ",
                     Style::default()
-                        .fg(Color::White)
-                        .bg(Color::Rgb(244, 63, 94))
+                        .fg(Color::Rgb(244, 63, 94))
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
                 Span::styled(
-                    " ? UNKNOWN ",
+                    "[? UNKNOWN] ",
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(245, 158, 11))
+                        .fg(Color::Rgb(245, 158, 11))
                         .add_modifier(Modifier::BOLD),
                 )
             };
@@ -1057,11 +1088,9 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::styled(
             " 🔍 SEED: ",
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" "),
         Span::styled(
             &app.impact_seed,
             Style::default()
@@ -1069,7 +1098,7 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  (Click or press [/] to change seed symbol)",
+            "  [Click or press / to edit seed]",
             Style::default().fg(Color::DarkGray),
         ),
     ]))
@@ -1077,7 +1106,7 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_style(Style::default().fg(Color::Rgb(71, 85, 105))),
     );
     f.render_widget(search_bar, rows[0]);
 
@@ -1096,14 +1125,17 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
             let is_sel = app.blast_column == 0 && i == app.blast_selected;
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    if is_sel { " ▶ PROVEN " } else { "   PROVEN " },
+                    if is_sel {
+                        "▶ [PROVEN] "
+                    } else {
+                        "  [PROVEN] "
+                    },
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(16, 185, 129))
+                        .fg(Color::Rgb(16, 185, 129))
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" [{} hop] ", hops),
+                    format!("[{} hop] ", hops),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
@@ -1151,17 +1183,16 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     if is_sel {
-                        " ▶ INFERRED "
+                        "▶ [INFERRED] "
                     } else {
-                        "   INFERRED "
+                        "  [INFERRED] "
                     },
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(245, 158, 11))
+                        .fg(Color::Rgb(245, 158, 11))
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" [{} hop] ", hops),
+                    format!("[{} hop] ", hops),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
@@ -1310,29 +1341,26 @@ fn render_trajectory(f: &mut Frame, app: &TuiApp, area: Rect) {
                 let is_selected = i == app.runs_selected;
                 let status_badge = if r.exit_code == 0 {
                     Span::styled(
-                        " PASS 0 ",
+                        "[PASS 0] ",
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Rgb(16, 185, 129))
+                            .fg(Color::Rgb(16, 185, 129))
                             .add_modifier(Modifier::BOLD),
                     )
                 } else {
                     Span::styled(
-                        format!(" FAIL {} ", r.exit_code),
+                        format!("[FAIL {}] ", r.exit_code),
                         Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Rgb(244, 63, 94))
+                            .fg(Color::Rgb(244, 63, 94))
                             .add_modifier(Modifier::BOLD),
                     )
                 };
 
                 ListItem::new(Line::from(vec![
-                    status_badge,
-                    Span::raw(" "),
                     Span::styled(
                         if is_selected { "▶ " } else { "  " },
                         Style::default().fg(Color::Yellow),
                     ),
+                    status_badge,
                     Span::styled(
                         &r.session_id[..16.min(r.session_id.len())],
                         Style::default().fg(if is_selected {
