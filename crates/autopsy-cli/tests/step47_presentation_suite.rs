@@ -44,3 +44,15 @@ fn autopsy_tools_reports_full_catalog() {
     let exit_code = run_cli(&args);
     assert_eq!(exit_code, EXIT_PASS);
 }
+
+#[test]
+fn test_tui_app_instant_initialization() {
+    let t0 = std::time::Instant::now();
+    let app = autopsy_cli::tui::TuiApp::new(std::path::PathBuf::from("."));
+    assert!(
+        t0.elapsed() < std::time::Duration::from_millis(500),
+        "TuiApp::new must initialize immediately (< 500ms), took {:?}",
+        t0.elapsed()
+    );
+    assert!(!app.snapshot_id.is_empty());
+}
