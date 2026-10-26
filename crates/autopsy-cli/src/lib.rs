@@ -2217,11 +2217,11 @@ fn handle_impact(cli: &Cli, req: ImpactRequest<'_>) -> Result<i32, CliError> {
     use autopsy_domain::EdgeKind;
     use autopsy_impact::callers_profile;
     let config = load_or_default_config(&cli.repo_root)?;
-    let storage = get_storage(cli)?;
     // A stored snapshot ID analyzes that exact state from cache;
     // otherwise the current worktree is analyzed.
     let artifacts = match req.snapshot_id {
         Some(id) => {
+            let storage = get_storage(cli)?;
             let stored_opt = storage
                 .get_snapshot(&SnapshotId::new(id))
                 .map_err(|e| CliError::Storage(e.to_string()))?;

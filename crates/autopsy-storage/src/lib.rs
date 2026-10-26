@@ -76,9 +76,10 @@ impl StorageEngine {
     }
 
     fn init_connection(conn: Connection, options: StorageOptions) -> Result<Self, StorageError> {
-        // Enforce foreign keys and normal synchronous mode
+        // Enforce busy timeout, foreign keys and normal synchronous mode
         conn.execute_batch(
-            "PRAGMA foreign_keys = ON;
+            "PRAGMA busy_timeout = 5000;
+             PRAGMA foreign_keys = ON;
              PRAGMA synchronous = NORMAL;",
         )?;
 
