@@ -83,3 +83,6 @@ pub fn federation_coverage(registry: &Registry) -> CoverageState {
         CoverageState::Partial
     }
 }
+
+pub mod monorepo;
+pub use monorepo::{MonorepoKind, MonorepoPackage, MonorepoWorkspace};

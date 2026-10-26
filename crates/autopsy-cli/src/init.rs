@@ -42,6 +42,7 @@ const KNOWN_LAYER_ORDER: &[(&str, &[&str])] = &[
             "api",
             "controllers",
             "handlers",
+            "Controllers",
             "apps",
         ],
     ),
@@ -54,6 +55,7 @@ const KNOWN_LAYER_ORDER: &[(&str, &[&str])] = &[
             "src/app",
             "services",
             "usecases",
+            "Services",
             "packages",
         ],
     ),
@@ -68,6 +70,9 @@ const KNOWN_LAYER_ORDER: &[(&str, &[&str])] = &[
             "models",
             "entities",
             "core",
+            "Domain",
+            "Models",
+            "Entities",
             "crates",
             "pkg",
         ],
@@ -82,6 +87,8 @@ const KNOWN_LAYER_ORDER: &[(&str, &[&str])] = &[
             "src/adapters",
             "infra",
             "infrastructure",
+            "Infrastructure",
+            "Data",
             "internal",
         ],
     ),
@@ -147,6 +154,15 @@ fn scan_repo_shape(root: &Path, max_entries: usize) -> (BTreeSet<String>, Vec<(S
                     "rs" => {
                         langs.insert("rust".to_string());
                     }
+                    "java" => {
+                        langs.insert("java".to_string());
+                    }
+                    "kt" | "kts" => {
+                        langs.insert("kotlin".to_string());
+                    }
+                    "cs" => {
+                        langs.insert("csharp".to_string());
+                    }
                     _ => {}
                 }
             }
@@ -183,6 +199,15 @@ fn render_autopsy_toml(langs: &BTreeSet<String>) -> String {
     }
     if langs.contains("rust") {
         include.push("\"**/*.rs\"");
+    }
+    if langs.contains("java") {
+        include.push("\"**/*.java\"");
+    }
+    if langs.contains("kotlin") {
+        include.extend(["\"**/*.kt\"", "\"**/*.kts\""]);
+    }
+    if langs.contains("csharp") {
+        include.push("\"**/*.cs\"");
     }
     let include_list = include.join(", ");
     let lang_list: Vec<String> = langs.iter().map(|l| format!("\"{l}\"")).collect();

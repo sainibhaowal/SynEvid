@@ -194,17 +194,29 @@ pub struct TypeScriptCompilerBridge {
     pub root_dir: PathBuf,
     pub base_url: Option<String>,
     pub path_mappings: Vec<(String, Vec<String>)>,
+    pub monorepo: Option<autopsy_workspace_registry::MonorepoWorkspace>,
 }
 
 impl TypeScriptCompilerBridge {
     pub fn new(root_dir: impl Into<PathBuf>) -> Self {
         let root = root_dir.into();
         let (base_url, path_mappings) = load_tsconfig(&root);
+        let monorepo = autopsy_workspace_registry::MonorepoWorkspace::detect(&root);
         Self {
             root_dir: root,
             base_url,
             path_mappings,
+            monorepo,
         }
+    }
+
+    /// Explicitly configure monorepo workspace for cross-package resolution.
+    pub fn with_monorepo(
+        mut self,
+        monorepo: autopsy_workspace_registry::MonorepoWorkspace,
+    ) -> Self {
+        self.monorepo = Some(monorepo);
+        self
     }
 
     /// Explicitly configure path mappings (e.g. for unit tests or overrides).
@@ -344,6 +356,13 @@ impl TypeScriptCompilerBridge {
                     if self.root_dir.join(&candidate).exists() {
                         return candidate;
                     }
+                }
+            }
+
+            // Check monorepo workspace for internal workspace packages
+            if let Some(monorepo) = &self.monorepo {
+                if let Some(resolved) = monorepo.resolve_package_import(specifier) {
+                    return resolved;
                 }
             }
 
@@ -3386,5 +3405,37 @@ export function run() {
             bridge.resolve_module_specifier("src/main.ts", "@models/user"),
             "src/models/user.ts"
         );
+    }
+
+    #[test]
+    fn test_monorepo_cross_package_resolution() {
+        let tmp = std::env::temp_dir().join(format!("syn-ts-monorepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("packages/shared/src")).unwrap();
+        std::fs::create_dir_all(tmp.join("apps/api/src")).unwrap();
+
+        std::fs::write(
+            tmp.join("pnpm-workspace.yaml"),
+            "packages:\n  - 'packages/*'\n  - 'apps/*'\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            tmp.join("packages/shared/package.json"),
+            r#"{"name": "@company/shared", "main": "src/index.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("packages/shared/src/index.ts"),
+            "export const compute = () => 42;",
+        )
+        .unwrap();
+
+        let bridge = TypeScriptCompilerBridge::new(&tmp);
+        assert!(bridge.monorepo.is_some());
+        let resolved = bridge.resolve_module_specifier("apps/api/src/server.ts", "@company/shared");
+        assert_eq!(resolved, "packages/shared/src/index.ts");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

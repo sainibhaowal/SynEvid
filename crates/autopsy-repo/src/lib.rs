@@ -284,6 +284,10 @@ pub fn classify_language(path: &Path) -> String {
         Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => "javascript".to_string(),
         Some("rs") => "rust".to_string(),
         Some("py") => "python".to_string(),
+        Some("go") => "go".to_string(),
+        Some("java") => "java".to_string(),
+        Some("kt") | Some("kts") => "kotlin".to_string(),
+        Some("cs") => "csharp".to_string(),
         Some("json") => "json".to_string(),
         Some("toml") => "toml".to_string(),
         Some("yaml") | Some("yml") => "yaml".to_string(),
@@ -304,6 +308,9 @@ pub fn is_text_language(lang: &str) -> bool {
             | "rust"
             | "go"
             | "python"
+            | "java"
+            | "kotlin"
+            | "csharp"
             | "json"
             | "toml"
             | "yaml"

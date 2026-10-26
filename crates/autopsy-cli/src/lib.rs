@@ -34,7 +34,9 @@ pub use workspace::{
 };
 
 use crate::toolspec::handle_tools;
+use autopsy_adapter_csharp::CSharpAdapter;
 use autopsy_adapter_go::GoAdapter;
+use autopsy_adapter_java::JavaAdapter;
 use autopsy_adapter_python::PythonAdapter;
 use autopsy_adapter_rust::RustAdapter;
 use autopsy_adapter_typescript::TypeScriptAdapter;
@@ -1333,7 +1335,7 @@ pub struct AnalysisArtifacts {
 fn is_analyzed_language(language: &str) -> bool {
     matches!(
         language,
-        "typescript" | "javascript" | "python" | "go" | "rust"
+        "typescript" | "javascript" | "python" | "go" | "rust" | "java" | "kotlin" | "csharp"
     )
 }
 /// Canonical (LF-normalized) bytes for a file, mirroring
@@ -1380,6 +1382,8 @@ fn analyze_single_file(
     py_adapter: &PythonAdapter,
     go_adapter: &GoAdapter,
     rust_adapter: &RustAdapter,
+    java_adapter: &JavaAdapter,
+    csharp_adapter: &CSharpAdapter,
     parse_ctx: &ParseContext,
     unit: &FileUnit,
     content_str: &str,
@@ -1409,6 +1413,8 @@ fn analyze_single_file(
         "python" => analyze_with!(py_adapter),
         "go" => analyze_with!(go_adapter),
         "rust" => analyze_with!(rust_adapter),
+        "java" | "kotlin" => analyze_with!(java_adapter),
+        "csharp" => analyze_with!(csharp_adapter),
         _ => analyze_with!(ts_adapter),
     }
 }
@@ -1475,6 +1481,8 @@ fn analyze_contents(
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
     let go_adapter = GoAdapter::with_root_dir(repo_root);
     let rust_adapter = RustAdapter::with_root_dir(repo_root);
+    let java_adapter = JavaAdapter::with_root_dir(repo_root);
+    let csharp_adapter = CSharpAdapter::with_root_dir(repo_root);
     let parse_ctx = ParseContext {
         project_root: repo_root.to_path_buf(),
         options: BTreeMap::new(),
@@ -1494,6 +1502,8 @@ fn analyze_contents(
             &py_adapter,
             &go_adapter,
             &rust_adapter,
+            &java_adapter,
+            &csharp_adapter,
             &parse_ctx,
             unit,
             content_str,
@@ -1507,6 +1517,8 @@ fn analyze_contents(
         &py_adapter,
         &go_adapter,
         &rust_adapter,
+        &java_adapter,
+        &csharp_adapter,
         &parse_ctx,
         snapshot.clone(),
         local_by_path,
@@ -1543,6 +1555,8 @@ fn assemble_artifacts(
     py_adapter: &PythonAdapter,
     go_adapter: &GoAdapter,
     rust_adapter: &RustAdapter,
+    java_adapter: &JavaAdapter,
+    csharp_adapter: &CSharpAdapter,
     parse_ctx: &ParseContext,
     snapshot: RepoSnapshot,
     mut local_by_path: BTreeMap<String, FileLocalAnalysis>,
@@ -1590,6 +1604,8 @@ fn assemble_artifacts(
                     "python" => py_adapter.parse(parse_ctx, unit, content_str),
                     "go" => go_adapter.parse(parse_ctx, unit, content_str),
                     "rust" => rust_adapter.parse(parse_ctx, unit, content_str),
+                    "java" | "kotlin" => java_adapter.parse(parse_ctx, unit, content_str),
+                    "csharp" => csharp_adapter.parse(parse_ctx, unit, content_str),
                     _ => ts_adapter.parse(parse_ctx, unit, content_str),
                 }
             {
@@ -1600,6 +1616,8 @@ fn assemble_artifacts(
                     "python" => py_adapter.extract_edges(parsed, &symbol_index),
                     "go" => go_adapter.extract_edges(parsed, &symbol_index),
                     "rust" => rust_adapter.extract_edges(parsed, &symbol_index),
+                    "java" | "kotlin" => java_adapter.extract_edges(parsed, &symbol_index),
+                    "csharp" => csharp_adapter.extract_edges(parsed, &symbol_index),
                     _ => ts_adapter.extract_edges(parsed, &symbol_index),
                 };
                 if let Ok(edges) = edges {
@@ -1776,6 +1794,8 @@ fn try_incremental_artifacts(
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
     let go_adapter = GoAdapter::with_root_dir(repo_root);
     let rust_adapter = RustAdapter::with_root_dir(repo_root);
+    let java_adapter = JavaAdapter::with_root_dir(repo_root);
+    let csharp_adapter = CSharpAdapter::with_root_dir(repo_root);
     let parse_ctx = ParseContext {
         project_root: repo_root.to_path_buf(),
         options: BTreeMap::new(),
@@ -1844,6 +1864,8 @@ fn try_incremental_artifacts(
                 &py_adapter,
                 &go_adapter,
                 &rust_adapter,
+                &java_adapter,
+                &csharp_adapter,
                 &parse_ctx,
                 unit,
                 content_str,
@@ -1871,6 +1893,8 @@ fn try_incremental_artifacts(
         &py_adapter,
         &go_adapter,
         &rust_adapter,
+        &java_adapter,
+        &csharp_adapter,
         &parse_ctx,
         new_snapshot.clone(),
         local_by_path,
@@ -3255,6 +3279,26 @@ fn handle_doctor(cli: &Cli) -> Result<i32, CliError> {
             let caps = adapter.capabilities();
             (
                 "Rust",
+                caps.language_id.clone(),
+                caps.adapter_version.clone(),
+                caps.supported_extensions.join(", "),
+            )
+        },
+        {
+            let adapter = JavaAdapter::with_root_dir(&cli.repo_root);
+            let caps = adapter.capabilities();
+            (
+                "Java/Kotlin",
+                caps.language_id.clone(),
+                caps.adapter_version.clone(),
+                caps.supported_extensions.join(", "),
+            )
+        },
+        {
+            let adapter = CSharpAdapter::with_root_dir(&cli.repo_root);
+            let caps = adapter.capabilities();
+            (
+                "C#",
                 caps.language_id.clone(),
                 caps.adapter_version.clone(),
                 caps.supported_extensions.join(", "),

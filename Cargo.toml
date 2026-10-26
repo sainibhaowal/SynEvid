@@ -8,6 +8,8 @@ members = [
     "crates/autopsy-adapter-python",
     "crates/autopsy-adapter-go",
     "crates/autopsy-adapter-rust",
+    "crates/autopsy-adapter-java",
+    "crates/autopsy-adapter-csharp",
     "crates/autopsy-symbols",
     "crates/autopsy-graph",
     "crates/autopsy-diff",

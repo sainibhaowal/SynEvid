@@ -8,6 +8,7 @@ license.workspace = true
 autopsy-domain = { path = "../autopsy-domain" }
 autopsy-adapter-api = { path = "../autopsy-adapter-api" }
 autopsy-symbols = { path = "../autopsy-symbols" }
+autopsy-workspace-registry = { path = "../autopsy-workspace-registry" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

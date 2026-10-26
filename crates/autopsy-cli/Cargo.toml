@@ -34,6 +34,8 @@ autopsy-adapter-typescript = { path = "../autopsy-adapter-typescript" }
 autopsy-adapter-python = { path = "../autopsy-adapter-python" }
 autopsy-adapter-go = { path = "../autopsy-adapter-go" }
 autopsy-adapter-rust = { path = "../autopsy-adapter-rust" }
+autopsy-adapter-java = { path = "../autopsy-adapter-java" }
+autopsy-adapter-csharp = { path = "../autopsy-adapter-csharp" }
 autopsy-symbols = { path = "../autopsy-symbols" }
 autopsy-graph = { path = "../autopsy-graph" }
 autopsy-diff = { path = "../autopsy-diff" }
