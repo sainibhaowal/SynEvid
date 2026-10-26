@@ -119,18 +119,18 @@ runs:
           fi
 
           cat << EOF >> "$GITHUB_STEP_SUMMARY"
-        ### 🛡️ SynEvid Forensic Gate: ${STATUS_ICON}
+### 🛡️ SynEvid Forensic Gate: ${STATUS_ICON}
 
-        | Metric | Value |
-        |---|---|
-        | **Verdict** | \`${VERDICT}\` |
-        | **Snapshot ID** | \`${SNAP_ID:0:16}\` |
-        | **Exit Code** | \`${EXIT_CODE}\` |
-        | **Engine** | Offline, Deterministic (Zero-LLM) |
-        | **SARIF Report** | \`${{ inputs.sarif-output }}\` |
+| Metric | Value |
+|---|---|
+| **Verdict** | \`${VERDICT}\` |
+| **Snapshot ID** | \`${SNAP_ID}\` |
+| **Exit Code** | \`${EXIT_CODE}\` |
+| **Engine** | Offline, Deterministic (Zero-LLM) |
+| **SARIF Report** | \`${{ inputs.sarif-output }}\` |
 
-        > *SynEvid ensures 100% deterministic software correctness and zero probabilistic hallucination.*
-        EOF
+> *SynEvid ensures 100% deterministic software correctness and zero probabilistic hallucination.*
+EOF
         fi
 
         if [ "${{ inputs.fail-on-breach }}" = "true" ] && [ $EXIT_CODE -ne 0 ]; then
