@@ -41,6 +41,7 @@ autopsy-catalog = { path = "../autopsy-catalog" }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
 notify = { workspace = true }
+tiny_http = { workspace = true }
 
 [dev-dependencies]
 # The lineage fixture builds real git objects without a git subprocess: a loose object is
