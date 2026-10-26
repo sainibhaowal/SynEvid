@@ -233,6 +233,27 @@ impl DashboardServer {
                     self.respond_json(request, &json);
                 }
 
+                // Preflight CORS handler for external Web Cockpit (Next.js / React)
+                (&Method::Options, _) => {
+                    let header_cors =
+                        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+                    let header_methods = Header::from_bytes(
+                        &b"Access-Control-Allow-Methods"[..],
+                        &b"GET, POST, OPTIONS"[..],
+                    )
+                    .unwrap();
+                    let header_headers = Header::from_bytes(
+                        &b"Access-Control-Allow-Headers"[..],
+                        &b"Content-Type, Authorization"[..],
+                    )
+                    .unwrap();
+                    let response = Response::empty(StatusCode(204))
+                        .with_header(header_cors)
+                        .with_header(header_methods)
+                        .with_header(header_headers);
+                    let _ = request.respond(response);
+                }
+
                 _ => {
                     let response = Response::new(
                         StatusCode(404),
@@ -256,12 +277,29 @@ impl DashboardServer {
     }
 
     fn respond_json(&self, req: Request, json: &str) {
-        let header = Header::from_bytes(
+        let header_content = Header::from_bytes(
             &b"Content-Type"[..],
             &b"application/json; charset=utf-8"[..],
         )
         .unwrap();
-        let response = Response::from_string(json).with_header(header);
+        let header_cors =
+            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+        let header_methods = Header::from_bytes(
+            &b"Access-Control-Allow-Methods"[..],
+            &b"GET, POST, OPTIONS"[..],
+        )
+        .unwrap();
+        let header_headers = Header::from_bytes(
+            &b"Access-Control-Allow-Headers"[..],
+            &b"Content-Type, Authorization"[..],
+        )
+        .unwrap();
+
+        let response = Response::from_string(json)
+            .with_header(header_content)
+            .with_header(header_cors)
+            .with_header(header_methods)
+            .with_header(header_headers);
         let _ = req.respond(response);
     }
 
@@ -556,9 +594,12 @@ impl DashboardServer {
         let header_sse =
             Header::from_bytes(&b"Content-Type"[..], &b"text/event-stream"[..]).unwrap();
         let header_cache = Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]).unwrap();
+        let header_cors =
+            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
         let response = Response::from_string(sse_data)
             .with_header(header_sse)
-            .with_header(header_cache);
+            .with_header(header_cache)
+            .with_header(header_cors);
         let _ = req.respond(response);
     }
 

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - Full End-to-End CORS, Preflight OPTIONS & Next.js Reverse Proxy Integration (2026-10-26)
+
+### Added
+- **Full-Stack End-to-End Connectivity:**
+  - Configured universal CORS headers (`Access-Control-Allow-Origin: *`, `Methods`, `Headers`) on all daemon REST & SSE endpoints across `apps/synevid-ui/src/server.rs` and `crates/autopsy-cli/src/ui.rs`.
+  - Added preflight `OPTIONS` route handling returning `204 No Content` for browser fetch compatibility.
+  - Added Next.js reverse proxy rewrites (`apps/web/next.config.ts`) routing `/api/:path*` directly to `http://127.0.0.1:3333/api/:path*`.
+  - Created automated live daemon integration test suite (`scripts/tests/test-live-daemon-e2e.sh`) verifying real preflight `OPTIONS`, capabilities, sub-50ms simulation, 3D universe, and ego-network calls over live HTTP.
+
 ## [0.2.2] - Production Next.js 16 & React 19 Visual Cockpit with Three.js 3D Universe (2026-10-26)
 
 ### Added

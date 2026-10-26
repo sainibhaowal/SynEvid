@@ -259,6 +259,25 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
                 let json = api_trajectory(&cli.repo_root);
                 respond_json(request, &json);
             }
+            (&Method::Options, _) => {
+                let header_cors =
+                    Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+                let header_methods = Header::from_bytes(
+                    &b"Access-Control-Allow-Methods"[..],
+                    &b"GET, POST, OPTIONS"[..],
+                )
+                .unwrap();
+                let header_headers = Header::from_bytes(
+                    &b"Access-Control-Allow-Headers"[..],
+                    &b"Content-Type, Authorization"[..],
+                )
+                .unwrap();
+                let response = Response::empty(StatusCode(204))
+                    .with_header(header_cors)
+                    .with_header(header_methods)
+                    .with_header(header_headers);
+                let _ = request.respond(response);
+            }
             _ => {
                 let response = Response::new(
                     StatusCode(404),
@@ -276,12 +295,28 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
 }
 
 fn respond_json(req: Request, json: &str) {
-    let header = Header::from_bytes(
+    let header_content = Header::from_bytes(
         &b"Content-Type"[..],
         &b"application/json; charset=utf-8"[..],
     )
     .unwrap();
-    let response = Response::from_string(json).with_header(header);
+    let header_cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+    let header_methods = Header::from_bytes(
+        &b"Access-Control-Allow-Methods"[..],
+        &b"GET, POST, OPTIONS"[..],
+    )
+    .unwrap();
+    let header_headers = Header::from_bytes(
+        &b"Access-Control-Allow-Headers"[..],
+        &b"Content-Type, Authorization"[..],
+    )
+    .unwrap();
+
+    let response = Response::from_string(json)
+        .with_header(header_content)
+        .with_header(header_cors)
+        .with_header(header_methods)
+        .with_header(header_headers);
     let _ = req.respond(response);
 }
 
@@ -593,11 +628,13 @@ fn handle_live_sse(req: Request, active_repo_id: &Arc<Mutex<String>>) {
     let header_event = Header::from_bytes(&b"Content-Type"[..], &b"text/event-stream"[..]).unwrap();
     let header_cache = Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]).unwrap();
     let header_conn = Header::from_bytes(&b"Connection"[..], &b"keep-alive"[..]).unwrap();
+    let header_cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
 
     let response = Response::from_string(sse_data)
         .with_header(header_event)
         .with_header(header_cache)
-        .with_header(header_conn);
+        .with_header(header_conn)
+        .with_header(header_cors);
     let _ = req.respond(response);
 }
 
