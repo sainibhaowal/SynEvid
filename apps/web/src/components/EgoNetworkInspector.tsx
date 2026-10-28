@@ -127,7 +127,7 @@ export default function EgoNetworkInspector({
                       <td className="py-2.5 font-medium text-[var(--text-primary)]">
                         {edge.source_stable_id}
                       </td>
-                      <td className="py-2.5 text-cyan-600 dark:text-cyan-400">
+                      <td className="py-2.5 text-sky-700 dark:text-cyan-400">
                         {edge.source_file}:<strong className="text-[var(--text-primary)]">{edge.source_line}</strong>
                       </td>
                       <td className="py-2.5 text-right">
@@ -152,11 +152,11 @@ export default function EgoNetworkInspector({
         {/* Outbound Callees Table */}
         <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2 text-sm font-semibold text-cyan-600 dark:text-cyan-400">
+            <div className="flex items-center space-x-2 text-sm font-semibold text-sky-700 dark:text-cyan-400">
               <ArrowUpRight className="w-4 h-4" />
               <span>Outbound Callees (What does this call?)</span>
             </div>
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 font-bold">
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-transparent font-bold">
               {ego?.outgoing_callees?.length || 0} Callees
             </span>
           </div>
@@ -181,7 +181,7 @@ export default function EgoNetworkInspector({
                         {edge.target_file}:<strong className="text-[var(--text-primary)]">{edge.target_line}</strong>
                       </td>
                       <td className="py-2.5 text-right">
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/15 text-cyan-600 dark:text-cyan-400">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-transparent">
                           {edge.confidence.toUpperCase()}
                         </span>
                       </td>

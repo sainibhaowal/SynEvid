@@ -29,6 +29,7 @@ members = [
     "crates/autopsy-mining",
     "crates/autopsy-catalog",
     "crates/autopsy-workspace-registry",
+    "crates/autopsy-git-engine",
     "apps/synevid-lsp",
     "apps/synevid-ui",
     "tests",

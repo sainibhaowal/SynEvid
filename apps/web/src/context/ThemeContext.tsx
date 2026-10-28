@@ -21,11 +21,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('synevid_theme') as ThemeMode;
-    if (saved === 'light' || saved === 'dark') {
-      setThemeState(saved);
-      applyTheme(saved);
-    } else {
+    try {
+      const isHtmlLight = document.documentElement.classList.contains('light');
+      const saved = localStorage.getItem('synevid_theme') as ThemeMode;
+      const initial: ThemeMode = saved === 'light' || isHtmlLight ? 'light' : 'dark';
+      setThemeState(initial);
+      applyTheme(initial);
+    } catch (e) {
       applyTheme('dark');
     }
     setMounted(true);
@@ -35,11 +37,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const root = document.documentElement;
     root.classList.remove('dark', 'light');
     root.classList.add(t);
+    root.style.colorScheme = t;
+    root.setAttribute('data-theme', t);
   };
 
   const setTheme = (t: ThemeMode) => {
     setThemeState(t);
-    localStorage.setItem('synevid_theme', t);
+    try {
+      localStorage.setItem('synevid_theme', t);
+    } catch (e) {}
     applyTheme(t);
   };
 

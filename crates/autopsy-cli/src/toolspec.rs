@@ -581,6 +581,45 @@ pub fn toolspec(analyzer_version: &str) -> Toolspec {
                 false,
                 "self-describing; always verified",
             ),
+            tool(
+                "git",
+                "Native pure-Rust Git engine: status, galaxy DAG, semantic diff, stage, commit, branch, tag, merge, bisect, undo",
+                vec![
+                    arg(
+                        "status",
+                        "command",
+                        "Scan working tree status (staged, modified, untracked, deleted)",
+                    ),
+                    arg(
+                        "galaxy",
+                        "command",
+                        "Inspect commit DAG evolutionary topology from git init to HEAD",
+                    ),
+                    arg(
+                        "diff",
+                        "command",
+                        "Any-to-Any semantic commit diff and contract drift analysis",
+                    ),
+                    arg(
+                        "commit",
+                        "command",
+                        "Pre-flight verify and create commit with Synevid trailers",
+                    ),
+                    arg(
+                        "bisect",
+                        "command",
+                        "Automated autopsy visual bisect to pinpoint contract-breaking commit",
+                    ),
+                    arg(
+                        "undo",
+                        "command",
+                        "1-click atomic undo to restore pre-mutation state from refs/autopsy/undo/",
+                    ),
+                ],
+                "(worktree-bound)",
+                false,
+                "native pure-rust git engine; zero subprocess execution (INV-SANDBOX-003)",
+            ),
         ],
     }
 }

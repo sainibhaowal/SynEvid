@@ -829,6 +829,138 @@ export function createAutopsyMcpServer(): McpServer {
     }
   );
 
+  // 11. autopsy_git_status (Phase 3 Native Git Engine)
+  server.registerTool(
+    'autopsy_git_status',
+    {
+      description:
+        'Scan repository working tree status using pure-Rust git engine: staged, modified, untracked, deleted, and total uncommitted count (zero subprocesses, INV-SANDBOX-003).',
+      inputSchema: z.object({
+        repo_root: z
+          .string()
+          .optional()
+          .describe('Target repository root directory (defaults to current directory)'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const result = await runAutopsy('git', ['status'], { repoRoot });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git status', result)) }],
+      };
+    }
+  );
+
+  // 12. autopsy_git_galaxy
+  server.registerTool(
+    'autopsy_git_galaxy',
+    {
+      description:
+        'Read repository commit DAG evolutionary history from git init to HEAD with branches, tags, and SynEvid forensic verdicts.',
+      inputSchema: z.object({
+        repo_root: z.string().optional(),
+        limit: z.number().int().optional().describe('Maximum commits to return (default 50)'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const cliArgs = ['galaxy'];
+      if (args.limit) cliArgs.push('--limit', String(args.limit));
+      const result = await runAutopsy('git', cliArgs, { repoRoot });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git galaxy', result)) }],
+      };
+    }
+  );
+
+  // 13. autopsy_git_diff
+  server.registerTool(
+    'autopsy_git_diff',
+    {
+      description:
+        'Compute semantic any-to-any commit diff: structural blast radius, added/modified/deleted files, and drifted contracts between Commit A and Commit B.',
+      inputSchema: z.object({
+        repo_root: z.string().optional(),
+        base: z.string().describe('Base commit OID or revision'),
+        head: z.string().describe('Head commit OID or revision'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const result = await runAutopsy('git', ['diff', '--base', args.base, '--head', args.head], {
+        repoRoot,
+      });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git diff', result)) }],
+      };
+    }
+  );
+
+  // 14. autopsy_git_bisect
+  server.registerTool(
+    'autopsy_git_bisect',
+    {
+      description:
+        'Autopsy visual bisect: evaluate a range of historical commits in pure Rust to pinpoint the exact commit where contracts drifted from PASS to FAIL.',
+      inputSchema: z.object({
+        repo_root: z.string().optional(),
+        good: z.string().describe('Known good commit OID where contracts passed'),
+        bad: z.string().describe('Known bad commit OID where contracts failed'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const result = await runAutopsy('git', ['bisect', '--good', args.good, '--bad', args.bad], {
+        repoRoot,
+      });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git bisect', result)) }],
+      };
+    }
+  );
+
+  // 15. autopsy_git_commit
+  server.registerTool(
+    'autopsy_git_commit',
+    {
+      description:
+        'Guarded in-UI/CLI commit: packages staged files into a verified commit with Synevid trailers and creates an atomic undo checkpoint in refs/autopsy/undo/.',
+      inputSchema: z.object({
+        repo_root: z.string().optional(),
+        message: z.string().describe('Commit message summary'),
+        tag: z.string().optional().describe('Optional release tag to attach'),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const cliArgs = ['commit', '--message', args.message];
+      if (args.tag) cliArgs.push('--tag', args.tag);
+      const result = await runAutopsy('git', cliArgs, { repoRoot });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git commit', result)) }],
+      };
+    }
+  );
+
+  // 16. autopsy_git_undo
+  server.registerTool(
+    'autopsy_git_undo',
+    {
+      description:
+        '1-click atomic undo: restores the previous HEAD and index from the last safety checkpoint in refs/autopsy/undo/.',
+      inputSchema: z.object({
+        repo_root: z.string().optional(),
+      }),
+    },
+    async (args) => {
+      const repoRoot = args.repo_root || '.';
+      const result = await runAutopsy('git', ['undo'], { repoRoot });
+      return {
+        content: [{ type: 'text', text: asText(evidenceEnvelope('git undo', result)) }],
+      };
+    }
+  );
+
   // Register paginated / on-demand multigraph resource (CA-TECH-001 Ch.4.1)
   // Bounded code map: autopsy://graph/map{?under,top} (Tier 1.3).
   //

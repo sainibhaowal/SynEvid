@@ -1,0 +1,14 @@
+{
+  "name": "@code-autopsy/desktop",
+  "version": "0.4.0",
+  "description": "SynEvid Native Desktop Application (Electron Shell)",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron src/main.js",
+    "test": "node --test test/desktop.test.js"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  },
+  "license": "Apache-2.0"
+}

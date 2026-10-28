@@ -155,6 +155,7 @@ pub fn record_suggestion(
         crate::Commands::Watch { .. } => "watch",
         crate::Commands::Version => "version",
         crate::Commands::Init { .. } => "init",
+        crate::Commands::Git { .. } => "git",
     };
     let receipt = Suggestion {
         id: id.clone(),

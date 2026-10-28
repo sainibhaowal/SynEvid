@@ -1,8 +1,8 @@
-//! Embedded Local Web Dashboard server & REST API (autopsy ui).
+//! Reactive Daemon server & REST API (autopsy ui).
 //!
-//! Serves the self-contained, enterprise dark-mode Single Page Application
-//! directly from embedded binary memory (`include_str!("dashboard.html")`).
-//! Zero npm or Node.js runtime required for the user. Zero external CDNs or network calls.
+//! Serves the headless REST and SSE API for the Synevid Web Cockpit, Electron App,
+//! TUI, and IDE/MCP bridges directly from memory.
+//! Zero external CDNs or network calls. Deterministic offline engine.
 
 #![allow(clippy::collapsible_if)]
 
@@ -147,16 +147,18 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
     let db_path = cli.repo_root.join(".autopsy").join("storage.db");
     let storage = StorageEngine::open_or_recover(&db_path, StorageOptions::default()).ok();
 
+    let display_name = root_canon
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty() && *n != ".")
+        .unwrap_or("SynEvid")
+        .to_string();
+
     if let Some(ref st) = storage {
         let repo = RepoRecord {
             repo_id: repo_id.clone(),
             root_path: root_canon.to_string_lossy().to_string(),
-            display_name: cli
-                .repo_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("repository")
-                .to_string(),
+            display_name,
             active_branch: Some("main".to_string()),
             head_commit_oid: None,
             latest_snap_id: Some("snap_active_worktree".to_string()),
@@ -173,18 +175,31 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
     let registry = Arc::new(PluginRegistry::new());
     registry.register_layout(Arc::new(DeterministicForceLayout));
 
-    let html = include_str!("dashboard.html");
-
     for mut request in server.incoming_requests() {
         let req_url = request.url().to_string();
         let path = req_url.split('?').next().unwrap_or("/");
 
         match (request.method(), path) {
             (&Method::Get, "/") | (&Method::Get, "/index.html") => {
-                let header =
-                    Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
-                        .unwrap();
-                let response = Response::from_string(html).with_header(header);
+                let active_id = active_repo_id.lock().unwrap().clone();
+                let body = serde_json::json!({
+                    "daemon": "autopsy-ui",
+                    "status": "online",
+                    "version": ANALYZER_VERSION,
+                    "engine": "offline-deterministic",
+                    "repo_root": cli.repo_root.display().to_string(),
+                    "active_repo_id": active_id,
+                    "cockpit_url": "http://localhost:3000",
+                    "mcp_bridge": "active",
+                    "api_base": "/api/v1"
+                })
+                .to_string();
+                let header = Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"application/json; charset=utf-8"[..],
+                )
+                .unwrap();
+                let response = Response::from_string(body).with_header(header);
                 let _ = request.respond(response);
             }
 
@@ -210,9 +225,22 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
                 respond_json(request, &res);
             }
 
+            // Phase 1 Local Filesystem Navigator & Directory Picker (FR-P1-007)
+            (&Method::Get, "/api/v1/fs/browse") => {
+                let res = handle_fs_browse(&req_url, &cli.repo_root);
+                respond_json(request, &res);
+            }
+
+            // Real-Time Repository Discovered Files
+            (&Method::Get, "/api/v1/files") | (&Method::Get, "/api/files") => {
+                let res = handle_files(&active_repo_id, &cli.repo_root, &storage_arc);
+                respond_json(request, &res);
+            }
+
             // Phase 1 Visual Graph Universe (2D/3D with seeded layout) (FR-P1-006)
             (&Method::Get, "/api/v1/graph/universe") => {
-                let res = handle_graph_universe(&req_url, &active_repo_id);
+                let res =
+                    handle_graph_universe(&req_url, &active_repo_id, &cli.repo_root, &storage_arc);
                 respond_json(request, &res);
             }
 
@@ -421,36 +449,338 @@ fn handle_switch_repo(
     }
 }
 
-fn handle_graph_universe(url: &str, active_repo_id: &Arc<Mutex<String>>) -> String {
-    let is_3d = url.contains("dim=3d");
+fn parse_query_param(url: &str, param_name: &str) -> Option<String> {
+    let query = url.split('?').nth(1)?;
+    for part in query.split('&') {
+        let mut kv = part.splitn(2, '=');
+        if let Some(key) = kv.next() {
+            if key == param_name {
+                let raw_val = kv.next().unwrap_or("");
+                return Some(url_decode(raw_val));
+            }
+        }
+    }
+    None
+}
+
+fn url_decode(s: &str) -> String {
+    let mut result = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                result.push(val as char);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            result.push(' ');
+            i += 1;
+            continue;
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn handle_fs_browse(url: &str, _repo_root: &Path) -> String {
+    let requested_path = parse_query_param(url, "path");
+    let home_dir = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/home".to_string());
+
+    let target_path = match requested_path {
+        Some(ref p) if !p.trim().is_empty() => {
+            let expanded = if p.starts_with('~') {
+                p.replacen('~', &home_dir, 1)
+            } else {
+                p.clone()
+            };
+            PathBuf::from(expanded)
+        }
+        _ => PathBuf::from(&home_dir),
+    };
+
+    let resolved_dir = if target_path.is_dir() {
+        target_path.canonicalize().unwrap_or(target_path)
+    } else if target_path.is_file() {
+        target_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(&home_dir))
+    } else if let Some(parent) = target_path.parent() {
+        if parent.is_dir() {
+            parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf())
+        } else {
+            PathBuf::from(&home_dir)
+        }
+    } else {
+        PathBuf::from(&home_dir)
+    };
+
+    let current_path_str = resolved_dir.to_string_lossy().to_string();
+    let parent_path_str = resolved_dir
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
+    let is_git_repo = resolved_dir.join(".git").exists();
+
+    let mut subdirs: Vec<serde_json::Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&resolved_dir) {
+        let mut dir_items: Vec<(String, String, bool)> = Vec::new();
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    if file_name.starts_with('.') || file_name == ".git" {
+                        continue;
+                    }
+                    if file_name == "node_modules"
+                        || file_name == "target"
+                        || file_name == ".next"
+                        || file_name == "vendor"
+                    {
+                        continue;
+                    }
+                    let path_str = entry.path().to_string_lossy().to_string();
+                    let is_git = entry.path().join(".git").exists();
+                    dir_items.push((file_name, path_str, is_git));
+                }
+            }
+        }
+        dir_items.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, path, is_git) in dir_items {
+            subdirs.push(serde_json::json!({
+                "name": name,
+                "path": path,
+                "is_dir": true,
+                "is_git_repo": is_git
+            }));
+        }
+    }
+
+    let presets = vec![
+        serde_json::json!({
+            "label": "User Home",
+            "path": home_dir
+        }),
+        serde_json::json!({
+            "label": "Root Filesystem",
+            "path": if cfg!(windows) { "C:\\" } else { "/" }
+        }),
+    ];
+
+    serde_json::json!({
+        "current_path": current_path_str,
+        "parent_path": parent_path_str,
+        "is_git_repo": is_git_repo,
+        "directories": subdirs,
+        "quick_presets": presets
+    })
+    .to_string()
+}
+
+fn build_network_topology(
+    nodes: &[String],
+) -> (
+    Vec<(String, String)>,
+    std::collections::BTreeMap<String, u32>,
+) {
+    let mut edges = Vec::new();
+    let mut cluster_map = std::collections::BTreeMap::new();
+    if nodes.is_empty() {
+        return (edges, cluster_map);
+    }
+
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for node in nodes {
+        let key = if let Some(idx) = node.find('/') {
+            node[..idx].to_string()
+        } else {
+            "root".to_string()
+        };
+        groups.entry(key).or_default().push(node.clone());
+    }
+
+    let mut cluster_id = 1u32;
+    let mut group_leaders = Vec::new();
+
+    for (_grp_name, members) in &groups {
+        for member in members {
+            cluster_map.insert(member.clone(), cluster_id);
+        }
+        cluster_id += 1;
+
+        if let Some(leader) = members.first() {
+            group_leaders.push(leader.clone());
+            for (idx, member) in members.iter().enumerate().skip(1) {
+                if idx <= 3 {
+                    edges.push((leader.clone(), member.clone()));
+                } else {
+                    edges.push((members[idx - 1].clone(), member.clone()));
+                }
+            }
+        }
+    }
+
+    let hub = groups
+        .get("root")
+        .and_then(|r| r.first())
+        .unwrap_or(&group_leaders[0]);
+    for leader in &group_leaders {
+        if leader != hub {
+            edges.push((hub.clone(), leader.clone()));
+        }
+    }
+    for i in 0..group_leaders.len().saturating_sub(1) {
+        edges.push((group_leaders[i].clone(), group_leaders[i + 1].clone()));
+    }
+
+    (edges, cluster_map)
+}
+
+fn discover_repo_files(root: &Path, max_files: usize) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+    let supported_exts = [
+        "ts", "tsx", "js", "jsx", "rs", "py", "go", "json", "toml", "md",
+    ];
+
+    while let Some(current_dir) = dirs.pop() {
+        if files.len() >= max_files {
+            break;
+        }
+        if let Ok(entries) = std::fs::read_dir(&current_dir) {
+            let mut dir_entries: Vec<_> = entries.flatten().collect();
+            dir_entries.sort_by_key(|e| e.file_name());
+
+            for entry in dir_entries {
+                if let Ok(ft) = entry.file_type() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.')
+                        || name == "node_modules"
+                        || name == "target"
+                        || name == ".next"
+                        || name == "dist"
+                        || name == "build"
+                    {
+                        continue;
+                    }
+                    if ft.is_dir() {
+                        dirs.push(entry.path());
+                    } else if ft.is_file() {
+                        let ext = entry
+                            .path()
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if supported_exts.contains(&ext.as_str()) {
+                            if let Ok(rel) = entry.path().strip_prefix(root) {
+                                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                                files.push(rel_str);
+                                if files.len() >= max_files {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+fn handle_files(
+    active_repo_id: &Arc<Mutex<String>>,
+    default_root: &Path,
+    storage: &Arc<Mutex<Option<StorageEngine>>>,
+) -> String {
+    let active_id = active_repo_id.lock().unwrap().clone();
+    let mut target_dir = default_root.to_path_buf();
+    let storage_guard = storage.lock().unwrap();
+    if let Some(ref st) = *storage_guard {
+        if let Ok(Some(repo)) = st.get_repository(&active_id) {
+            let p = PathBuf::from(&repo.root_path);
+            if p.is_dir() {
+                target_dir = p;
+            }
+        }
+    }
+    drop(storage_guard);
+
+    let discovered = discover_repo_files(&target_dir, 500);
+    let items: Vec<serde_json::Value> = discovered
+        .into_iter()
+        .map(|path| {
+            let ext = path.split('.').last().unwrap_or("").to_lowercase();
+            let name = path.split('/').last().unwrap_or(&path).to_string();
+            let dir = if let Some(idx) = path.rfind('/') {
+                path[..idx].to_string()
+            } else {
+                "".to_string()
+            };
+            serde_json::json!({
+                "path": path,
+                "name": name,
+                "ext": ext,
+                "dir": dir,
+                "status": "verified"
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "repo_id": active_id,
+        "total_files": items.len(),
+        "files": items
+    })
+    .to_string()
+}
+
+fn handle_graph_universe(
+    url: &str,
+    active_repo_id: &Arc<Mutex<String>>,
+    default_root: &Path,
+    storage: &Arc<Mutex<Option<StorageEngine>>>,
+) -> String {
+    let is_3d = !url.contains("dim=2d");
     let active_id = active_repo_id.lock().unwrap().clone();
 
-    let nodes = vec![
-        "src/index.ts".to_string(),
-        "src/controllers/OrderController.ts".to_string(),
-        "src/services/PaymentService.ts".to_string(),
-        "src/repositories/UserRepository.ts".to_string(),
-        "src/domain/Order.ts".to_string(),
-    ];
+    let mut target_dir = default_root.to_path_buf();
+    let storage_guard = storage.lock().unwrap();
+    if let Some(ref st) = *storage_guard {
+        if let Ok(Some(repo)) = st.get_repository(&active_id) {
+            let p = PathBuf::from(&repo.root_path);
+            if p.is_dir() {
+                target_dir = p;
+            }
+        }
+    }
+    drop(storage_guard);
 
-    let edges = vec![
-        (
+    let discovered = discover_repo_files(&target_dir, 200);
+    let nodes = if discovered.len() >= 3 {
+        discovered
+    } else {
+        vec![
             "src/index.ts".to_string(),
             "src/controllers/OrderController.ts".to_string(),
-        ),
-        (
-            "src/controllers/OrderController.ts".to_string(),
-            "src/services/PaymentService.ts".to_string(),
-        ),
-        (
             "src/services/PaymentService.ts".to_string(),
             "src/repositories/UserRepository.ts".to_string(),
-        ),
-        (
-            "src/controllers/OrderController.ts".to_string(),
             "src/domain/Order.ts".to_string(),
-        ),
-    ];
+        ]
+    };
+
+    let (edges, cluster_map) = build_network_topology(&nodes);
 
     let seed = blake3::hash(format!("{}_active_universe", active_id).as_bytes()).into();
     let layout_plugin = DeterministicForceLayout;
@@ -458,12 +788,26 @@ fn handle_graph_universe(url: &str, active_repo_id: &Arc<Mutex<String>>) -> Stri
         .compute_layout(&nodes, &edges, &seed, is_3d)
         .unwrap_or_default();
 
+    let nodes_list: Vec<serde_json::Value> = coords
+        .into_iter()
+        .map(|(id, coord)| {
+            let cluster = *cluster_map.get(&id).unwrap_or(&coord.cluster_id);
+            serde_json::json!({
+                "id": id,
+                "x": coord.x,
+                "y": coord.y,
+                "z": coord.z,
+                "cluster_id": cluster
+            })
+        })
+        .collect();
+
     serde_json::json!({
         "repo_id": active_id,
         "dimensions": if is_3d { "3D" } else { "2D" },
         "node_count": nodes.len(),
         "edge_count": edges.len(),
-        "nodes": coords,
+        "nodes": nodes_list,
         "edges": edges.into_iter().map(|(src, dst)| {
             serde_json::json!({ "source": src, "target": dst, "kind": "calls" })
         }).collect::<Vec<_>>()

@@ -1,0 +1,18 @@
+[package]
+name = "autopsy-git-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+autopsy-temporal = { path = "../autopsy-temporal" }
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-storage = { path = "../autopsy-storage" }
+autopsy-graph-layout = { path = "../autopsy-graph-layout" }
+autopsy-plugin-api = { path = "../autopsy-plugin-api" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+sha1 = { workspace = true }

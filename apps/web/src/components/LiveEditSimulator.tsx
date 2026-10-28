@@ -85,13 +85,13 @@ export default function LiveEditSimulator() {
   return (
     <div className="space-y-6">
       {/* Simulation Header */}
-      <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <span className="text-xs uppercase font-mono tracking-wider text-[var(--text-muted)] font-semibold">
               In-Memory Buffer Engine (FR-P1-004)
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 font-bold">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-xl bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-transparent font-bold">
               ZERO DISK MUTATION
             </span>
           </div>
@@ -103,9 +103,9 @@ export default function LiveEditSimulator() {
         {/* Real-time Telemetry Badges */}
         <div className="flex items-center space-x-3 font-mono text-xs">
           <div
-            className={`px-3 py-1.5 rounded-lg border font-semibold flex items-center space-x-1.5 ${
+            className={`px-3 py-1.5 rounded-xl border font-semibold flex items-center space-x-1.5 ${
               (response?.computation_latency_ms || 12) <= 50
-                ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-600 dark:text-cyan-400'
+                ? 'bg-sky-50 dark:bg-cyan-500/10 border-sky-200 dark:border-cyan-500/30 text-sky-700 dark:text-cyan-400'
                 : 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
             }`}
           >
@@ -116,7 +116,7 @@ export default function LiveEditSimulator() {
           </div>
 
           <div
-            className={`px-3 py-1.5 rounded-lg border font-bold flex items-center space-x-1.5 ${
+            className={`px-3 py-1.5 rounded-xl border font-bold flex items-center space-x-1.5 ${
               response?.verdict === 'FAIL'
                 ? 'bg-rose-500/15 border-rose-500/30 text-rose-600 dark:text-rose-400'
                 : response?.verdict === 'WARN'
@@ -147,7 +147,7 @@ export default function LiveEditSimulator() {
       {/* Editor & Diagnostics Split */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* In-Memory Keystroke Buffer Editor */}
-        <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col space-y-3">
+        <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-mono text-[var(--text-muted)] font-medium">
               Target File: <strong className="text-[var(--text-primary)]">{filePath}</strong>
@@ -156,25 +156,25 @@ export default function LiveEditSimulator() {
               <span className="text-[var(--text-muted)]">Presets:</span>
               <button
                 onClick={() => applyPreset('clean')}
-                className="px-2 py-0.5 rounded bg-[var(--card-elevated)] hover:bg-cyan-500/10 text-[var(--text-secondary)] hover:text-cyan-500 border border-[var(--border-subtle)] transition-colors"
+                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-cyan-500/10 text-[var(--text-secondary)] hover:text-cyan-500 border border-[var(--border-subtle)] transition-colors"
               >
                 Clean
               </button>
               <button
                 onClick={() => applyPreset('breaking_arity')}
-                className="px-2 py-0.5 rounded bg-[var(--card-elevated)] hover:bg-rose-500/10 text-[var(--text-secondary)] hover:text-rose-500 border border-[var(--border-subtle)] transition-colors"
+                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-rose-500/10 text-[var(--text-secondary)] hover:text-rose-500 border border-[var(--border-subtle)] transition-colors"
               >
                 Breaking Arity
               </button>
               <button
                 onClick={() => applyPreset('syntax_error')}
-                className="px-2 py-0.5 rounded bg-[var(--card-elevated)] hover:bg-amber-500/10 text-[var(--text-secondary)] hover:text-amber-500 border border-[var(--border-subtle)] transition-colors"
+                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-amber-500/10 text-[var(--text-secondary)] hover:text-amber-500 border border-[var(--border-subtle)] transition-colors"
               >
                 Syntax Error
               </button>
               <button
                 onClick={() => applyPreset('dead_code')}
-                className="px-2 py-0.5 rounded bg-[var(--card-elevated)] hover:bg-purple-500/10 text-[var(--text-secondary)] hover:text-purple-500 border border-[var(--border-subtle)] transition-colors"
+                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-purple-500/10 text-[var(--text-secondary)] hover:text-purple-500 border border-[var(--border-subtle)] transition-colors"
               >
                 Dead Code
               </button>
@@ -185,7 +185,7 @@ export default function LiveEditSimulator() {
             value={buffer}
             onChange={(e) => handleBufferChange(e.target.value)}
             spellCheck={false}
-            className="w-full h-[320px] p-4 text-xs font-mono leading-relaxed rounded-lg bg-[var(--background)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-cyan-500 resize-none"
+            className="w-full h-[320px] p-4 text-xs font-mono leading-relaxed rounded-xl bg-[var(--background)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-cyan-500 resize-none"
           />
 
           <div className="text-[11px] font-mono text-[var(--text-muted)] flex justify-between">
@@ -197,7 +197,7 @@ export default function LiveEditSimulator() {
         {/* Live Diagnostics & Damaged Callers Panel */}
         <div className="space-y-4">
           {/* Broken Callers Section */}
-          <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+          <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
             <h3 className="text-xs uppercase font-mono tracking-wider text-rose-600 dark:text-rose-400 font-bold mb-3 flex items-center space-x-1.5">
               <AlertOctagon className="w-4 h-4" />
               <span>Damaged Callers ({response?.damaged_callers?.length || 0})</span>
@@ -208,11 +208,11 @@ export default function LiveEditSimulator() {
                 response.damaged_callers.map((c, idx) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/25 font-mono text-xs"
+                    className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 font-mono text-xs"
                   >
                     <div className="flex justify-between items-center mb-1">
                       <span className="font-bold text-[var(--text-primary)]">{c.stable_id}</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-600 dark:text-rose-300 font-bold">
+                      <span className="px-1.5 py-0.5 rounded-xl text-[10px] bg-rose-500/20 text-rose-600 dark:text-rose-300 font-bold">
                         Line {c.calling_line}:{c.calling_col}
                       </span>
                     </div>
@@ -226,13 +226,13 @@ export default function LiveEditSimulator() {
                 response.syntax_errors.map((err, idx) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/25 font-mono text-xs text-rose-500"
+                    className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 font-mono text-xs text-rose-500"
                   >
                     <strong>SYNTAX ERROR:</strong> {err}
                   </div>
                 ))
               ) : (
-                <div className="p-4 text-center rounded-lg bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
+                <div className="p-4 text-center rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
                   No broken callers detected. Workspace interface contracts fully satisfied.
                 </div>
               )}
@@ -240,7 +240,7 @@ export default function LiveEditSimulator() {
           </div>
 
           {/* Newly Dead Symbols Section */}
-          <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+          <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
             <h3 className="text-xs uppercase font-mono tracking-wider text-amber-600 dark:text-amber-400 font-bold mb-3 flex items-center space-x-1.5">
               <AlertTriangle className="w-4 h-4" />
               <span>Newly Dead / Orphaned Code ({response?.newly_dead_symbols?.length || 0})</span>
@@ -251,11 +251,11 @@ export default function LiveEditSimulator() {
                 response.newly_dead_symbols.map((d, idx) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 font-mono text-xs"
+                    className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 font-mono text-xs"
                   >
                     <div className="flex justify-between items-center mb-1">
                       <span className="font-bold text-[var(--text-primary)]">{d.stable_id}</span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-300 font-bold">
+                      <span className="px-1.5 py-0.5 rounded-xl text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-300 font-bold">
                         Line {d.line}
                       </span>
                     </div>
@@ -263,7 +263,7 @@ export default function LiveEditSimulator() {
                   </div>
                 ))
               ) : (
-                <div className="p-4 text-center rounded-lg bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
+                <div className="p-4 text-center rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
                   No dead or unreachable symbols introduced by this change.
                 </div>
               )}

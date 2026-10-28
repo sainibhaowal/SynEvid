@@ -46,7 +46,7 @@ export default function DashboardOverview({
       {/* 4 Core Telemetry Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Active Snapshot */}
-        <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-cyan-500/40 transition-colors">
+        <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-cyan-500/40 transition-colors">
           <div className="flex items-center justify-between text-[var(--text-muted)] text-xs uppercase font-mono font-semibold tracking-wider">
             <span>Snapshot Digest</span>
             <GitBranch className="w-4 h-4 text-cyan-500" />
@@ -60,7 +60,7 @@ export default function DashboardOverview({
         </div>
 
         {/* Semantic Coverage */}
-        <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-emerald-500/40 transition-colors">
+        <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-emerald-500/40 transition-colors">
           <div className="flex items-center justify-between text-[var(--text-muted)] text-xs uppercase font-mono font-semibold tracking-wider">
             <span>Semantic Coverage</span>
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
@@ -76,7 +76,7 @@ export default function DashboardOverview({
         {/* Graph Multiverse */}
         <div
           onClick={() => onNavigateTab('universe')}
-          className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-indigo-500/40 transition-colors cursor-pointer group"
+          className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-indigo-500/40 transition-colors cursor-pointer group"
         >
           <div className="flex items-center justify-between text-[var(--text-muted)] text-xs uppercase font-mono font-semibold tracking-wider">
             <span>Graph Multiverse</span>
@@ -93,7 +93,7 @@ export default function DashboardOverview({
         {/* Invariant Findings */}
         <div
           onClick={() => onNavigateTab('verify')}
-          className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-rose-500/40 transition-colors cursor-pointer group"
+          className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm hover:border-rose-500/40 transition-colors cursor-pointer group"
         >
           <div className="flex items-center justify-between text-[var(--text-muted)] text-xs uppercase font-mono font-semibold tracking-wider">
             <span>Invariant Policies</span>
@@ -113,7 +113,7 @@ export default function DashboardOverview({
       </div>
 
       {/* Reactive Daemon Event Bus Ticker */}
-      <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+      <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center space-x-2">
             <Radio className="w-4 h-4 text-cyan-500 animate-pulse" />
@@ -121,7 +121,7 @@ export default function DashboardOverview({
               Reactive Daemon Live Event Bus (/api/v1/live)
             </h3>
           </div>
-          <span className="text-xs font-mono text-cyan-600 dark:text-cyan-400 px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 font-bold">
+          <span className="text-xs font-mono text-sky-700 dark:text-cyan-400 px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-cyan-500/10 border border-sky-200 dark:border-cyan-500/20 font-bold">
             Sub-15ms Push Deliv
           </span>
         </div>
@@ -133,7 +133,7 @@ export default function DashboardOverview({
                 <span className="text-[var(--text-muted)]">
                   {new Date(evt.timestamp_epoch_ms || Date.now()).toLocaleTimeString()}
                 </span>
-                <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 font-bold">
+                <span className="px-1.5 py-0.5 rounded-lg bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 font-bold border border-sky-200 dark:border-transparent">
                   #{evt.seq_id}
                 </span>
                 <span className="font-semibold text-emerald-600 dark:text-emerald-400">
@@ -153,7 +153,7 @@ export default function DashboardOverview({
       </div>
 
       {/* Core Architectural Invariants Table */}
-      <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+      <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
         <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
           Core Architectural Invariants &amp; Boundaries (Phase 1 v0.2.1)
         </h3>
@@ -176,7 +176,7 @@ export default function DashboardOverview({
                   <code>autopsy-plugin-api</code>: Languages, Resolvers, Layouts &amp; Gates modularized
                 </td>
                 <td className="py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     100% WIRED
                   </span>
                 </td>
@@ -189,7 +189,7 @@ export default function DashboardOverview({
                   <code>autopsy-storage</code>: <code>.autopsy/storage.db</code> Migration 004 with self-healing recovery
                 </td>
                 <td className="py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     &lt; 5ms WAL
                   </span>
                 </td>
@@ -202,7 +202,7 @@ export default function DashboardOverview({
                   <code>autopsy-graph-layout</code>: Barnes-Hut PRNG seeded by BLAKE3(digest), 10<sup>-4</sup> precision
                 </td>
                 <td className="py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     100/100 DETERMINISTIC
                   </span>
                 </td>
@@ -215,7 +215,7 @@ export default function DashboardOverview({
                   <code>synevid-ui</code>: In-memory live simulation &amp; bi-directional SSE bus
                 </td>
                 <td className="py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-cyan-500/20">
                     &le; 50ms P95
                   </span>
                 </td>
@@ -228,7 +228,7 @@ export default function DashboardOverview({
                   Core crates remain 100% discrete compiler &amp; graph algorithms
                 </td>
                 <td className="py-2.5 text-right">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     VERIFIED
                   </span>
                 </td>

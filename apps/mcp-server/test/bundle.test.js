@@ -22,7 +22,7 @@ test('the shipped bundle (dist/index.bundle.js) serves the full tool surface', a
   t.after(() => client.close());
 
   const listed = await client.request('tools/list');
-  assert.equal(listed.tools.length, 11, 'every tool must ship in the release bundle');
+  assert.equal(listed.tools.length, 17, 'every tool must ship in the release bundle');
 
   // Exercise real tool calls through the bundle: the point of the packaged
   // artifact is that an installed agent host reaches the engine end-to-end.

@@ -48,7 +48,7 @@ export default function ForensicTrajectorySection({ runs }: ForensicTrajectorySe
               <div className="py-3 flex flex-wrap items-center gap-4 text-[var(--text-secondary)] text-[11px]">
                 <div className="flex items-center space-x-2">
                   <span>Snapshot Transition:</span>
-                  <span className="text-cyan-600 dark:text-cyan-400 font-bold">{r.started_snapshot || 'snap_start'}</span>
+                  <span className="text-sky-700 dark:text-cyan-400 font-bold">{r.started_snapshot || 'snap_start'}</span>
                   <ArrowRight className="w-3.5 h-3.5 text-[var(--text-muted)]" />
                   <span className="text-emerald-600 dark:text-emerald-400 font-bold">
                     {r.completed_snapshot || 'snap_end'}

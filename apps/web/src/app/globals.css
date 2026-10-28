@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @font-face {
   font-family: 'SynevidDisplay';
   src: url('/fonts/synevid-display.woff2') format('woff2'),
@@ -28,6 +30,19 @@
 }
 
 @theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-elevated: var(--card-elevated);
+  --color-card-border: var(--card-border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-brand-cyan: var(--cyan);
+  --color-brand-purple: var(--purple);
+  --color-brand-green: var(--green);
   --font-brand: 'SynevidDisplay', var(--font-michroma), 'Michroma', sans-serif;
   --font-orbitron: var(--font-orbitron), 'Orbitron', sans-serif;
   --font-syncopate: var(--font-syncopate), 'Syncopate', sans-serif;
@@ -38,40 +53,64 @@
   --font-mono: var(--font-mono), 'SF Mono', Consolas, monospace;
 }
 
-:root {
-  --background: #f8fafc;
+:root, html.light {
+  --background: #f1f5f9;
+  --bg-canvas: #f1f5f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f8fafc;
   --foreground: #0f172a;
   --card: #ffffff;
-  --card-elevated: #f1f5f9;
+  --card-elevated: #f8fafc;
   --card-border: #e2e8f0;
-  --border-subtle: rgba(15, 23, 42, 0.08);
-  --border-strong: rgba(15, 23, 42, 0.16);
+  --border-hairline: #e2e8f0;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
   --text-primary: #0f172a;
-  --text-secondary: #475569;
+  --text-secondary: #334155;
   --text-muted: #64748b;
+  --node-verified: #0284c7;
+  --node-damaged: #dc2626;
+  --node-impacted: #d97706;
+  --node-deadcode: #94a3b8;
+  --edge-call: #0369a1;
+  --edge-import: #4f46e5;
+  --edge-ui-to-api: #7c3aed;
   --cyan: #0284c7;
-  --cyan-glow: rgba(2, 132, 199, 0.25);
+  --cyan-glow: rgba(2, 132, 199, 0.15);
   --purple: #6366f1;
-  --purple-glow: rgba(99, 102, 241, 0.25);
+  --purple-glow: rgba(99, 102, 241, 0.15);
   --green: #059669;
+  color-scheme: light;
 }
 
 html.dark {
-  --background: #060911;
+  --background: #090a0f;
+  --bg-canvas: #090a0f;
+  --bg-surface: #11131a;
+  --bg-elevated: #181b24;
   --foreground: #f8fafc;
-  --card: #0c111e;
-  --card-elevated: #11182a;
+  --card: #11131a;
+  --card-elevated: #181b24;
   --card-border: rgba(255, 255, 255, 0.08);
+  --border-hairline: #222634;
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
+  --node-verified: #38bdf8;
+  --node-damaged: #f87171;
+  --node-impacted: #fbbf24;
+  --node-deadcode: #475569;
+  --edge-call: #00f0ff;
+  --edge-import: #a855f7;
+  --edge-ui-to-api: #a78bfa;
   --cyan: #00f0ff;
   --cyan-glow: rgba(0, 240, 255, 0.4);
   --purple: #7928ca;
   --purple-glow: rgba(121, 40, 202, 0.4);
   --green: #00e676;
+  color-scheme: dark;
 }
 
 html {
@@ -177,24 +216,23 @@ code, pre, .font-mono {
 }
 
 ::-webkit-scrollbar-track {
-  background: #04060a;
+  background: var(--background);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #00f0ff 0%, #7928ca 50%, #00e676 100%);
+  background: var(--border-strong);
   border-radius: 9999px;
-  border: 1px solid rgba(0, 240, 255, 0.2);
+  border: 1px solid var(--border-subtle);
   transition: all 0.2s ease-in-out;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #4ef4ff 0%, #9d00ff 50%, #2bf790 100%);
-  box-shadow: 0 0 15px rgba(0, 240, 255, 0.9);
+  background: var(--cyan);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #00f0ff #04060a;
+  scrollbar-color: var(--border-strong) var(--background);
 }
 
 /* Dedicated Sleek Scrollbar for Terminal Workbench */
@@ -237,19 +275,34 @@ code, pre, .font-mono {
 }
 
 .glass-panel {
-  background: rgba(12, 17, 28, 0.72);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.dark .glass-panel {
+  background: rgba(12, 17, 28, 0.72);
   border: 1px solid rgba(0, 240, 255, 0.14);
 }
 
 .glass-panel:hover {
+  border-color: rgba(2, 132, 199, 0.4);
+}
+
+.dark .glass-panel:hover {
   border-color: rgba(0, 240, 255, 0.35);
 }
 
 /* Grid overlay */
 .cyber-grid {
   background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+}
+
+.dark .cyber-grid {
   background-image: 
     linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);

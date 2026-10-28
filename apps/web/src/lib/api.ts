@@ -1,6 +1,181 @@
 // SynEvid Reactive Engine & Daemon API Client (v0.2.1)
 // Connects to local daemon on http://127.0.0.1:3333 (synevid-ui or autopsy ui)
 
+export interface GitMutationResult {
+  success: boolean;
+  status: string;
+  action: string;
+  new_commit_oid?: string | null;
+  undo_checkpoint_id?: string | null;
+  message: string;
+  error?: string | null;
+}
+
+export interface CommitGalaxyNode {
+  oid: string;
+  short_oid: string;
+  parents: string[];
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  summary: string;
+  lane: number;
+  is_head: boolean;
+  branches?: string[];
+  branch_names?: string[];
+  tags?: string[];
+  symbols_modified: number;
+  symbols_added?: number;
+  symbols_deleted?: number;
+  blast_radius_score: number;
+  verdict?: 'PASS' | 'WARN' | 'BREAKING' | string;
+  verification_verdict?: 'PASS' | 'WARN' | 'BREAKING' | string;
+}
+
+export interface BranchRef {
+  name: string;
+  target_oid: string;
+  is_active: boolean;
+}
+
+export interface TagRef {
+  name: string;
+  target_oid: string;
+}
+
+export interface GitGalaxy {
+  repo_id: string;
+  head_oid: string | null;
+  active_branch: string | null;
+  total_commits: number;
+  commits: CommitGalaxyNode[];
+  branches: BranchRef[];
+  tags: TagRef[];
+}
+
+export interface TimeTravelNode {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  cluster_id: number;
+  diff_status: 'added' | 'modified' | 'unchanged' | 'deleted';
+}
+
+export interface TimeTravelEdge {
+  source: string;
+  target: string;
+  kind: string;
+}
+
+export interface TimeTravelVisualFrame {
+  oid: string;
+  short_oid: string;
+  summary: string;
+  timestamp: number;
+  dimensions: '2D' | '3D';
+  node_count: number;
+  edge_count: number;
+  nodes: TimeTravelNode[];
+  edges: TimeTravelEdge[];
+  added_files: string[];
+  modified_files: string[];
+  deleted_files: string[];
+}
+
+export interface SemanticDiffReport {
+  base_oid: string;
+  head_oid: string;
+  added_files: string[];
+  modified_files: string[];
+  deleted_files: string[];
+  total_changed_files: number;
+  blast_radius_score: number;
+  verdict: 'PASS' | 'WARN' | 'BREAKING';
+  drifted_contracts: string[];
+}
+
+export interface FileStatusItem {
+  path: string;
+  status: 'modified' | 'untracked' | 'staged' | 'deleted' | 'ignored';
+  added_lines: number;
+  deleted_lines: number;
+}
+
+export interface GitStatusReport {
+  branch: string;
+  head_oid: string | null;
+  staged: FileStatusItem[];
+  unstaged: FileStatusItem[];
+  untracked: FileStatusItem[];
+  deleted: FileStatusItem[];
+  ignored: string[];
+  is_clean: boolean;
+  total_uncommitted: number;
+}
+
+export interface DiffLine {
+  kind: 'add' | 'del' | 'ctx';
+  old_line?: number;
+  new_line?: number;
+  text: string;
+}
+
+export interface FileDiffReport {
+  path: string;
+  status: string;
+  old_content: string;
+  new_content: string;
+  diff_lines: DiffLine[];
+  total_additions: number;
+  total_deletions: number;
+}
+
+export interface TagRequest {
+  tag_name: string;
+  target_oid?: string;
+  message?: string;
+  action?: 'create' | 'delete';
+}
+
+export interface MergeRequest {
+  source_branch: string;
+  strategy?: string;
+}
+
+export interface CheckoutRequest {
+  target: string;
+  detach?: boolean;
+}
+
+export interface RevertRequest {
+  commit_oid: string;
+}
+
+export interface BisectRequest {
+  start_oid: string;
+  end_oid: string;
+  rule_id?: string;
+}
+
+export interface BisectReport {
+  breaking_commit_oid: string | null;
+  breaking_summary: string;
+  breaking_author: string;
+  breaking_timestamp: number;
+  verdict: string;
+  drifted_symbols: string[];
+  commits_evaluated: number;
+  total_scanned: number;
+}
+
+export interface TerminalExecResponse {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+}
+
 export interface RepoRecord {
   repo_id: string;
   root_path: string;
@@ -10,12 +185,46 @@ export interface RepoRecord {
   last_indexed_seq?: number;
 }
 
+export interface RepoFileItem {
+  path: string;
+  name: string;
+  ext: string;
+  dir: string;
+  status: 'verified' | 'impacted';
+}
+
+export interface RepoFilesResponse {
+  repo_id: string;
+  total_files: number;
+  files: RepoFileItem[];
+}
+
 export interface Capabilities {
   languages: string[];
   resolvers: string[];
   layouts: string[];
   gates?: string[];
   storage_engine?: string;
+}
+
+export interface FsDirectoryEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_git_repo: boolean;
+}
+
+export interface FsPreset {
+  label: string;
+  path: string;
+}
+
+export interface FsBrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  is_git_repo: boolean;
+  directories: FsDirectoryEntry[];
+  quick_presets: FsPreset[];
 }
 
 export interface UniverseNode {
@@ -128,25 +337,33 @@ export interface DaemonLiveEvent {
   payload: Record<string, unknown>;
 }
 
-// Fallback Mock Data for offline testing
-const FALLBACK_REPOS: RepoRecord[] = [
-  {
-    repo_id: '8f43a0e1b2',
-    root_path: '/home/ravi/Projects Beta/SynEvid',
-    display_name: 'SynEvid Core Workspace',
-    active_branch: 'main',
-    languages_json: '["typescript","rust","python","go","java","csharp"]',
-    last_indexed_seq: 42,
-  },
-  {
-    repo_id: 'a93f12c84e',
-    root_path: '/home/ravi/Projects/Microservices',
-    display_name: 'Order & Payment Gateway',
-    active_branch: 'develop',
-    languages_json: '["typescript","go"]',
-    last_indexed_seq: 18,
-  },
-];
+export function normalizeCrossPlatformPath(rawPath: string): string {
+  if (!rawPath) return '';
+  let p = rawPath.trim();
+  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+    p = p.slice(1, -1).trim();
+  }
+
+  const normalized = p.replace(/\\/g, '/');
+
+  // Convert Windows WSL UNC paths: //wsl.localhost/<distro>/... or //wsl$/<distro>/...
+  const wslMatch = normalized.match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)$/i);
+  if (wslMatch) {
+    return wslMatch[1];
+  }
+
+  // Convert Windows drive letters C:/... to /mnt/c/...
+  const driveMatch = normalized.match(/^([a-zA-Z]):(\/.*)$/);
+  if (driveMatch) {
+    const driveLetter = driveMatch[1].toLowerCase();
+    return `/mnt/${driveLetter}${driveMatch[2]}`;
+  }
+
+  return normalized;
+}
+
+// Fallback Mock Data for offline testing (Zero hardcoded repository paths)
+const FALLBACK_REPOS: RepoRecord[] = [];
 
 const FALLBACK_CAPS: Capabilities = {
   languages: ['typescript', 'rust', 'python', 'go', 'java', 'csharp'],
@@ -178,7 +395,7 @@ export class SynevidApiClient {
     }
   }
 
-  private async fetchWithTimeout<T>(path: string, options?: RequestInit, timeoutMs = 2500): Promise<T> {
+  private async fetchWithTimeout<T>(path: string, options?: RequestInit, timeoutMs = 15000): Promise<T> {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -207,6 +424,8 @@ export class SynevidApiClient {
       return await this.fetchWithTimeout<{
         snapshot_id: string;
         repo_root: string;
+        repo_name?: string;
+        active_repo_id?: string;
         coverage_state: string;
         files_scanned: number;
         symbol_count: number;
@@ -215,13 +434,15 @@ export class SynevidApiClient {
       }>('/api/status');
     } catch {
       return {
-        snapshot_id: 'snap_c42f0b98e1a7',
-        repo_root: '/home/ravi/Projects Beta/SynEvid',
-        coverage_state: 'Verified',
-        files_scanned: 184,
-        symbol_count: 1420,
-        edge_count: 3890,
-        version: 'v0.2.1',
+        snapshot_id: 'no-active-snapshot',
+        repo_root: '',
+        repo_name: '',
+        active_repo_id: '',
+        coverage_state: 'Unconnected',
+        files_scanned: 0,
+        symbol_count: 0,
+        edge_count: 0,
+        version: 'v0.2.6',
       };
     }
   }
@@ -243,11 +464,12 @@ export class SynevidApiClient {
   }
 
   public async connectRepo(rootPath: string, displayName?: string) {
-    return await this.fetchWithTimeout<{ status: string; repo_id?: string; error?: string }>(
+    const normalized = normalizeCrossPlatformPath(rootPath);
+    return await this.fetchWithTimeout<{ status: string; repo_id?: string; display_name?: string; error?: string }>(
       '/api/v1/repos/connect',
       {
         method: 'POST',
-        body: JSON.stringify({ root_path: rootPath, display_name: displayName }),
+        body: JSON.stringify({ root_path: normalized, display_name: displayName }),
       }
     );
   }
@@ -262,10 +484,61 @@ export class SynevidApiClient {
     );
   }
 
-  public async getUniverse(dim: '2D' | '3D' = '2D'): Promise<GraphUniverse> {
+  public async getFiles(): Promise<RepoFilesResponse> {
     try {
-      const q = dim === '3D' ? '?dim=3d' : '';
-      return await this.fetchWithTimeout<GraphUniverse>(`/api/v1/graph/universe${q}`);
+      return await this.fetchWithTimeout<RepoFilesResponse>('/api/v1/files');
+    } catch {
+      return {
+        repo_id: 'default',
+        total_files: 0,
+        files: [],
+      };
+    }
+  }
+
+  public async browseFilesystem(targetPath?: string): Promise<FsBrowseResponse> {
+    try {
+      const normalized = targetPath ? normalizeCrossPlatformPath(targetPath) : '';
+      const q = normalized ? `?path=${encodeURIComponent(normalized)}` : '';
+      return await this.fetchWithTimeout<FsBrowseResponse>(`/api/v1/fs/browse${q}`);
+    } catch {
+      return {
+        current_path: targetPath || '',
+        parent_path: '',
+        is_git_repo: false,
+        directories: [],
+        quick_presets: [
+          { label: 'User Home', path: '~' },
+          { label: 'Root Filesystem', path: '/' },
+        ],
+      };
+    }
+  }
+
+  public async getUniverse(dim: '2D' | '3D' = '3D'): Promise<GraphUniverse> {
+    try {
+      const q = dim === '2D' ? '?dim=2d' : '?dim=3d';
+      const raw = await this.fetchWithTimeout<any>(`/api/v1/graph/universe${q}`, undefined, 20000);
+      const rawNodes = raw.nodes;
+      const normalizedNodes: UniverseNode[] = Array.isArray(rawNodes)
+        ? rawNodes
+        : rawNodes && typeof rawNodes === 'object'
+        ? Object.entries(rawNodes).map(([id, val]: [string, any]) => ({
+            id,
+            x: typeof val.x === 'number' ? (Math.abs(val.x) > 5 ? val.x / 150 : val.x) : 0,
+            y: typeof val.y === 'number' ? (Math.abs(val.y) > 5 ? val.y / 150 : val.y) : 0,
+            z: typeof val.z === 'number' ? (Math.abs(val.z) > 5 ? val.z / 150 : val.z) : 0,
+            cluster_id: val.cluster_id ?? 1,
+          }))
+        : [];
+      return {
+        repo_id: raw.repo_id || 'active',
+        dimensions: raw.dimensions || dim,
+        node_count: normalizedNodes.length,
+        edge_count: (raw.edges || []).length,
+        nodes: normalizedNodes,
+        edges: raw.edges || [],
+      };
     } catch {
       return {
         repo_id: '8f43a0e1b2',
@@ -451,6 +724,214 @@ export class SynevidApiClient {
         ],
       };
     }
+  }
+
+  public async getGitGalaxy(limit = 200): Promise<GitGalaxy> {
+    try {
+      return await this.fetchWithTimeout<GitGalaxy>(`/api/v1/git/galaxy?limit=${limit}`);
+    } catch {
+      return {
+        repo_id: 'local_git_repo',
+        head_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317',
+        active_branch: 'main',
+        total_commits: 1,
+        commits: [
+          {
+            oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317',
+            short_oid: 'a0382e3',
+            parents: [],
+            author_name: 'SynEvid Engineer',
+            author_email: 'engineer@synevid.dev',
+            timestamp: Math.floor(Date.now() / 1000),
+            summary: 'Initial repo commit',
+            lane: 0,
+            is_head: true,
+            branch_names: ['main'],
+            tags: ['v0.4.0'],
+            symbols_modified: 4,
+            blast_radius_score: 2,
+            verification_verdict: 'PASS',
+          },
+        ],
+        branches: [{ name: 'main', target_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317', is_active: true }],
+        tags: [{ name: 'v0.4.0', target_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317' }],
+      };
+    }
+  }
+
+  public async getTimeTravelFrame(oid: string, dim: '2d' | '3d' = '3d'): Promise<TimeTravelVisualFrame> {
+    try {
+      return await this.fetchWithTimeout<TimeTravelVisualFrame>(`/api/v1/git/time-travel?oid=${oid}&dim=${dim}`);
+    } catch {
+      return {
+        oid,
+        short_oid: oid.slice(0, 7),
+        summary: 'Historical commit frame',
+        timestamp: Math.floor(Date.now() / 1000),
+        dimensions: dim === '3d' ? '3D' : '2D',
+        node_count: 3,
+        edge_count: 2,
+        nodes: [
+          { id: 'src/index.ts', x: 0, y: 0, z: 0, cluster_id: 0, diff_status: 'unchanged' },
+          { id: 'src/engine.ts', x: 50, y: 20, z: 10, cluster_id: 1, diff_status: 'modified' },
+          { id: 'src/utils.ts', x: -40, y: 30, z: -10, cluster_id: 2, diff_status: 'added' },
+        ],
+        edges: [
+          { source: 'src/index.ts', target: 'src/engine.ts', kind: 'calls' },
+          { source: 'src/engine.ts', target: 'src/utils.ts', kind: 'imports' },
+        ],
+        added_files: ['src/utils.ts'],
+        modified_files: ['src/engine.ts'],
+        deleted_files: [],
+      };
+    }
+  }
+
+  public async getGitDiff(baseOid: string, headOid: string): Promise<SemanticDiffReport> {
+    try {
+      return await this.fetchWithTimeout<SemanticDiffReport>(`/api/v1/git/diff?base=${baseOid}&head=${headOid}`);
+    } catch {
+      return {
+        base_oid: baseOid,
+        head_oid: headOid,
+        added_files: [],
+        modified_files: ['src/engine.ts'],
+        deleted_files: [],
+        total_changed_files: 1,
+        blast_radius_score: 2,
+        verdict: 'PASS',
+        drifted_contracts: [],
+      };
+    }
+  }
+
+  public async stageGit(paths: string[]): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/stage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+  }
+
+  public async commitGit(message: string, authorName?: string, authorEmail?: string): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, author_name: authorName, author_email: authorEmail }),
+    });
+  }
+
+  public async branchGit(branchName: string, action: 'create' | 'switch' | 'delete'): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch_name: branchName, action }),
+    });
+  }
+
+  public async undoGit(): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/undo', {
+      method: 'POST',
+    });
+  }
+
+  public async getGitStatus(): Promise<GitStatusReport> {
+    try {
+      return await this.fetchWithTimeout<GitStatusReport>('/api/v1/git/status');
+    } catch {
+      return {
+        branch: 'main',
+        head_oid: null,
+        staged: [],
+        unstaged: [],
+        untracked: [],
+        deleted: [],
+        ignored: [],
+        is_clean: true,
+        total_uncommitted: 0,
+      };
+    }
+  }
+
+  public async getFileDiff(path: string): Promise<FileDiffReport> {
+    try {
+      const res = await this.fetchWithTimeout<FileDiffReport>(`/api/v1/git/diff-file?path=${encodeURIComponent(path)}`);
+      return {
+        path: res?.path || path,
+        status: res?.status || 'clean',
+        old_content: res?.old_content || '',
+        new_content: res?.new_content || '',
+        diff_lines: res?.diff_lines || [],
+        total_additions: res?.total_additions || 0,
+        total_deletions: res?.total_deletions || 0,
+      };
+    } catch {
+      return {
+        path,
+        status: 'clean',
+        old_content: '',
+        new_content: '',
+        diff_lines: [],
+        total_additions: 0,
+        total_deletions: 0,
+      };
+    }
+  }
+
+  public async unstageGit(paths?: string[]): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/unstage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paths ? { paths } : {}),
+    });
+  }
+
+  public async tagGit(req: TagRequest): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/tag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  }
+
+  public async mergeGit(req: MergeRequest): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  }
+
+  public async checkoutGit(req: CheckoutRequest): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  }
+
+  public async revertGit(commitOid: string): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/git/revert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commit_oid: commitOid }),
+    });
+  }
+
+  public async bisectGit(req: BisectRequest): Promise<BisectReport> {
+    return await this.fetchWithTimeout<BisectReport>('/api/v1/git/bisect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  }
+
+  public async execTerminal(command: string): Promise<TerminalExecResponse> {
+    return await this.fetchWithTimeout<TerminalExecResponse>('/api/v1/terminal/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    });
   }
 
   public subscribeLiveEvents(onEvent: (event: DaemonLiveEvent) => void, onError?: () => void): () => void {

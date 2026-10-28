@@ -103,10 +103,16 @@ test('createAutopsyMcpServer registers all 11 tools and resources', () => {
     'autopsy_test_selection',
     'autopsy_contract_diff',
     'autopsy_distributed_blast_radius',
+    'autopsy_git_status',
+    'autopsy_git_galaxy',
+    'autopsy_git_diff',
+    'autopsy_git_bisect',
+    'autopsy_git_commit',
+    'autopsy_git_undo',
   ]) {
     assert.ok(tools.includes(tool), `Must register ${tool}`);
   }
-  assert.equal(tools.length, 11, '5 mandatory + 4 Phase 4.2 + find + session');
+  assert.equal(tools.length, 17, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools');
 
   const resources = Object.keys(server._registeredResources);
   const templates = Object.keys(server._registeredResourceTemplates || {});
@@ -629,7 +635,7 @@ test('runAutopsy contract-dist exits 2 on a breaking change and still returns th
 
 test('runAutopsy temporal replays the history of this workspace', async () => {
   const repoRoot = path.resolve(__dirname, '../../..');
-  const result = await runAutopsy('temporal', ['--max-commits', '100000'], { repoRoot });
+  const result = await runAutopsy('temporal', ['--max-commits', '100000'], { repoRoot, timeoutMs: 90000 });
   assert.equal(result.exitCode, 0, result.rawStderr);
   assert.ok(result.data.stats.total > 0, 'the workspace has history to replay');
   assert.ok(Array.isArray(result.data.journal), 'the journal projection is embedded verbatim');

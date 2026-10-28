@@ -11,6 +11,7 @@
 //! - 4: UNSUPPORTED / UNKNOWN (Unsupported syntax or unknown coverage in strict mode)
 
 pub mod extensions;
+pub mod git_cmd;
 pub mod tui;
 pub mod ui;
 pub mod watch;
@@ -726,6 +727,11 @@ pub enum Commands {
     },
     /// Display engine version and adapter capabilities
     Version,
+    /// Native pure-Rust Git engine and time-travel controls (Phase 3)
+    Git {
+        #[command(subcommand)]
+        command: git_cmd::GitSubcommands,
+    },
 }
 
 /// Entry point that parses command line arguments and runs CLI.
@@ -1090,6 +1096,7 @@ pub fn execute(cli: &Cli) -> Result<i32, CliError> {
         Commands::Tui => tui::run_tui(cli),
         Commands::Watch { debounce } => watch::run_watch(cli, *debounce),
         Commands::Version => handle_version(cli),
+        Commands::Git { command } => git_cmd::handle_git(cli, command),
     }
 }
 

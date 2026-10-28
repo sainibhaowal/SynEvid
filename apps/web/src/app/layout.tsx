@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Michroma, Orbitron, Syncopate, Space_Grotesk, Geist_Mono } from 'next/font/google';
 import './globals.css';
+import { ThemeProvider } from '@/context/ThemeContext';
 
 const michroma = Michroma({
   subsets: ['latin'],
@@ -56,10 +57,31 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark scroll-smooth ${michroma.variable} ${orbitron.variable} ${syncopate.variable} ${spaceGrotesk.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+      className={`scroll-smooth ${michroma.variable} ${orbitron.variable} ${syncopate.variable} ${spaceGrotesk.variable} ${geistMono.variable}`}
     >
-      <body className="min-h-screen bg-[#05080e] text-[#f0f4fc] font-sans antialiased overflow-x-hidden selection:bg-cyan-400 selection:text-black">
-        {children}
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var saved = localStorage.getItem('synevid_theme');
+                  var theme = (saved === 'light' || saved === 'dark') ? saved : 'dark';
+                  document.documentElement.classList.remove('dark', 'light');
+                  document.documentElement.classList.add(theme);
+                  document.documentElement.style.colorScheme = theme;
+                  document.documentElement.setAttribute('data-theme', theme);
+                } catch (e) {}
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body className="min-h-screen bg-[var(--background)] text-[var(--foreground)] font-sans antialiased overflow-x-hidden transition-colors duration-150">
+        <ThemeProvider>
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

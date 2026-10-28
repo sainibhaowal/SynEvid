@@ -36,7 +36,7 @@ export default function InvariantVerificationSection({ findings }: InvariantVeri
             onClick={() => setFilter('all')}
             className={`px-3 py-1.5 rounded-lg border font-semibold transition-colors ${
               filter === 'all'
-                ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-600 dark:text-cyan-400'
+                ? 'bg-sky-50 dark:bg-cyan-500/15 border-sky-300 dark:border-cyan-500/40 text-sky-800 dark:text-cyan-400'
                 : 'bg-[var(--card-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)]'
             }`}
           >
