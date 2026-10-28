@@ -121,6 +121,69 @@ export interface DiffLine {
   text: string;
 }
 
+export interface ForensicSession {
+  session_id: string;
+  repo_id: string;
+  actor_kind: 'AI_AGENT' | 'HUMAN_USER' | 'CI_WORKFLOW' | string;
+  actor_name: string;
+  baseline_snap_id: string;
+  current_snap_id: string;
+  files_touched_count: number;
+  total_events_count: number;
+  status: 'ACTIVE' | 'VERIFIED_PASS' | 'BLOCKED_FAIL' | 'CLOSED' | string;
+}
+
+export interface ForensicWorkflow {
+  workflow_id: string;
+  session_id: string;
+  name: string;
+  workflow_type: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED' | string;
+  start_event_seq: number;
+  end_event_seq?: number | null;
+}
+
+export interface TrajectoryEvent {
+  event_seq: number;
+  session_id: string;
+  job_id?: string | null;
+  workflow_id?: string | null;
+  event_type: string;
+  target_symbol?: string | null;
+  target_file?: string | null;
+  before_snap_id?: string | null;
+  after_snap_id?: string | null;
+  verdict: 'PASS' | 'FAIL' | 'WARN' | 'INFO' | string;
+  summary: string;
+  evidence_json: string;
+  blake3_receipt: string;
+  tokens_spent: number;
+  tokens_saved: number;
+}
+
+export interface AiSessionLedger {
+  session_id: string;
+  queries_count: number;
+  tokens_spent: number;
+  tokens_saved: number;
+  cache_hits: number;
+  cache_misses: number;
+}
+
+export interface TimelineResponse {
+  session: ForensicSession;
+  workflows: ForensicWorkflow[];
+  events: TrajectoryEvent[];
+  ledger?: AiSessionLedger;
+}
+
+export interface AiConfigSnippetResponse {
+  client: string;
+  file_name: string;
+  config_json: string;
+  instruction: string;
+}
+
 export interface FileDiffReport {
   path: string;
   status: string;
@@ -932,6 +995,51 @@ export class SynevidApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command }),
     });
+  }
+
+  public async listForensicSessions(): Promise<ForensicSession[]> {
+    return await this.fetchWithTimeout<ForensicSession[]>('/api/v1/forensics/sessions');
+  }
+
+  public async startForensicSession(actorName: string = 'Claude-Code', actorKind: string = 'AI_AGENT'): Promise<{ session_id: string; status: string }> {
+    return await this.fetchWithTimeout<{ session_id: string; status: string }>('/api/v1/forensics/sessions/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor_name: actorName, actor_kind: actorKind }),
+    });
+  }
+
+  public async getForensicTimeline(sessionId?: string): Promise<TimelineResponse> {
+    const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+    return await this.fetchWithTimeout<TimelineResponse>(`/api/v1/forensics/timeline${q}`);
+  }
+
+  public async revertForensicStep(sessionId: string, eventSeq: number): Promise<GitMutationResult> {
+    return await this.fetchWithTimeout<GitMutationResult>('/api/v1/forensics/revert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, event_seq: eventSeq }),
+    });
+  }
+
+  public async exportForensicTrace(sessionId: string): Promise<any> {
+    return await this.fetchWithTimeout<any>(`/api/v1/forensics/export?session_id=${encodeURIComponent(sessionId)}`);
+  }
+
+  public async importForensicTrace(bundle: any): Promise<any> {
+    return await this.fetchWithTimeout<any>('/api/v1/forensics/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bundle }),
+    });
+  }
+
+  public async getAiLedger(sessionId: string): Promise<AiSessionLedger> {
+    return await this.fetchWithTimeout<AiSessionLedger>(`/api/v1/ai/ledger?session_id=${encodeURIComponent(sessionId)}`);
+  }
+
+  public async getAiConfigSnippet(client: string): Promise<AiConfigSnippetResponse> {
+    return await this.fetchWithTimeout<AiConfigSnippetResponse>(`/api/v1/ai/config-snippet?client=${encodeURIComponent(client)}`);
   }
 
   public subscribeLiveEvents(onEvent: (event: DaemonLiveEvent) => void, onError?: () => void): () => void {

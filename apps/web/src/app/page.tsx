@@ -44,6 +44,7 @@ import LiveEditSimulator from '@/components/LiveEditSimulator';
 import BlastRadiusSection from '@/components/BlastRadiusSection';
 import InvariantVerificationSection from '@/components/InvariantVerificationSection';
 import ForensicTrajectorySection from '@/components/ForensicTrajectorySection';
+import AiCockpitSection from '@/components/AiCockpitSection';
 import TerminalWorkbench from '@/components/TerminalWorkbench';
 import { GitGalaxySection } from '@/components/GitGalaxySection';
 import ConnectRepoModal from '@/components/ConnectRepoModal';
@@ -398,7 +399,12 @@ export default function OperationalCockpitPage() {
             )}
 
             {activeWorkspace === 'ws-trajectory' && (
-              <ForensicTrajectorySection runs={trajectoryRuns} />
+              <ForensicTrajectorySection
+                onReplayCanvas={(target) => {
+                  setCurrentSymbol(target);
+                  setActiveWorkspace('ws-canvas');
+                }}
+              />
             )}
 
             {activeWorkspace === 'ws-gates' && (
@@ -407,20 +413,17 @@ export default function OperationalCockpitPage() {
 
             {activeWorkspace === 'ws-ai' && (
               <div className="space-y-6">
-                <div className="p-5 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex items-center justify-between">
-                  <div>
-                    <h2 className="text-base font-bold text-[var(--text-primary)] font-brand">
-                      AI Coding Agent MCP Bridge &amp; Working Cache
-                    </h2>
-                    <p className="text-xs text-[var(--text-muted)] font-mono mt-0.5">
-                      Sub-15ms live delta streaming for Claude-Code, Cursor, and VS Code MCP clients.
-                    </p>
-                  </div>
-                  <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-                    MCP SERVER: ACTIVE
-                  </span>
-                </div>
+                <AiCockpitSection
+                  activeSessionId={activeRepoId}
+                  onFocusCanvas={(sym) => {
+                    setCurrentSymbol(sym);
+                    setActiveWorkspace('ws-canvas');
+                  }}
+                />
                 <div className="p-4 rounded-xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+                  <div className="text-xs font-mono font-bold text-[var(--text-muted)] uppercase mb-3">
+                    Embedded Verification Terminal
+                  </div>
                   <TerminalWorkbench />
                 </div>
               </div>

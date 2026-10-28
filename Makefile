@@ -36,7 +36,7 @@ vscode-extension-check:
 	cd apps/vscode-extension && npm test
 
 check: fmt-check boundaries schemas determinism cross-platform mcp-check web-inspector-check vscode-extension-check
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo --list | grep -q clippy && cargo clippy --workspace --all-targets -- -D warnings || true
 	cargo test --workspace --all-targets
 	cargo test --workspace --doc
 

@@ -103,16 +103,21 @@ test('createAutopsyMcpServer registers all 11 tools and resources', () => {
     'autopsy_test_selection',
     'autopsy_contract_diff',
     'autopsy_distributed_blast_radius',
+    'autopsy_session',
     'autopsy_git_status',
     'autopsy_git_galaxy',
     'autopsy_git_diff',
     'autopsy_git_bisect',
     'autopsy_git_commit',
     'autopsy_git_undo',
+    'autopsy_simulate_edit',
+    'autopsy_canvas_focus',
+    'autopsy_git_time_travel',
+    'autopsy_working_memory',
   ]) {
     assert.ok(tools.includes(tool), `Must register ${tool}`);
   }
-  assert.equal(tools.length, 17, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools');
+  assert.equal(tools.length, 21, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools + 4 Phase 4 tools');
 
   const resources = Object.keys(server._registeredResources);
   const templates = Object.keys(server._registeredResourceTemplates || {});
@@ -690,4 +695,50 @@ test('runAutopsy test-select reports a partial selection rather than a guess', a
   assert.equal(result.data.coverage, 'partial', 'a file-level change set cannot be verified');
   assert.ok(result.data.digest, 'the plan is digested');
   assert.equal(result.data.fallback.kind, 'none');
+});
+
+// Phase 4 Tools Integration
+test('autopsy_simulate_edit simulates in-flight edits within envelope', async () => {
+  const server = createAutopsyMcpServer();
+  const tool = server._registeredTools['autopsy_simulate_edit'];
+  assert.ok(tool, 'autopsy_simulate_edit must be registered');
+  const res = await tool.handler({
+    file_path: 'src/PaymentService.ts',
+    unsaved_buffer: 'export function chargeCard() { return true; }',
+    repo_root: REPO_API_ROOT,
+  });
+  assert.ok(res.content && res.content[0].text);
+  const parsed = JSON.parse(res.content[0].text);
+  assert.equal(parsed.command, 'simulate-edit');
+  assert.equal(parsed.actionable, true);
+});
+
+test('autopsy_canvas_focus broadcasts canvas focus envelope', async () => {
+  const server = createAutopsyMcpServer();
+  const tool = server._registeredTools['autopsy_canvas_focus'];
+  assert.ok(tool, 'autopsy_canvas_focus must be registered');
+  const res = await tool.handler({
+    symbol: 'UserService',
+    annotation: 'AI Inspecting UserService',
+    zoom_level: 1.5,
+  });
+  assert.ok(res.content && res.content[0].text);
+  const parsed = JSON.parse(res.content[0].text);
+  assert.equal(parsed.command, 'canvas-focus');
+  assert.equal(parsed.report.symbol, 'UserService');
+});
+
+test('autopsy_working_memory returns zero-waste compact receipt', async () => {
+  const server = createAutopsyMcpServer();
+  const tool = server._registeredTools['autopsy_working_memory'];
+  assert.ok(tool, 'autopsy_working_memory must be registered');
+  const res = await tool.handler({
+    session_id: 'sess_test_1',
+    symbol: 'chargeCard',
+    query_kind: 'callers',
+  });
+  assert.ok(res.content && res.content[0].text);
+  const parsed = JSON.parse(res.content[0].text);
+  assert.equal(parsed.command, 'ai-working-memory');
+  assert.ok(parsed.report.receipt_token || parsed.report.status);
 });

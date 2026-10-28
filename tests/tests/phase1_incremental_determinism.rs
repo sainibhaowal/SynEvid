@@ -186,6 +186,8 @@ fn test_phase1_sqlite_persistence_and_sub_5ms_ego_network() {
         summary: "Symbol_0 verified successfully".to_string(),
         evidence_json: "{}".to_string(),
         blake3_receipt: "blake3:99aacc112233".to_string(),
+        tokens_spent: 0,
+        tokens_saved: 0,
     };
     let seq = engine.record_trajectory_event(&event).unwrap();
     assert_eq!(seq, 1);

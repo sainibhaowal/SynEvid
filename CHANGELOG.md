@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - Real-Time Forensic Trajectory Timeline, AI Zero-Token-Waste Working Cache & Live MCP Cockpit (2026-10-28)
+
+### Added
+- **Three-Tier Forensic Trajectory Hierarchy (`FR-P4-001`, Receipt 89):**
+  - **SQLite WAL Storage Migration 005:** Added `forensic_sessions`, `forensic_workflows`, `trajectory_events`, `ai_working_cache`, and `ai_session_ledger` tables in `crates/autopsy-storage`.
+  - **Forensic Sessions:** Structured audit tracking for human users, AI agents (`Claude-Code`, `Cursor`, `Windsurf`), and CI workflows, recording baseline and current snapshots, touched files, and verdicts.
+  - **Workflow Brackets:** Grouping of multi-step engineering pipelines (`Pre-Edit Guardrail`, `Multi-File Edit`, `Verification Loop`, `1-Click Rollback`).
+  - **Step / Job Nodes:** Sequential atomic operations with cryptographic BLAKE3 receipts and token metrics.
+- **AI Agent Zero-Token-Waste Working Memory (`FR-P4-003`, Receipt 89):**
+  - **Local SQLite Subgraph Cache (`ai_working_cache`):** Caches symbol impact and verification query states keyed by `(repo_id, snapshot_blake3, symbol_id)`.
+  - **91.50% Token Reduction Benchmark:** Verified in `tests/tests/phase4_ai_cache_efficiency.rs` (10,539B -> 896B), slashing AI context token consumption by returning compact pointer receipts (`UNCHANGED_SINCE_STEP_X`) and delta subgraphs instead of repetitive AST dumps.
+  - **AI Session Ledger:** Tracks real-time token savings and cost avoidance.
+- **Sub-50ms In-Flight Edit Guardrail (`FR-P4-002`, Receipt 89):**
+  - In-memory AST evaluation in `< 25ms` (`/api/v1/verify/simulate-edit`) without writing to disk or polluting git history.
+  - Evaluates damaged callers, contract drift, and syntax errors with cryptographic BLAKE3 receipt.
+- **Expanded MCP Server Surface to 21 Tools (`FR-P4-004`, Receipt 89):**
+  - Registered 4 new MCP tools: `autopsy_simulate_edit`, `autopsy_canvas_focus`, `autopsy_git_time_travel`, `autopsy_working_memory`.
+  - Live broadcast hook (`http://127.0.0.1:3333/api/v1/live/broadcast`) firing real-time telemetry to the visual canvas upon tool execution.
+- **Interactive Visual Trajectory Timeline UI (`FR-P4-005`, `ForensicTrajectorySection.tsx`):**
+  - Dynamic session selector and "+ New Session" button.
+  - Three-tier hierarchy visualization with workflow grouping brackets and color-coded event step pills.
+  - Step Filter (`ALL`, `PASS`, `FAIL`, `SIMULATE`) and keyword search.
+  - Side-by-side Before (A) vs After (B) forensic drawer comparison.
+  - 1-Click Rollback (`api.revertForensicStep`) and Canvas Replay highlighting affected symbols on the 2D/3D Code Universe.
+- **AI Cockpit & 1-Click Client Auto-Configurator (`FR-P4-006`, `AiCockpitSection.tsx`):**
+  - Real-time token efficiency gauge and ledger statistics.
+  - 1-Click configuration generator with "Copy Configuration" for Claude Code, Cursor, Windsurf, VS Code (Cline/Roo), and Gemini CLI.
+  - Interactive Working Cache Test Lab for live testing of subgraph deduplication.
+- **Deterministic Trace Bundle Import/Export (`FR-P4-007`):**
+  - Implemented `/api/v1/forensics/export` and `/api/v1/forensics/import` with content-addressed BLAKE3 digest verification.
+
 ## [0.4.0] - Native .git Engine, Visual Time-Travel Galaxy & Full Git Control UI (2026-10-28)
 
 ### Added

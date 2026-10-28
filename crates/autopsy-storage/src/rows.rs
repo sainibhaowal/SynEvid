@@ -472,6 +472,17 @@ pub struct ForensicSessionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ForensicWorkflowRecord {
+    pub workflow_id: String,
+    pub session_id: String,
+    pub name: String,
+    pub status: String,
+    pub start_seq: i64,
+    pub end_seq: Option<i64>,
+    pub duration_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrajectoryEventRecord {
     pub event_seq: i64,
     pub session_id: String,
@@ -486,6 +497,8 @@ pub struct TrajectoryEventRecord {
     pub summary: String,
     pub evidence_json: String,
     pub blake3_receipt: String,
+    pub tokens_spent: i64,
+    pub tokens_saved: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -498,6 +511,17 @@ pub struct AiWorkingCacheEntry {
     pub compact_payload: String,
     pub token_estimate: i64,
     pub hit_count: i64,
+    pub last_receipt_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiSessionLedgerRecord {
+    pub session_id: String,
+    pub total_queries: i64,
+    pub cache_hits: i64,
+    pub tokens_spent: i64,
+    pub tokens_saved: i64,
+    pub cost_saved_microcents: i64,
 }
 
 impl StorageEngine {
@@ -752,6 +776,152 @@ impl StorageEngine {
         })
     }
 
+    /// Creates or registers a forensic session.
+    pub fn create_forensic_session(
+        &self,
+        session: &ForensicSessionRecord,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO forensic_sessions (
+                session_id, repo_id, actor_kind, actor_name, baseline_snap_id, current_snap_id, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(session_id) DO UPDATE SET
+                current_snap_id = excluded.current_snap_id,
+                status = excluded.status;",
+            params![
+                session.session_id,
+                session.repo_id,
+                session.actor_kind,
+                session.actor_name,
+                session.baseline_snap_id,
+                session.current_snap_id,
+                session.status,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Gets a forensic session by ID.
+    pub fn get_forensic_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ForensicSessionRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, repo_id, actor_kind, actor_name, baseline_snap_id, current_snap_id, status
+             FROM forensic_sessions WHERE session_id = ?1 LIMIT 1;",
+        )?;
+        let record = stmt
+            .query_row(params![session_id], |row| {
+                Ok(ForensicSessionRecord {
+                    session_id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    actor_kind: row.get(2)?,
+                    actor_name: row.get(3)?,
+                    baseline_snap_id: row.get(4)?,
+                    current_snap_id: row.get(5)?,
+                    status: row.get(6)?,
+                })
+            })
+            .optional()?;
+        Ok(record)
+    }
+
+    /// Lists forensic sessions for a repository.
+    pub fn list_forensic_sessions(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<ForensicSessionRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, repo_id, actor_kind, actor_name, baseline_snap_id, current_snap_id, status
+             FROM forensic_sessions WHERE repo_id = ?1 OR ?1 = '' ORDER BY session_id DESC;",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id], |row| {
+                Ok(ForensicSessionRecord {
+                    session_id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    actor_kind: row.get(2)?,
+                    actor_name: row.get(3)?,
+                    baseline_snap_id: row.get(4)?,
+                    current_snap_id: row.get(5)?,
+                    status: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Updates status and current snapshot of a forensic session.
+    pub fn update_forensic_session_status(
+        &self,
+        session_id: &str,
+        status: &str,
+        current_snap_id: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE forensic_sessions SET status = ?1, current_snap_id = ?2 WHERE session_id = ?3;",
+            params![status, current_snap_id, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Creates a forensic workflow.
+    pub fn create_forensic_workflow(
+        &self,
+        wf: &ForensicWorkflowRecord,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO forensic_workflows (
+                workflow_id, session_id, name, status, start_seq, end_seq, duration_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(workflow_id) DO UPDATE SET
+                status = excluded.status,
+                end_seq = excluded.end_seq,
+                duration_ms = excluded.duration_ms;",
+            params![
+                wf.workflow_id,
+                wf.session_id,
+                wf.name,
+                wf.status,
+                wf.start_seq,
+                wf.end_seq,
+                wf.duration_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists forensic workflows for a session.
+    pub fn list_forensic_workflows(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ForensicWorkflowRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT workflow_id, session_id, name, status, start_seq, end_seq, duration_ms
+             FROM forensic_workflows WHERE session_id = ?1 ORDER BY start_seq ASC;",
+        )?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(ForensicWorkflowRecord {
+                    workflow_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    name: row.get(2)?,
+                    status: row.get(3)?,
+                    start_seq: row.get(4)?,
+                    end_seq: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Records an event in the Forensic Trajectory Timeline.
     pub fn record_trajectory_event(
         &self,
@@ -762,8 +932,8 @@ impl StorageEngine {
             "INSERT INTO trajectory_events (
                 session_id, job_id, workflow_id, event_type, target_symbol,
                 target_file, before_snap_id, after_snap_id, verdict, summary,
-                evidence_json, blake3_receipt
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);",
+                evidence_json, blake3_receipt, tokens_spent, tokens_saved
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
             params![
                 event.session_id,
                 event.job_id,
@@ -777,6 +947,8 @@ impl StorageEngine {
                 event.summary,
                 event.evidence_json,
                 event.blake3_receipt,
+                event.tokens_spent,
+                event.tokens_saved,
             ],
         )?;
         let seq = conn.last_insert_rowid();
@@ -788,15 +960,28 @@ impl StorageEngine {
         &self,
         session_id: &str,
     ) -> Result<Vec<TrajectoryEventRecord>, StorageError> {
+        self.list_trajectory_events_range(session_id, 0, i64::MAX)
+    }
+
+    /// Lists trajectory events for a session bounded by sequence range [start_seq, end_seq].
+    pub fn list_trajectory_events_range(
+        &self,
+        session_id: &str,
+        start_seq: i64,
+        end_seq: i64,
+    ) -> Result<Vec<TrajectoryEventRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT event_seq, session_id, job_id, workflow_id, event_type, target_symbol,
                     target_file, before_snap_id, after_snap_id, verdict, summary,
-                    evidence_json, blake3_receipt
-             FROM trajectory_events WHERE session_id = ?1 ORDER BY event_seq ASC;",
+                    evidence_json, blake3_receipt,
+                    COALESCE(tokens_spent, 0), COALESCE(tokens_saved, 0)
+             FROM trajectory_events
+             WHERE session_id = ?1 AND event_seq >= ?2 AND event_seq <= ?3
+             ORDER BY event_seq ASC;",
         )?;
         let rows = stmt
-            .query_map(params![session_id], |row| {
+            .query_map(params![session_id, start_seq, end_seq], |row| {
                 Ok(TrajectoryEventRecord {
                     event_seq: row.get(0)?,
                     session_id: row.get(1)?,
@@ -811,10 +996,49 @@ impl StorageEngine {
                     summary: row.get(10)?,
                     evidence_json: row.get(11)?,
                     blake3_receipt: row.get(12)?,
+                    tokens_spent: row.get(13)?,
+                    tokens_saved: row.get(14)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Gets a single trajectory event by sequence ID.
+    pub fn get_trajectory_event(
+        &self,
+        event_seq: i64,
+    ) -> Result<Option<TrajectoryEventRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT event_seq, session_id, job_id, workflow_id, event_type, target_symbol,
+                    target_file, before_snap_id, after_snap_id, verdict, summary,
+                    evidence_json, blake3_receipt,
+                    COALESCE(tokens_spent, 0), COALESCE(tokens_saved, 0)
+             FROM trajectory_events WHERE event_seq = ?1 LIMIT 1;",
+        )?;
+        let event = stmt
+            .query_row(params![event_seq], |row| {
+                Ok(TrajectoryEventRecord {
+                    event_seq: row.get(0)?,
+                    session_id: row.get(1)?,
+                    job_id: row.get(2)?,
+                    workflow_id: row.get(3)?,
+                    event_type: row.get(4)?,
+                    target_symbol: row.get(5)?,
+                    target_file: row.get(6)?,
+                    before_snap_id: row.get(7)?,
+                    after_snap_id: row.get(8)?,
+                    verdict: row.get(9)?,
+                    summary: row.get(10)?,
+                    evidence_json: row.get(11)?,
+                    blake3_receipt: row.get(12)?,
+                    tokens_spent: row.get(13)?,
+                    tokens_saved: row.get(14)?,
+                })
+            })
+            .optional()?;
+        Ok(event)
     }
 
     /// Retrieves an entry from the AI Working Cache.
@@ -825,7 +1049,7 @@ impl StorageEngine {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT cache_key, repo_id, snapshot_id, query_kind, target_id,
-                    compact_payload, token_estimate, hit_count
+                    compact_payload, token_estimate, hit_count, last_receipt_token
              FROM ai_working_cache WHERE cache_key = ?1 LIMIT 1;",
         )?;
         let entry = stmt
@@ -839,6 +1063,7 @@ impl StorageEngine {
                     compact_payload: row.get(5)?,
                     token_estimate: row.get(6)?,
                     hit_count: row.get(7)?,
+                    last_receipt_token: row.get(8)?,
                 })
             })
             .optional()?;
@@ -859,12 +1084,13 @@ impl StorageEngine {
         conn.execute(
             "INSERT INTO ai_working_cache (
                 cache_key, repo_id, snapshot_id, query_kind, target_id,
-                compact_payload, token_estimate, hit_count
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                compact_payload, token_estimate, hit_count, last_receipt_token
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(cache_key) DO UPDATE SET
                 compact_payload = excluded.compact_payload,
                 token_estimate = excluded.token_estimate,
-                hit_count = excluded.hit_count;",
+                hit_count = excluded.hit_count,
+                last_receipt_token = excluded.last_receipt_token;",
             params![
                 entry.cache_key,
                 entry.repo_id,
@@ -874,7 +1100,79 @@ impl StorageEngine {
                 entry.compact_payload,
                 entry.token_estimate,
                 entry.hit_count,
+                entry.last_receipt_token,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Gets or creates an AI Session Ledger record.
+    pub fn get_or_create_ai_ledger(
+        &self,
+        session_id: &str,
+    ) -> Result<AiSessionLedgerRecord, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, total_queries, cache_hits, tokens_spent, tokens_saved, cost_saved_microcents
+             FROM ai_session_ledger WHERE session_id = ?1 LIMIT 1;",
+        )?;
+        let res = stmt
+            .query_row(params![session_id], |row| {
+                Ok(AiSessionLedgerRecord {
+                    session_id: row.get(0)?,
+                    total_queries: row.get(1)?,
+                    cache_hits: row.get(2)?,
+                    tokens_spent: row.get(3)?,
+                    tokens_saved: row.get(4)?,
+                    cost_saved_microcents: row.get(5)?,
+                })
+            })
+            .optional()?;
+
+        if let Some(record) = res {
+            Ok(record)
+        } else {
+            let default_record = AiSessionLedgerRecord {
+                session_id: session_id.to_string(),
+                total_queries: 0,
+                cache_hits: 0,
+                tokens_spent: 0,
+                tokens_saved: 0,
+                cost_saved_microcents: 0,
+            };
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO ai_session_ledger (
+                    session_id, total_queries, cache_hits, tokens_spent, tokens_saved, cost_saved_microcents
+                ) VALUES (?1, 0, 0, 0, 0, 0);",
+                params![session_id],
+            );
+            Ok(default_record)
+        }
+    }
+
+    /// Records an AI query event in the session ledger, accumulating token metrics.
+    pub fn record_ai_query(
+        &self,
+        session_id: &str,
+        hit: bool,
+        tokens_spent: i64,
+        tokens_saved: i64,
+    ) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let hit_increment = if hit { 1 } else { 0 };
+        // Estimate 0.3 cents per 1k input tokens -> 3 microcents per token
+        let cost_saved = tokens_saved * 3;
+        conn.execute(
+            "INSERT INTO ai_session_ledger (
+                session_id, total_queries, cache_hits, tokens_spent, tokens_saved, cost_saved_microcents
+            ) VALUES (?1, 1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(session_id) DO UPDATE SET
+                total_queries = total_queries + 1,
+                cache_hits = cache_hits + ?2,
+                tokens_spent = tokens_spent + ?3,
+                tokens_saved = tokens_saved + ?4,
+                cost_saved_microcents = cost_saved_microcents + ?5;",
+            params![session_id, hit_increment, tokens_spent, tokens_saved, cost_saved],
         )?;
         Ok(())
     }

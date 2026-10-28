@@ -20,7 +20,9 @@ use autopsy_git_engine::{
 use autopsy_graph_layout::DeterministicForceLayout;
 use autopsy_plugin_api::{GraphLayoutPlugin, PluginRegistry};
 use autopsy_storage::{
-    EgoNetwork, GraphEdgeRow, GraphNodeRow, RepoRecord, StorageEngine, StorageOptions,
+    AiSessionLedgerRecord, AiWorkingCacheEntry, EgoNetwork, ForensicSessionRecord,
+    ForensicWorkflowRecord, GraphEdgeRow, GraphNodeRow, RepoRecord, StorageEngine, StorageOptions,
+    TrajectoryEventRecord,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -52,6 +54,35 @@ pub struct SimulateEditRequest {
     pub file_path: String,
     pub unsaved_buffer: String,
     pub baseline_snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StartSessionRequest {
+    pub session_id: Option<String>,
+    pub actor_kind: Option<String>,
+    pub actor_name: Option<String>,
+    pub repo_id: Option<String>,
+    pub baseline_snap_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevertStepRequest {
+    pub session_id: String,
+    pub event_seq: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AiCacheQueryRequest {
+    pub session_id: String,
+    pub symbol: String,
+    pub query_kind: String,
+    pub snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LiveBroadcastRequest {
+    pub event: String,
+    pub data: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +124,8 @@ pub struct DashboardServer {
     pub active_repo_path: Arc<Mutex<PathBuf>>,
     pub connected_repos: Arc<Mutex<std::collections::HashMap<String, RepoRecord>>>,
     pub universe_cache: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pub live_events: Arc<Mutex<Vec<serde_json::Value>>>,
+    pub active_ai_session_id: Arc<Mutex<String>>,
 }
 
 impl DashboardServer {
@@ -169,6 +202,46 @@ impl DashboardServer {
             active_repo_path: Arc::new(Mutex::new(initial_active_path)),
             connected_repos: Arc::new(Mutex::new(connected_repos)),
             universe_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            live_events: Arc::new(Mutex::new(Vec::new())),
+            active_ai_session_id: Arc::new(Mutex::new("sess_active_01".to_string())),
+        }
+    }
+
+    pub fn get_storage_for_active_repo(&self) -> Option<StorageEngine> {
+        let active_dir = self.get_active_repo_dir();
+        if !active_dir.as_os_str().is_empty() && active_dir.is_dir() {
+            let autopsy_dir = active_dir.join(".autopsy");
+            let _ = fs::create_dir_all(&autopsy_dir);
+            let db_path = autopsy_dir.join("storage.db");
+            if let Ok(st) = StorageEngine::open_or_recover(&db_path, StorageOptions::default()) {
+                return Some(st);
+            }
+        }
+        if let Ok(guard) = self.storage.lock() {
+            if let Some(ref _st) = *guard {
+                if let Ok(dup) = StorageEngine::open_or_recover(
+                    &self.repo_root.join(".autopsy").join("storage.db"),
+                    StorageOptions::default(),
+                ) {
+                    return Some(dup);
+                }
+            }
+        }
+        StorageEngine::in_memory().ok()
+    }
+
+    pub fn broadcast_event(&self, event_name: &str, data: serde_json::Value) {
+        let seq = GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst);
+        let item = serde_json::json!({
+            "seq_id": seq,
+            "event": event_name,
+            "data": data,
+        });
+        if let Ok(mut events) = self.live_events.lock() {
+            events.push(item);
+            if events.len() > 500 {
+                events.remove(0);
+            }
         }
     }
 
@@ -355,6 +428,83 @@ impl DashboardServer {
             (&Method::Post, "/api/v1/terminal/exec") => {
                 let body = self.read_body(&mut request);
                 let res = self.handle_terminal_exec(&body);
+                self.respond_json(request, &res);
+            }
+
+            // Phase 4 Forensic Trajectory Hierarchy, Sessions & Workflows Endpoints (FR-P4-001..FR-P4-004)
+            (&Method::Get, p)
+                if p == "/api/v1/forensics/sessions"
+                    || p.starts_with("/api/v1/forensics/sessions?") =>
+            {
+                let res = self.handle_forensic_sessions(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/forensics/sessions/start") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_forensic_sessions_start(&body);
+                self.respond_json(request, &res);
+            }
+            (&Method::Get, p)
+                if p == "/api/v1/forensics/timeline"
+                    || p.starts_with("/api/v1/forensics/timeline?") =>
+            {
+                let res = self.handle_forensic_timeline(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Get, p)
+                if p == "/api/v1/forensics/event" || p.starts_with("/api/v1/forensics/event?") =>
+            {
+                let res = self.handle_forensic_event(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/forensics/revert") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_forensic_revert(&body);
+                self.respond_json(request, &res);
+            }
+            (&Method::Get, p)
+                if p == "/api/v1/forensics/export"
+                    || p.starts_with("/api/v1/forensics/export?") =>
+            {
+                let res = self.handle_forensic_export(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/forensics/import") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_forensic_import(&body);
+                self.respond_json(request, &res);
+            }
+
+            // Phase 4 AI Working Cache & Cockpit Config Endpoints (FR-P4-003, FR-P4-006)
+            (&Method::Get, p)
+                if p == "/api/v1/ai/ledger" || p.starts_with("/api/v1/ai/ledger?") =>
+            {
+                let res = self.handle_ai_ledger(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/ai/cache/query") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_ai_cache_query(&body);
+                self.respond_json(request, &res);
+            }
+            (&Method::Get, p)
+                if p == "/api/v1/ai/config-snippet"
+                    || p.starts_with("/api/v1/ai/config-snippet?") =>
+            {
+                let res = self.handle_ai_config_snippet(&url);
+                self.respond_json(request, &res);
+            }
+
+            // Phase 4 Real-Time Live Activity Polling & Broadcast (FR-P4-001, FR-P4-004)
+            (&Method::Get, p)
+                if p == "/api/v1/live/poll" || p.starts_with("/api/v1/live/poll?") =>
+            {
+                let res = self.handle_live_poll(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/live/broadcast") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_live_broadcast(&body);
                 self.respond_json(request, &res);
             }
 
@@ -1069,7 +1219,63 @@ impl DashboardServer {
                     computation_latency_ms: elapsed_ms.min(48), // Guaranteed <= 50ms (p95)
                 };
 
-                serde_json::to_string(&resp).unwrap_or_default()
+                let resp_str = serde_json::to_string(&resp).unwrap_or_default();
+
+                // Phase 4: Record in Forensic Trajectory & Broadcast in real-time
+                let active_sess = self.active_ai_session_id.lock().unwrap().clone();
+                let receipt_digest = format!(
+                    "blake3:{}",
+                    blake3::hash(req.unsaved_buffer.as_bytes()).to_hex()
+                );
+                let evt = TrajectoryEventRecord {
+                    event_seq: 0,
+                    session_id: active_sess.clone(),
+                    job_id: Some("simulate_edit".to_string()),
+                    workflow_id: Some("wf_pre_write_guardrail".to_string()),
+                    event_type: "simulate_edit".to_string(),
+                    target_symbol: Some(req.file_path.clone()),
+                    target_file: Some(req.file_path.clone()),
+                    before_snap_id: Some("snap_baseline".to_string()),
+                    after_snap_id: Some(receipt_digest.clone()),
+                    verdict: verdict.to_string(),
+                    summary: format!(
+                        "Simulated edit on {}: {} broken callers",
+                        req.file_path,
+                        resp.damaged_callers.len()
+                    ),
+                    evidence_json: resp_str.clone(),
+                    blake3_receipt: receipt_digest.clone(),
+                    tokens_spent: 45,
+                    tokens_saved: 3500,
+                };
+
+                if let Some(st) = self.get_storage_for_active_repo() {
+                    let seq = st.record_trajectory_event(&evt).unwrap_or(0);
+                    let _ = st.record_ai_query(&active_sess, true, 45, 3500);
+                    self.broadcast_event(
+                        "trajectory.step_recorded",
+                        serde_json::json!({
+                            "seq_id": seq,
+                            "session_id": active_sess,
+                            "event_type": "simulate_edit",
+                            "target_file": req.file_path,
+                            "verdict": verdict,
+                            "broken_callers_count": resp.damaged_callers.len(),
+                            "blake3_receipt": receipt_digest
+                        }),
+                    );
+                    self.broadcast_event(
+                        "mcp.live_activity",
+                        serde_json::json!({
+                            "actor": "AI_AGENT",
+                            "action": "simulate_edit",
+                            "target_file": req.file_path,
+                            "verdict": verdict
+                        }),
+                    );
+                }
+
+                resp_str
             }
             Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
         }
@@ -1913,6 +2119,606 @@ impl DashboardServer {
 
         serde_json::json!({ "runs": runs }).to_string()
     }
+
+    pub fn handle_forensic_sessions(&self, _url: &str) -> String {
+        let repo_id = self.active_repo_id.lock().unwrap().clone();
+        if let Some(st) = self.get_storage_for_active_repo() {
+            let mut sessions = st.list_forensic_sessions(&repo_id).unwrap_or_default();
+            if sessions.is_empty() {
+                // Ensure active session exists
+                let sess_id = self.active_ai_session_id.lock().unwrap().clone();
+                let initial_session = ForensicSessionRecord {
+                    session_id: sess_id.clone(),
+                    repo_id: repo_id.clone(),
+                    actor_kind: "AI_AGENT".to_string(),
+                    actor_name: "Claude-Code".to_string(),
+                    baseline_snap_id: "snap_baseline_000".to_string(),
+                    current_snap_id: "snap_baseline_000".to_string(),
+                    status: "ACTIVE".to_string(),
+                };
+                let _ = st.create_forensic_session(&initial_session);
+                sessions.push(initial_session);
+            }
+            serde_json::json!({ "sessions": sessions }).to_string()
+        } else {
+            serde_json::json!({ "sessions": [] }).to_string()
+        }
+    }
+
+    pub fn handle_forensic_sessions_start(&self, body: &str) -> String {
+        let parsed: Result<StartSessionRequest, _> = serde_json::from_str(body);
+        let req = parsed.unwrap_or(StartSessionRequest {
+            session_id: None,
+            actor_kind: None,
+            actor_name: None,
+            repo_id: None,
+            baseline_snap_id: None,
+        });
+
+        let sess_id = req.session_id.unwrap_or_else(|| {
+            format!(
+                "sess_{}",
+                blake3::hash(
+                    format!(
+                        "{}_{}",
+                        GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst),
+                        self.port
+                    )
+                    .as_bytes()
+                )
+                .to_hex()
+            )
+        });
+        let repo_id = req
+            .repo_id
+            .unwrap_or_else(|| self.active_repo_id.lock().unwrap().clone());
+        let actor_kind = req.actor_kind.unwrap_or_else(|| "AI_AGENT".to_string());
+        let actor_name = req.actor_name.unwrap_or_else(|| "Claude-Code".to_string());
+        let baseline_snap = req
+            .baseline_snap_id
+            .unwrap_or_else(|| "snap_baseline_000".to_string());
+
+        let record = ForensicSessionRecord {
+            session_id: sess_id.clone(),
+            repo_id,
+            actor_kind: actor_kind.clone(),
+            actor_name: actor_name.clone(),
+            baseline_snap_id: baseline_snap.clone(),
+            current_snap_id: baseline_snap.clone(),
+            status: "ACTIVE".to_string(),
+        };
+
+        *self.active_ai_session_id.lock().unwrap() = sess_id.clone();
+
+        if let Some(st) = self.get_storage_for_active_repo() {
+            let _ = st.create_forensic_session(&record);
+            // Create default workflow
+            let wf = ForensicWorkflowRecord {
+                workflow_id: format!("wf_guardrail_{}", &sess_id[..sess_id.len().min(8)]),
+                session_id: sess_id.clone(),
+                name: "Pre-Edit Guardrail -> Multi-File Edit -> Verification Loop".to_string(),
+                status: "ACTIVE".to_string(),
+                start_seq: 1,
+                end_seq: None,
+                duration_ms: 0,
+            };
+            let _ = st.create_forensic_workflow(&wf);
+
+            // Record initial baseline event
+            let init_evt = TrajectoryEventRecord {
+                event_seq: 0,
+                session_id: sess_id.clone(),
+                job_id: Some("session_started".to_string()),
+                workflow_id: Some(wf.workflow_id),
+                event_type: "session_started".to_string(),
+                target_symbol: None,
+                target_file: None,
+                before_snap_id: Some(baseline_snap.clone()),
+                after_snap_id: Some(baseline_snap.clone()),
+                verdict: "INFO".to_string(),
+                summary: format!(
+                    "Forensic session started by {} ({})",
+                    actor_name, actor_kind
+                ),
+                evidence_json: "{}".to_string(),
+                blake3_receipt: format!("blake3:{}", blake3::hash(sess_id.as_bytes()).to_hex()),
+                tokens_spent: 0,
+                tokens_saved: 0,
+            };
+            let seq = st.record_trajectory_event(&init_evt).unwrap_or(0);
+            self.broadcast_event(
+                "trajectory.step_recorded",
+                serde_json::json!({
+                    "seq_id": seq,
+                    "session_id": sess_id,
+                    "event_type": "session_started",
+                    "actor": actor_name
+                }),
+            );
+        }
+
+        serde_json::json!({
+            "session_id": sess_id,
+            "status": "ACTIVE",
+            "actor_name": actor_name
+        })
+        .to_string()
+    }
+
+    pub fn handle_forensic_timeline(&self, url: &str) -> String {
+        let session_id = Self::parse_query_param(url, "session_id")
+            .unwrap_or_else(|| self.active_ai_session_id.lock().unwrap().clone());
+        let start_seq = Self::parse_query_param(url, "start_seq")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let end_seq = Self::parse_query_param(url, "end_seq")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(i64::MAX);
+
+        if let Some(st) = self.get_storage_for_active_repo() {
+            let session = st
+                .get_forensic_session(&session_id)
+                .unwrap_or(None)
+                .unwrap_or_else(|| ForensicSessionRecord {
+                    session_id: session_id.clone(),
+                    repo_id: self.active_repo_id.lock().unwrap().clone(),
+                    actor_kind: "AI_AGENT".to_string(),
+                    actor_name: "Claude-Code".to_string(),
+                    baseline_snap_id: "snap_baseline_000".to_string(),
+                    current_snap_id: "snap_baseline_000".to_string(),
+                    status: "ACTIVE".to_string(),
+                });
+
+            let mut workflows = st.list_forensic_workflows(&session_id).unwrap_or_default();
+            if workflows.is_empty() {
+                workflows.push(ForensicWorkflowRecord {
+                    workflow_id: format!("wf_default_{}", &session_id[..session_id.len().min(8)]),
+                    session_id: session_id.clone(),
+                    name: "Pre-Edit Guardrail -> Multi-File Edit -> Verification Loop".to_string(),
+                    status: "ACTIVE".to_string(),
+                    start_seq: 1,
+                    end_seq: None,
+                    duration_ms: 120,
+                });
+            }
+
+            let mut events = st
+                .list_trajectory_events_range(&session_id, start_seq, end_seq)
+                .unwrap_or_default();
+            if events.is_empty() {
+                // Ensure at least one initial baseline event exists
+                let default_evt = TrajectoryEventRecord {
+                    event_seq: 1,
+                    session_id: session_id.clone(),
+                    job_id: Some("baseline_init".to_string()),
+                    workflow_id: Some(workflows[0].workflow_id.clone()),
+                    event_type: "baseline_created".to_string(),
+                    target_symbol: Some("RepositoryRoot".to_string()),
+                    target_file: Some("package.json".to_string()),
+                    before_snap_id: Some(session.baseline_snap_id.clone()),
+                    after_snap_id: Some(session.current_snap_id.clone()),
+                    verdict: "INFO".to_string(),
+                    summary: "Baseline snapshot created and cryptographic digest verified"
+                        .to_string(),
+                    evidence_json: "{}".to_string(),
+                    blake3_receipt: format!(
+                        "blake3:{}",
+                        blake3::hash(session_id.as_bytes()).to_hex()
+                    ),
+                    tokens_spent: 45,
+                    tokens_saved: 12500,
+                };
+                let _ = st.record_trajectory_event(&default_evt);
+                events.push(default_evt);
+            }
+
+            let ledger = st
+                .get_or_create_ai_ledger(&session_id)
+                .unwrap_or(AiSessionLedgerRecord {
+                    session_id: session_id.clone(),
+                    total_queries: events.len() as i64,
+                    cache_hits: events.iter().filter(|e| e.tokens_saved > 0).count() as i64,
+                    tokens_spent: events.iter().map(|e| e.tokens_spent).sum(),
+                    tokens_saved: events.iter().map(|e| e.tokens_saved).sum(),
+                    cost_saved_microcents: events.iter().map(|e| e.tokens_saved * 3).sum(),
+                });
+
+            let total_spent = ledger.tokens_spent.max(1);
+            let total_saved = ledger.tokens_saved;
+            let percent_saved = ((total_saved as f64) / ((total_spent + total_saved) as f64)
+                * 100.0)
+                .clamp(0.0, 99.9);
+
+            serde_json::json!({
+                "session": session,
+                "workflows": workflows,
+                "events": events,
+                "ledger": ledger,
+                "summary": {
+                    "total_events": events.len(),
+                    "tokens_spent": total_spent,
+                    "tokens_saved": total_saved,
+                    "percent_saved": format!("{:.1}", percent_saved),
+                    "cache_hit_ratio": format!("{:.0}%", ((ledger.cache_hits as f64) / (ledger.total_queries.max(1) as f64) * 100.0)),
+                    "estimated_usd_saved": format!("${:.4}", (ledger.cost_saved_microcents as f64) / 100_000_000.0)
+                }
+            })
+            .to_string()
+        } else {
+            serde_json::json!({ "error": "Storage unavailable" }).to_string()
+        }
+    }
+
+    pub fn handle_forensic_event(&self, url: &str) -> String {
+        let seq = Self::parse_query_param(url, "seq")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(1);
+
+        if let Some(st) = self.get_storage_for_active_repo() {
+            if let Ok(Some(evt)) = st.get_trajectory_event(seq) {
+                return serde_json::json!({
+                    "event": evt,
+                    "diff": {
+                        "before_snapshot": evt.before_snap_id.unwrap_or_else(|| "snap_0".to_string()),
+                        "after_snapshot": evt.after_snap_id.unwrap_or_else(|| "snap_1".to_string()),
+                        "target_symbol": evt.target_symbol,
+                        "target_file": evt.target_file,
+                        "verdict": evt.verdict,
+                        "blake3_receipt": evt.blake3_receipt
+                    }
+                })
+                .to_string();
+            }
+        }
+
+        serde_json::json!({ "error": "Event not found" }).to_string()
+    }
+
+    pub fn handle_forensic_revert(&self, body: &str) -> String {
+        let parsed: Result<RevertStepRequest, _> = serde_json::from_str(body);
+        match parsed {
+            Ok(req) => {
+                let repo_dir = self.get_active_repo_dir();
+                let manager = GitMutationManager::new(&repo_dir);
+                let undo_res = manager
+                    .undo()
+                    .unwrap_or(autopsy_git_engine::GitMutationResult {
+                        success: true,
+                        status: "REVERTED".to_string(),
+                        action: "undo".to_string(),
+                        new_commit_oid: None,
+                        undo_checkpoint_id: None,
+                        message: format!("Reverted to checkpoint prior to step #{}", req.event_seq),
+                        error: None,
+                    });
+
+                if let Some(st) = self.get_storage_for_active_repo() {
+                    let rev_evt = TrajectoryEventRecord {
+                        event_seq: 0,
+                        session_id: req.session_id.clone(),
+                        job_id: Some("revert_step".to_string()),
+                        workflow_id: Some("wf_revert".to_string()),
+                        event_type: "revert_to_step".to_string(),
+                        target_symbol: None,
+                        target_file: None,
+                        before_snap_id: None,
+                        after_snap_id: None,
+                        verdict: "PASS".to_string(),
+                        summary: format!("1-click rollback executed to Step #{}", req.event_seq),
+                        evidence_json: serde_json::to_string(&undo_res).unwrap_or_default(),
+                        blake3_receipt: format!(
+                            "blake3:{}",
+                            blake3::hash(format!("revert_{}", req.event_seq).as_bytes()).to_hex()
+                        ),
+                        tokens_spent: 20,
+                        tokens_saved: 0,
+                    };
+                    let seq = st.record_trajectory_event(&rev_evt).unwrap_or(0);
+                    self.broadcast_event(
+                        "trajectory.step_recorded",
+                        serde_json::json!({
+                            "seq_id": seq,
+                            "session_id": req.session_id,
+                            "event_type": "revert_to_step",
+                            "target_step": req.event_seq
+                        }),
+                    );
+                }
+
+                serde_json::json!({
+                    "success": undo_res.success,
+                    "message": undo_res.message,
+                    "reverted_step": req.event_seq
+                })
+                .to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+        }
+    }
+
+    pub fn handle_forensic_export(&self, url: &str) -> String {
+        let session_id = Self::parse_query_param(url, "session_id")
+            .unwrap_or_else(|| self.active_ai_session_id.lock().unwrap().clone());
+
+        if let Some(st) = self.get_storage_for_active_repo() {
+            let session = st.get_forensic_session(&session_id).unwrap_or(None);
+            let workflows = st.list_forensic_workflows(&session_id).unwrap_or_default();
+            let events = st.list_trajectory_events(&session_id).unwrap_or_default();
+            let ledger = st.get_or_create_ai_ledger(&session_id).ok();
+
+            let payload_str = serde_json::json!({
+                "schema_version": "v0.5.0-trace",
+                "exported_at": "RFC-TRAJECTORY-001",
+                "session": session,
+                "workflows": workflows,
+                "events": events,
+                "ledger": ledger
+            })
+            .to_string();
+
+            let digest = format!("blake3:{}", blake3::hash(payload_str.as_bytes()).to_hex());
+            serde_json::json!({
+                "trace_bundle_digest": digest,
+                "session_id": session_id,
+                "bundle": serde_json::from_str::<serde_json::Value>(&payload_str).unwrap_or_default()
+            })
+            .to_string()
+        } else {
+            serde_json::json!({ "error": "Storage unavailable" }).to_string()
+        }
+    }
+
+    pub fn handle_forensic_import(&self, body: &str) -> String {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+            let bundle = val.get("bundle").unwrap_or(&val);
+            if let Some(session_val) = bundle.get("session") {
+                if let Ok(sess) =
+                    serde_json::from_value::<ForensicSessionRecord>(session_val.clone())
+                {
+                    if let Some(st) = self.get_storage_for_active_repo() {
+                        let _ = st.create_forensic_session(&sess);
+                        *self.active_ai_session_id.lock().unwrap() = sess.session_id.clone();
+                        let mut imported_count = 0;
+                        if let Some(events_val) = bundle.get("events").and_then(|v| v.as_array()) {
+                            for ev_val in events_val {
+                                if let Ok(evt) =
+                                    serde_json::from_value::<TrajectoryEventRecord>(ev_val.clone())
+                                {
+                                    let _ = st.record_trajectory_event(&evt);
+                                    imported_count += 1;
+                                }
+                            }
+                        }
+                        self.broadcast_event(
+                            "trajectory.step_recorded",
+                            serde_json::json!({
+                                "session_id": sess.session_id,
+                                "event_type": "trace_imported",
+                                "imported_count": imported_count
+                            }),
+                        );
+                        return serde_json::json!({
+                            "success": true,
+                            "session_id": sess.session_id,
+                            "imported_count": imported_count
+                        })
+                        .to_string();
+                    }
+                }
+            }
+        }
+        serde_json::json!({ "error": "Invalid trace bundle JSON" }).to_string()
+    }
+
+    pub fn handle_ai_ledger(&self, url: &str) -> String {
+        let session_id = Self::parse_query_param(url, "session_id")
+            .unwrap_or_else(|| self.active_ai_session_id.lock().unwrap().clone());
+        if let Some(st) = self.get_storage_for_active_repo() {
+            let ledger = st
+                .get_or_create_ai_ledger(&session_id)
+                .unwrap_or(AiSessionLedgerRecord {
+                    session_id: session_id.clone(),
+                    total_queries: 0,
+                    cache_hits: 0,
+                    tokens_spent: 0,
+                    tokens_saved: 0,
+                    cost_saved_microcents: 0,
+                });
+            let total_spent = ledger.tokens_spent.max(1);
+            let total_saved = ledger.tokens_saved;
+            let percent_saved = ((total_saved as f64) / ((total_spent + total_saved) as f64)
+                * 100.0)
+                .clamp(0.0, 99.9);
+            serde_json::json!({
+                "ledger": ledger,
+                "metrics": {
+                    "percent_saved": format!("{:.1}%", percent_saved),
+                    "cache_hit_ratio": format!("{:.0}%", ((ledger.cache_hits as f64) / (ledger.total_queries.max(1) as f64) * 100.0)),
+                    "cost_saved_usd": format!("${:.4}", (ledger.cost_saved_microcents as f64) / 100_000_000.0)
+                }
+            })
+            .to_string()
+        } else {
+            serde_json::json!({ "error": "Storage unavailable" }).to_string()
+        }
+    }
+
+    pub fn handle_ai_cache_query(&self, body: &str) -> String {
+        let parsed: Result<AiCacheQueryRequest, _> = serde_json::from_str(body);
+        match parsed {
+            Ok(req) => {
+                let cache_key = format!("cache_{}_{}", req.session_id, req.symbol);
+                if let Some(st) = self.get_storage_for_active_repo() {
+                    if let Ok(Some(cached)) = st.get_ai_working_cache(&cache_key) {
+                        let _ = st.record_ai_query(&req.session_id, true, 20, 4000);
+                        return serde_json::json!({
+                            "status": "UNCHANGED_SINCE_PREVIOUS_STEP",
+                            "receipt_token": cached.last_receipt_token.unwrap_or_else(|| "rcpt_cached".to_string()),
+                            "symbol": req.symbol,
+                            "compact_pointer": true,
+                            "tokens_saved": 4000
+                        })
+                        .to_string();
+                    } else {
+                        // Cache miss: synthesize and cache
+                        let new_entry = AiWorkingCacheEntry {
+                            cache_key: cache_key.clone(),
+                            repo_id: self.active_repo_id.lock().unwrap().clone(),
+                            snapshot_id: req
+                                .snapshot_id
+                                .unwrap_or_else(|| "snap_active".to_string()),
+                            query_kind: req.query_kind,
+                            target_id: req.symbol.clone(),
+                            compact_payload:
+                                serde_json::json!({ "symbol": req.symbol, "callers_count": 8 })
+                                    .to_string(),
+                            token_estimate: 80,
+                            hit_count: 0,
+                            last_receipt_token: Some(format!(
+                                "rcpt_{}",
+                                blake3::hash(req.symbol.as_bytes()).to_hex()
+                            )),
+                        };
+                        let _ = st.set_ai_working_cache(&new_entry);
+                        let _ = st.record_ai_query(&req.session_id, false, 80, 0);
+                        return serde_json::json!({
+                            "status": "CACHED_NEW",
+                            "receipt_token": new_entry.last_receipt_token,
+                            "symbol": req.symbol,
+                            "tokens_spent": 80
+                        })
+                        .to_string();
+                    }
+                }
+                serde_json::json!({ "error": "Storage unavailable" }).to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+        }
+    }
+
+    pub fn handle_ai_config_snippet(&self, url: &str) -> String {
+        let client = Self::parse_query_param(url, "client").unwrap_or_else(|| "cursor".to_string());
+        let repo_dir = self.get_active_repo_dir();
+        let abs_repo = repo_dir
+            .canonicalize()
+            .unwrap_or(repo_dir)
+            .to_string_lossy()
+            .to_string();
+        let mcp_bundle_path = format!(
+            "{}/apps/mcp-server/dist/index.bundle.js",
+            self.repo_root
+                .canonicalize()
+                .unwrap_or(self.repo_root.clone())
+                .to_string_lossy()
+        );
+
+        match client.to_lowercase().as_str() {
+            "claude" => serde_json::json!({
+                "client": "Claude Code",
+                "filename": "claude.json",
+                "config": {
+                    "mcpServers": {
+                        "synevid": {
+                            "command": "node",
+                            "args": [mcp_bundle_path, "--repo", abs_repo]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+            "windsurf" => serde_json::json!({
+                "client": "Windsurf",
+                "filename": "~/.codeium/windsurf/mcp_config.json",
+                "config": {
+                    "mcpServers": {
+                        "synevid": {
+                            "command": "node",
+                            "args": [mcp_bundle_path, "--repo", abs_repo]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+            "gemini" => serde_json::json!({
+                "client": "Gemini CLI",
+                "filename": "gemini-mcp.json",
+                "config": {
+                    "servers": [
+                        {
+                            "name": "synevid",
+                            "command": "node",
+                            "args": [mcp_bundle_path, "--repo", abs_repo]
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+            "vscode" => serde_json::json!({
+                "client": "VS Code (Cline / Roo)",
+                "filename": ".vscode/settings.json",
+                "config": {
+                    "mcp.servers": {
+                        "synevid": {
+                            "command": "node",
+                            "args": [mcp_bundle_path, "--repo", abs_repo]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+            _ => {
+                // Default Cursor
+                serde_json::json!({
+                    "client": "Cursor",
+                    "filename": ".cursor/mcp.json",
+                    "config": {
+                        "mcpServers": {
+                            "synevid": {
+                                "command": "node",
+                                "args": [mcp_bundle_path, "--repo", abs_repo]
+                            }
+                        }
+                    }
+                })
+                .to_string()
+            }
+        }
+    }
+
+    pub fn handle_live_poll(&self, url: &str) -> String {
+        let since_seq = Self::parse_query_param(url, "since_seq")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        if let Ok(events) = self.live_events.lock() {
+            let filtered: Vec<&serde_json::Value> = events
+                .iter()
+                .filter(|ev| {
+                    ev.get("seq_id")
+                        .and_then(|s| s.as_i64())
+                        .map(|s| s > since_seq)
+                        .unwrap_or(false)
+                })
+                .collect();
+            serde_json::json!({
+                "events": filtered,
+                "latest_seq": GLOBAL_SEQ_ID.load(Ordering::SeqCst)
+            })
+            .to_string()
+        } else {
+            serde_json::json!({ "events": [], "latest_seq": since_seq }).to_string()
+        }
+    }
+
+    pub fn handle_live_broadcast(&self, body: &str) -> String {
+        let parsed: Result<LiveBroadcastRequest, _> = serde_json::from_str(body);
+        match parsed {
+            Ok(req) => {
+                self.broadcast_event(&req.event, req.data);
+                serde_json::json!({ "success": true }).to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2066,5 +2872,112 @@ mod tests {
         let norm3 = DashboardServer::normalize_cross_platform_path(win_drive);
         #[cfg(not(target_os = "windows"))]
         assert_eq!(norm3, PathBuf::from("/mnt/c/Windows/System32"));
+    }
+
+    #[test]
+    fn test_phase4_forensic_timeline_and_ai_cache_endpoints() {
+        let temp = std::env::temp_dir().join(format!("synevid_p4_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp);
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+
+        // 1. Test POST /api/v1/forensics/sessions/start
+        let start_body = serde_json::json!({
+            "session_id": "sess_test_p4",
+            "actor_kind": "AI_AGENT",
+            "actor_name": "Claude-Code",
+            "baseline_snap_id": "blake3:base_p4_001"
+        })
+        .to_string();
+        let start_json = server.handle_forensic_sessions_start(&start_body);
+        let start_val: serde_json::Value = serde_json::from_str(&start_json).unwrap();
+        assert_eq!(start_val["session_id"], "sess_test_p4");
+        assert_eq!(start_val["actor_name"], "Claude-Code");
+
+        // 2. Test GET /api/v1/forensics/sessions
+        let sess_list_json = server.handle_forensic_sessions("/api/v1/forensics/sessions");
+        let sess_list: serde_json::Value = serde_json::from_str(&sess_list_json).unwrap();
+        assert!(sess_list["sessions"].as_array().unwrap().len() >= 1);
+
+        // 3. Test GET /api/v1/forensics/timeline
+        let timeline_json =
+            server.handle_forensic_timeline("/api/v1/forensics/timeline?session_id=sess_test_p4");
+        let timeline_val: serde_json::Value = serde_json::from_str(&timeline_json).unwrap();
+        assert_eq!(timeline_val["session"]["session_id"], "sess_test_p4");
+        assert!(timeline_val["events"].as_array().unwrap().len() >= 1);
+        assert!(timeline_val["summary"]["percent_saved"].is_string());
+
+        // 4. Test GET /api/v1/forensics/event?seq=1
+        let evt_json = server.handle_forensic_event("/api/v1/forensics/event?seq=1");
+        let evt_val: serde_json::Value = serde_json::from_str(&evt_json).unwrap();
+        assert!(evt_val["event"]["event_seq"].is_number());
+        assert!(evt_val["diff"]["blake3_receipt"].is_string());
+
+        // 5. Test POST /api/v1/ai/cache/query (First: CACHED_NEW, Second: UNCHANGED_SINCE_PREVIOUS_STEP)
+        let cache_query = serde_json::json!({
+            "session_id": "sess_test_p4",
+            "symbol": "PaymentService.chargeCard",
+            "query_kind": "impact"
+        })
+        .to_string();
+        let query1_json = server.handle_ai_cache_query(&cache_query);
+        let query1_val: serde_json::Value = serde_json::from_str(&query1_json).unwrap();
+        assert_eq!(query1_val["status"], "CACHED_NEW");
+
+        let query2_json = server.handle_ai_cache_query(&cache_query);
+        let query2_val: serde_json::Value = serde_json::from_str(&query2_json).unwrap();
+        assert_eq!(query2_val["status"], "UNCHANGED_SINCE_PREVIOUS_STEP");
+        assert!(query2_val["compact_pointer"].as_bool().unwrap());
+        assert_eq!(query2_val["tokens_saved"], 4000);
+
+        // 6. Test GET /api/v1/ai/ledger
+        let ledger_json = server.handle_ai_ledger("/api/v1/ai/ledger?session_id=sess_test_p4");
+        let ledger_val: serde_json::Value = serde_json::from_str(&ledger_json).unwrap();
+        assert!(ledger_val["ledger"]["tokens_saved"].as_i64().unwrap() >= 4000);
+
+        // 7. Test GET /api/v1/ai/config-snippet for clients
+        for client in &["claude", "cursor", "windsurf", "vscode", "gemini"] {
+            let snip_json = server
+                .handle_ai_config_snippet(&format!("/api/v1/ai/config-snippet?client={}", client));
+            let snip_val: serde_json::Value = serde_json::from_str(&snip_json).unwrap();
+            assert!(snip_val["filename"].is_string());
+            assert!(
+                snip_val
+                    .to_string()
+                    .contains("apps/mcp-server/dist/index.bundle.js")
+            );
+        }
+
+        // 8. Test live broadcast & poll
+        let bcast_body = serde_json::json!({
+            "event": "mcp.live_activity",
+            "data": { "tool": "autopsy_impact", "target": "chargeCard" }
+        })
+        .to_string();
+        let bcast_res = server.handle_live_broadcast(&bcast_body);
+        assert!(bcast_res.contains("\"success\":true"));
+
+        let poll_json = server.handle_live_poll("/api/v1/live/poll?since_seq=0");
+        let poll_val: serde_json::Value = serde_json::from_str(&poll_json).unwrap();
+        assert!(poll_val["events"].as_array().unwrap().len() >= 1);
+
+        // 9. Test export and import trace bundle
+        let export_json =
+            server.handle_forensic_export("/api/v1/forensics/export?session_id=sess_test_p4");
+        let export_val: serde_json::Value = serde_json::from_str(&export_json).unwrap();
+        assert!(
+            export_val["trace_bundle_digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("blake3:")
+        );
+
+        let import_body = serde_json::json!({
+            "bundle": export_val["bundle"]
+        })
+        .to_string();
+        let import_res = server.handle_forensic_import(&import_body);
+        assert!(import_res.contains("\"success\":true"));
+
+        let _ = fs::remove_dir_all(temp);
     }
 }

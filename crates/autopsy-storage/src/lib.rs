@@ -13,9 +13,9 @@ use thiserror::Error;
 
 pub mod rows;
 pub use rows::{
-    AiWorkingCacheEntry, CoChangeEdgeRow, ContractRow, EgoNetwork, ForensicSessionRecord,
-    GraphEdgeRow, GraphNodeRow, RepoRecord, TemporalFactRow, TestMappingRow, TrajectoryEventRecord,
-    validate_coverage,
+    AiSessionLedgerRecord, AiWorkingCacheEntry, CoChangeEdgeRow, ContractRow, EgoNetwork,
+    ForensicSessionRecord, ForensicWorkflowRecord, GraphEdgeRow, GraphNodeRow, RepoRecord,
+    TemporalFactRow, TestMappingRow, TrajectoryEventRecord, validate_coverage,
 };
 
 #[derive(Debug, Error)]
@@ -384,7 +384,9 @@ impl StorageEngine {
                     verdict TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     evidence_json TEXT NOT NULL,
-                    blake3_receipt TEXT NOT NULL
+                    blake3_receipt TEXT NOT NULL,
+                    tokens_spent INTEGER NOT NULL DEFAULT 0,
+                    tokens_saved INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_trajectory_session ON trajectory_events(session_id, event_seq);
 
@@ -396,7 +398,8 @@ impl StorageEngine {
                     target_id TEXT NOT NULL,
                     compact_payload TEXT NOT NULL,
                     token_estimate INTEGER NOT NULL,
-                    hit_count INTEGER NOT NULL DEFAULT 0
+                    hit_count INTEGER NOT NULL DEFAULT 0,
+                    last_receipt_token TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_ai_cache_snap ON ai_working_cache(repo_id, snapshot_id);
 
@@ -404,6 +407,65 @@ impl StorageEngine {
                 VALUES (4, datetime('now'));
                 COMMIT;",
             )?;
+        }
+
+        // --- Migration 005: Phase 4 (v0.5.0) Real-Time Forensic Trajectory Timeline & AI Working Cache ---
+        if current_version < 5 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS forensic_workflows (
+                    workflow_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    start_seq INTEGER NOT NULL,
+                    end_seq INTEGER,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(session_id) REFERENCES forensic_sessions(session_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_workflow_session ON forensic_workflows(session_id);
+
+                CREATE TABLE IF NOT EXISTS ai_session_ledger (
+                    session_id TEXT PRIMARY KEY,
+                    total_queries INTEGER NOT NULL DEFAULT 0,
+                    cache_hits INTEGER NOT NULL DEFAULT 0,
+                    tokens_spent INTEGER NOT NULL DEFAULT 0,
+                    tokens_saved INTEGER NOT NULL DEFAULT 0,
+                    cost_saved_microcents INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(session_id) REFERENCES forensic_sessions(session_id) ON DELETE CASCADE
+                );
+
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (5, datetime('now'));
+                COMMIT;",
+            )?;
+
+            // Resilient column checks for pre-existing databases
+            let has_col = |table: &str, col: &str| -> bool {
+                if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({});", table)) {
+                    if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
+                        for name in rows.flatten() {
+                            if name == col {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            };
+
+            if !has_col("trajectory_events", "tokens_spent") {
+                let _ = conn.execute("ALTER TABLE trajectory_events ADD COLUMN tokens_spent INTEGER NOT NULL DEFAULT 0;", []);
+            }
+            if !has_col("trajectory_events", "tokens_saved") {
+                let _ = conn.execute("ALTER TABLE trajectory_events ADD COLUMN tokens_saved INTEGER NOT NULL DEFAULT 0;", []);
+            }
+            if !has_col("ai_working_cache", "last_receipt_token") {
+                let _ = conn.execute(
+                    "ALTER TABLE ai_working_cache ADD COLUMN last_receipt_token TEXT;",
+                    [],
+                );
+            }
         }
 
         Ok(())
@@ -905,8 +967,8 @@ mod tests {
     #[test]
     fn test_migration_002_creates_pillar_tables() {
         let engine = StorageEngine::in_memory().unwrap();
-        // 002 creates the tables; 003 reshapes two of them; 004 adds Phase 1 visual tables.
-        assert_eq!(engine.schema_version().unwrap(), 4);
+        // 002 creates the tables; 003 reshapes two of them; 004 adds Phase 1 visual tables; 005 adds Phase 4 forensics.
+        assert_eq!(engine.schema_version().unwrap(), 5);
 
         let tables = table_names(&engine);
         for expected in [
@@ -920,6 +982,8 @@ mod tests {
             "forensic_sessions",
             "trajectory_events",
             "ai_working_cache",
+            "forensic_workflows",
+            "ai_session_ledger",
         ] {
             assert!(
                 tables.contains(&expected.to_string()),
@@ -941,6 +1005,7 @@ mod tests {
             "idx_distributed_contracts_endpoint",
             "idx_co_change_matrix_a",
             "idx_co_change_matrix_b",
+            "idx_workflow_session",
         ] {
             assert!(
                 indexes.contains(&expected.to_string()),
@@ -978,14 +1043,16 @@ mod tests {
             },
         )
         .unwrap();
-        // The upgrade runs through 002, 003 *and* 004 in place.
-        assert_eq!(engine.schema_version().unwrap(), 4);
+        // The upgrade runs through 002, 003, 004 *and* 005 in place.
+        assert_eq!(engine.schema_version().unwrap(), 5);
 
         let tables = table_names(&engine);
         assert!(tables.contains(&"temporal_facts".to_string()));
         assert!(tables.contains(&"test_mappings".to_string()));
         assert!(tables.contains(&"distributed_contracts".to_string()));
         assert!(tables.contains(&"co_change_matrix".to_string()));
+        assert!(tables.contains(&"forensic_workflows".to_string()));
+        assert!(tables.contains(&"ai_session_ledger".to_string()));
 
         // v1 data survives the upgrade.
         assert!(tables.contains(&"snapshots".to_string()));
@@ -1007,11 +1074,11 @@ mod tests {
 
         for _ in 0..3 {
             let engine = StorageEngine::open(&db_path, opts()).unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 4);
+            assert_eq!(engine.schema_version().unwrap(), 5);
             // Re-running migrations explicitly must be a no-op.
             let mut engine = engine;
             engine.run_migrations().unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 4);
+            assert_eq!(engine.schema_version().unwrap(), 5);
         }
 
         // Exactly one row per migration version: no duplicate application.
@@ -1020,8 +1087,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            count, 4,
-            "expected versions 1, 2, 3 and 4 exactly once each"
+            count, 5,
+            "expected versions 1, 2, 3, 4 and 5 exactly once each"
         );
 
         let _ = fs::remove_dir_all(temp_dir);
@@ -1087,7 +1154,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 4);
+        assert_eq!(engine.schema_version().unwrap(), 5);
 
         // The v2 fact survived, and its coverage is the documented ALTER default. A row
         // that read back as `verified` would be a lie; `unknown` says "no coverage stated".
@@ -1126,7 +1193,7 @@ mod tests {
 
         // Re-running migrations on the upgraded database is a no-op.
         engine.run_migrations().unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 4);
+        assert_eq!(engine.schema_version().unwrap(), 5);
 
         drop(engine);
         let _ = fs::remove_dir_all(temp_dir);
@@ -1373,12 +1440,15 @@ mod tests {
             summary: "All contracts intact".to_string(),
             evidence_json: "{}".to_string(),
             blake3_receipt: "blake3:abc123456789".to_string(),
+            tokens_spent: 120,
+            tokens_saved: 450,
         };
         let seq = engine.record_trajectory_event(&event).unwrap();
         assert_eq!(seq, 1);
         let timeline = engine.list_trajectory_events("sess_001").unwrap();
         assert_eq!(timeline.len(), 1);
         assert_eq!(timeline[0].verdict, "PASS");
+        assert_eq!(timeline[0].tokens_saved, 450);
 
         // 5. AI Working Cache
         let cache_entry = AiWorkingCacheEntry {
@@ -1390,6 +1460,7 @@ mod tests {
             compact_payload: "{\"callers\":[\"OrderController.createOrder\"]}".to_string(),
             token_estimate: 45,
             hit_count: 0,
+            last_receipt_token: Some("rcpt_01".to_string()),
         };
         engine.set_ai_working_cache(&cache_entry).unwrap();
         let hit = engine
@@ -1441,5 +1512,155 @@ mod tests {
         assert!(temp_dir.join("storage.db.bak").exists()); // .bak was preserved!
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_session_workflow_job_timeline_lifecycle() {
+        let engine = StorageEngine::in_memory().unwrap();
+
+        // 1. Forensic Session (Tier 1)
+        let session = ForensicSessionRecord {
+            session_id: "sess_p4_001".to_string(),
+            repo_id: "repo_billing".to_string(),
+            actor_kind: "AI_AGENT".to_string(),
+            actor_name: "Claude-Code".to_string(),
+            baseline_snap_id: "blake3:base000".to_string(),
+            current_snap_id: "blake3:base000".to_string(),
+            status: "ACTIVE".to_string(),
+        };
+        engine.create_forensic_session(&session).unwrap();
+
+        let loaded_sess = engine.get_forensic_session("sess_p4_001").unwrap().unwrap();
+        assert_eq!(loaded_sess.actor_name, "Claude-Code");
+        assert_eq!(loaded_sess.status, "ACTIVE");
+
+        // 2. Forensic Workflow (Tier 2)
+        let workflow = ForensicWorkflowRecord {
+            workflow_id: "wf_p4_refactor_auth".to_string(),
+            session_id: "sess_p4_001".to_string(),
+            name: "Pre-Edit Guardrail -> Multi-File Edit -> Verification Loop".to_string(),
+            status: "RUNNING".to_string(),
+            start_seq: 1,
+            end_seq: None,
+            duration_ms: 0,
+        };
+        engine.create_forensic_workflow(&workflow).unwrap();
+
+        let workflows = engine.list_forensic_workflows("sess_p4_001").unwrap();
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(
+            workflows[0].name,
+            "Pre-Edit Guardrail -> Multi-File Edit -> Verification Loop"
+        );
+
+        // 3. 5 Sequential Operations (Tier 3)
+        let ops = vec![
+            (
+                "baseline_created",
+                "PaymentService",
+                "src/PaymentService.ts",
+                "INFO",
+                "Baseline snapshot pinned",
+                "blake3:a111",
+                50,
+                0,
+            ),
+            (
+                "impact_queried",
+                "chargeCard",
+                "src/PaymentService.ts",
+                "INFO",
+                "10 callers mapped",
+                "blake3:b222",
+                180,
+                25000,
+            ),
+            (
+                "simulate_edit",
+                "chargeCard",
+                "src/PaymentService.ts",
+                "FAIL",
+                "2 broken callers detected",
+                "blake3:c333",
+                90,
+                8000,
+            ),
+            (
+                "simulate_edit",
+                "chargeCard",
+                "src/PaymentService.ts",
+                "PASS",
+                "Contract repaired",
+                "blake3:d444",
+                60,
+                8000,
+            ),
+            (
+                "verify_run",
+                "PaymentService",
+                "src/PaymentService.ts",
+                "PASS",
+                "Verified invariant pass",
+                "blake3:e555",
+                120,
+                15000,
+            ),
+        ];
+
+        let mut seqs = Vec::new();
+        for (event_type, sym, file, verdict, summary, receipt, spent, saved) in ops {
+            let evt = TrajectoryEventRecord {
+                event_seq: 0,
+                session_id: "sess_p4_001".to_string(),
+                job_id: Some(format!("job_{}", event_type)),
+                workflow_id: Some("wf_p4_refactor_auth".to_string()),
+                event_type: event_type.to_string(),
+                target_symbol: Some(sym.to_string()),
+                target_file: Some(file.to_string()),
+                before_snap_id: Some("snap_A".to_string()),
+                after_snap_id: Some("snap_B".to_string()),
+                verdict: verdict.to_string(),
+                summary: summary.to_string(),
+                evidence_json: "{}".to_string(),
+                blake3_receipt: receipt.to_string(),
+                tokens_spent: spent,
+                tokens_saved: saved,
+            };
+            let seq = engine.record_trajectory_event(&evt).unwrap();
+            seqs.push(seq);
+        }
+
+        assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+
+        // Verify sequence order and non-empty receipts
+        let timeline = engine.list_trajectory_events("sess_p4_001").unwrap();
+        assert_eq!(timeline.len(), 5);
+        for (i, evt) in timeline.iter().enumerate() {
+            assert_eq!(evt.event_seq, (i + 1) as i64);
+            assert!(evt.blake3_receipt.starts_with("blake3:"));
+        }
+
+        // Test range query (e.g., Step #2 to #4)
+        let slice = engine
+            .list_trajectory_events_range("sess_p4_001", 2, 4)
+            .unwrap();
+        assert_eq!(slice.len(), 3);
+        assert_eq!(slice[0].event_seq, 2);
+        assert_eq!(slice[2].event_seq, 4);
+
+        // 4. AI Session Ledger
+        for evt in &timeline {
+            let hit = evt.tokens_saved > 0;
+            engine
+                .record_ai_query("sess_p4_001", hit, evt.tokens_spent, evt.tokens_saved)
+                .unwrap();
+        }
+
+        let ledger = engine.get_or_create_ai_ledger("sess_p4_001").unwrap();
+        assert_eq!(ledger.total_queries, 5);
+        assert_eq!(ledger.cache_hits, 4);
+        assert_eq!(ledger.tokens_spent, 500);
+        assert_eq!(ledger.tokens_saved, 56000);
+        assert!(ledger.cost_saved_microcents > 0);
     }
 }
