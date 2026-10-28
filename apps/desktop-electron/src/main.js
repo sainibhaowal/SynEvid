@@ -7,7 +7,7 @@ let mainWindow = null;
 let daemonProcess = null;
 let webProcess = null;
 const DAEMON_PORT = process.env.SYNEVID_PORT || 3333;
-const COCKPIT_URL = process.env.COCKPIT_URL || 'http://localhost:3000';
+const COCKPIT_URL = process.env.COCKPIT_URL || 'http://127.0.0.1:3000';
 
 const SPLASH_HTML = `<!DOCTYPE html>
 <html>
@@ -86,7 +86,7 @@ const SPLASH_HTML = `<!DOCTYPE html>
 <body>
   <div class="brand">
     <span class="brand-title">SYNEVID</span>
-    <span class="badge">v0.4.0</span>
+    <span class="badge">v0.5.0</span>
   </div>
   <div class="status-box">
     <div class="spinner"></div>
@@ -118,7 +118,7 @@ function checkServiceHealth(targetUrl, timeoutMs = 800) {
       const u = new URL(targetUrl);
       const req = http.get(
         {
-          hostname: u.hostname,
+          hostname: u.hostname === 'localhost' ? '127.0.0.1' : u.hostname,
           port: u.port,
           path: u.pathname,
           timeout: timeoutMs,
@@ -162,8 +162,8 @@ async function ensureSidecarDaemon() {
       console.log(`[SynEvid Desktop] Spawning Linux daemon via WSL from ${linuxRepoRoot}`);
       daemonProcess = spawn(
         'wsl.exe',
-        ['bash', '-c', `cd "${linuxRepoRoot}" && setsid ./target/debug/synevid-ui --port ${DAEMON_PORT} > /tmp/synevid-ui.log 2>&1 < /dev/null &`],
-        { stdio: 'ignore', detached: false }
+        ['-d', 'Ubuntu', 'bash', '-lc', `cd "${linuxRepoRoot}" && ./target/debug/synevid-ui --port ${DAEMON_PORT} > /tmp/synevid-ui.log 2>&1`],
+        { stdio: 'ignore', detached: true }
       );
     } else {
       const daemonBinary = path.join(
@@ -209,13 +209,13 @@ async function ensureWebCockpit() {
       console.log(`[SynEvid Desktop] Spawning Next.js via WSL at ${linuxRepoRoot}/apps/web`);
       webProcess = spawn(
         'wsl.exe',
-        ['bash', '-c', `cd "${linuxRepoRoot}/apps/web" && setsid npx next dev -p 3000 > /tmp/next-dev.log 2>&1 < /dev/null &`],
-        { stdio: 'ignore', detached: false }
+        ['-d', 'Ubuntu', 'bash', '-lc', `cd "${linuxRepoRoot}/apps/web" && npx next dev -p 3000 -H 0.0.0.0 > /tmp/next-dev.log 2>&1`],
+        { stdio: 'ignore', detached: true }
       );
     } else {
       const webDir = path.join(repoRoot, 'apps/web');
       const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-      webProcess = spawn(cmd, ['next', 'dev', '-p', '3000'], {
+      webProcess = spawn(cmd, ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], {
         cwd: webDir,
         stdio: 'ignore',
         detached: false,
@@ -262,6 +262,17 @@ function createWindow() {
   // Show immediate splash screen while services connect
   const splashDataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML);
   mainWindow.loadURL(splashDataUrl);
+
+  // Catch any navigation failure and retry rather than leaving a blank screen
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.warn(`[SynEvid Desktop] Load failed: ${validatedURL} (${errorCode}: ${errorDescription})`);
+    setTimeout(async () => {
+      const ready = await checkServiceHealth(COCKPIT_URL);
+      if (ready && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(COCKPIT_URL).catch(() => {});
+      }
+    }, 1500);
+  });
 
   // Poll for Cockpit readiness and transition cleanly
   let attempts = 0;
