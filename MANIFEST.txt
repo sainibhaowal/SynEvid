@@ -59,6 +59,10 @@ apps/synevid-lsp/src/hover.rs
 apps/synevid-lsp/src/lib.rs
 apps/synevid-lsp/src/main.rs
 apps/synevid-lsp/src/protocol.rs
+apps/synevid-ui/Cargo.toml
+apps/synevid-ui/src/indexer.rs
+apps/synevid-ui/src/main.rs
+apps/synevid-ui/src/server.rs
 apps/vscode-extension/extension.js
 apps/vscode-extension/package.json
 apps/vscode-extension/test/extension.test.js
@@ -66,6 +70,17 @@ apps/web-inspector/README.md
 apps/web-inspector/index.html
 apps/web-inspector/package.json
 apps/web-inspector/test/inspector.test.js
+apps/web-inspector/test/phase2_cockpit.test.js
+apps/web/src/app/globals.css
+apps/web/src/app/layout.tsx
+apps/web/src/components/CapabilitiesModal.tsx
+apps/web/src/components/CodeUniverse3D.tsx
+apps/web/src/components/ConnectRepoModal.tsx
+apps/web/src/components/GitGalaxySection.tsx
+apps/web/src/components/RepoTreeExplorer.tsx
+apps/web/src/components/TooltipLayer.tsx
+apps/web/src/components/denseUniverseRenderer.ts
+apps/web/test/phase2_ui.test.mjs
 assets/banner.jpg
 assets/banner_initial.jpg
 assets/logo.jpg
@@ -258,6 +273,8 @@ crates/autopsy-mining/src/history.rs
 crates/autopsy-mining/src/lib.rs
 crates/autopsy-mining/tests/schema_conformance.rs
 crates/autopsy-mining/tests/step42_mining.rs
+crates/autopsy-plugin-api/Cargo.toml
+crates/autopsy-plugin-api/src/lib.rs
 crates/autopsy-repo/Cargo.toml
 crates/autopsy-repo/src/lib.rs
 crates/autopsy-report/Cargo.toml
@@ -359,6 +376,11 @@ docs/evidence/37-tier3-polish.md
 docs/evidence/38-agent-gate-closure.md
 docs/evidence/39-install-update-lifecycle.md
 docs/evidence/40-p0-release-plugin-and-forensic-trajectory.md
+docs/evidence/90-electron-shell-recovery-and-cockpit-actions.md
+docs/evidence/91-rounded-app-wide-icon-tooltips.md
+docs/evidence/92-rich-visual-workspace-manuals.md
+docs/evidence/93-phase1-real-scan-incremental-daemon-closure.md
+docs/evidence/94-phase2-real-canvas-simulator-and-performance.md
 docs/requirements/COVERAGE_APPENDIX.md
 docs/requirements/TRACEABILITY.md
 docs/security/THREAT_MODEL.md
@@ -408,3 +430,4 @@ tests/tests/e2e_phase5_cli_and_storage.rs
 tests/tests/e2e_phase6_benchmarks.rs
 tests/tests/e2e_repo_scan_and_ignores.rs
 tests/tests/e2e_snapshot_determinism.rs
+tests/tests/phase1_incremental_determinism.rs

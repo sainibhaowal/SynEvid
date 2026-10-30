@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -14,7 +14,6 @@ import {
   RotateCcw,
   ChevronsUpDown,
   ChevronsDownUp,
-  GitBranch,
 } from 'lucide-react';
 import { RepoFileItem, api, GitStatusReport } from '@/lib/api';
 
@@ -27,6 +26,21 @@ export interface TreeNode {
   gitStatus?: 'modified' | 'untracked' | 'staged' | 'deleted' | 'ignored';
   children?: TreeNode[];
   fileCount?: number;
+}
+
+const TREE_ROW_HEIGHT = 24;
+const TREE_OVERSCAN = 8;
+
+interface FileEntry {
+  __isFile: true;
+  file: RepoFileItem;
+}
+
+function isFileEntry(value: unknown): value is FileEntry {
+  return typeof value === 'object' && value !== null &&
+    Object.prototype.hasOwnProperty.call(value, '__isFile') &&
+    (value as { __isFile?: unknown }).__isFile === true &&
+    Object.prototype.hasOwnProperty.call(value, 'file');
 }
 
 interface RepoTreeExplorerProps {
@@ -43,12 +57,12 @@ function buildTreeFromFiles(
   files: RepoFileItem[],
   statusMap: Record<string, 'modified' | 'untracked' | 'staged' | 'deleted' | 'ignored'> = {}
 ): { tree: TreeNode[]; folderCount: number } {
-  const root: { [key: string]: any } = {};
+  const root: Record<string, unknown> = {};
   let totalFolders = 0;
 
   for (const file of files) {
     const parts = file.path.split('/').filter(Boolean);
-    let current = root;
+    let current: Record<string, unknown> = root;
 
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
@@ -64,17 +78,17 @@ function buildTreeFromFiles(
           current[part] = {};
           totalFolders++;
         }
-        current = current[part];
+        current = current[part] as Record<string, unknown>;
       }
     }
   }
 
-  function convert(obj: any, currentPath: string): TreeNode[] {
+  function convert(obj: Record<string, unknown>, currentPath: string): TreeNode[] {
     const nodes: TreeNode[] = [];
 
     const keys = Object.keys(obj).sort((a, b) => {
-      const aIsFile = !!obj[a].__isFile;
-      const bIsFile = !!obj[b].__isFile;
+      const aIsFile = isFileEntry(obj[a]);
+      const bIsFile = isFileEntry(obj[b]);
       if (aIsFile !== bIsFile) {
         return aIsFile ? 1 : -1; // folders first
       }
@@ -85,8 +99,8 @@ function buildTreeFromFiles(
       const val = obj[key];
       const fullPath = currentPath ? `${currentPath}/${key}` : key;
 
-      if (val.__isFile) {
-        const f: RepoFileItem = val.file;
+      if (isFileEntry(val)) {
+        const f = val.file;
         const gitStatus = statusMap[fullPath] || statusMap[f.path];
         nodes.push({
           id: fullPath,
@@ -97,7 +111,7 @@ function buildTreeFromFiles(
           gitStatus,
         });
       } else {
-        const children = convert(val, fullPath);
+        const children = convert(val as Record<string, unknown>, fullPath);
         const countFiles = (nList: TreeNode[]): number =>
           nList.reduce((acc, n) => acc + (n.isFolder ? countFiles(n.children || []) : 1), 0);
         
@@ -148,9 +162,12 @@ export default function RepoTreeExplorer({
   }, []);
 
   useEffect(() => {
-    fetchGitStatus();
+    const initialFetch = setTimeout(() => { void fetchGitStatus(); }, 0);
     const interval = setInterval(fetchGitStatus, 2500);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialFetch);
+      clearInterval(interval);
+    };
   }, [fetchGitStatus, files]);
 
   const activeGitStatusMap = useMemo(() => {
@@ -240,6 +257,39 @@ export default function RepoTreeExplorer({
     return expandedFolders;
   }, [expandedFolders, autoExpandedMatching, searchQuery]);
 
+  const treeViewportRef = useRef<HTMLDivElement>(null);
+  const [treeScrollTop, setTreeScrollTop] = useState(0);
+  const [treeViewportHeight, setTreeViewportHeight] = useState(480);
+  const visibleRows = useMemo(() => {
+    const rows: Array<{ node: TreeNode; depth: number }> = [];
+    const appendVisibleRows = (nodes: TreeNode[], depth: number) => {
+      for (const node of nodes) {
+        rows.push({ node, depth });
+        if (node.isFolder && effectiveExpanded.has(node.id)) {
+          appendVisibleRows(node.children || [], depth + 1);
+        }
+      }
+    };
+    appendVisibleRows(filteredTree, 0);
+    return rows;
+  }, [effectiveExpanded, filteredTree]);
+
+  useEffect(() => {
+    const viewport = treeViewportRef.current;
+    if (!viewport) return;
+    const updateHeight = () => setTreeViewportHeight(viewport.clientHeight);
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  const firstVisibleRow = Math.max(0, Math.floor(treeScrollTop / TREE_ROW_HEIGHT) - TREE_OVERSCAN);
+  const lastVisibleRow = Math.min(
+    visibleRows.length,
+    Math.ceil((treeScrollTop + treeViewportHeight) / TREE_ROW_HEIGHT) + TREE_OVERSCAN
+  );
+  const windowedRows = visibleRows.slice(firstVisibleRow, lastVisibleRow);
+
   const toggleFolder = (folderId: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -291,59 +341,53 @@ export default function RepoTreeExplorer({
       const isExpanded = effectiveExpanded.has(node.id);
 
       return (
-        <div key={node.id} className="select-none">
-          {/* Folder Row */}
-          <div
-            onClick={() => toggleFolder(node.id)}
-            style={{ paddingLeft: `${depth * 12 + 6}px` }}
-            className="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-[var(--card-elevated)] cursor-pointer text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors group"
-          >
-            <div className="flex items-center space-x-1.5 truncate">
-              {isExpanded ? (
-                <ChevronDown className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform" />
-              ) : (
-                <ChevronRight className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform" />
-              )}
-              {isExpanded ? (
-                <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
-              ) : (
-                <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
-              )}
-              <span className={`truncate text-xs font-semibold ${
-                node.gitStatus === 'modified' ? 'text-amber-500' :
-                node.gitStatus === 'untracked' ? 'text-emerald-500' :
-                node.gitStatus === 'staged' ? 'text-emerald-400' : ''
-              }`}>
-                {node.name}
-              </span>
-            </div>
-
-            <div className="flex items-center space-x-1 shrink-0 ml-1">
-              {node.gitStatus && (
-                <span className={`text-[9px] font-mono px-1 py-0.2 rounded font-bold ${
-                  node.gitStatus === 'modified'
-                    ? 'bg-amber-500/20 text-amber-500 border border-amber-500/30'
-                    : node.gitStatus === 'untracked'
-                    ? 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/30'
-                    : 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
-                }`}>
-                  {node.gitStatus === 'modified' ? '● M' : node.gitStatus === 'untracked' ? '● U' : '● S'}
-                </span>
-              )}
-              {node.fileCount !== undefined && node.fileCount > 0 && (
-                <span className="text-[9px] font-mono text-[var(--text-muted)] px-1 py-0.2 rounded bg-[var(--card-elevated)] border border-[var(--border-subtle)]">
-                  {node.fileCount}
-                </span>
-              )}
-            </div>
+        <div
+          role="treeitem"
+          aria-level={depth + 1}
+          aria-expanded={isExpanded}
+          aria-selected={false}
+          onClick={() => toggleFolder(node.id)}
+          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          className="flex h-6 box-border select-none items-center justify-between rounded-lg px-1.5 text-[var(--text-secondary)] transition-colors group hover:bg-[var(--card-elevated)] hover:text-[var(--text-primary)]"
+        >
+          <div className="flex items-center space-x-1.5 truncate">
+            {isExpanded ? (
+              <ChevronDown className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 text-[var(--text-muted)] group-hover:text-[var(--text-primary)] shrink-0 transition-transform" />
+            )}
+            {isExpanded ? (
+              <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
+            ) : (
+              <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
+            )}
+            <span className={`truncate text-xs font-semibold ${
+              node.gitStatus === 'modified' ? 'text-amber-500' :
+              node.gitStatus === 'untracked' ? 'text-emerald-500' :
+              node.gitStatus === 'staged' ? 'text-emerald-400' : ''
+            }`}>
+              {node.name}
+            </span>
           </div>
 
-          {/* Folder Children */}
-          {isExpanded && node.children && (
-            <div className="border-l border-[var(--border-subtle)]/60 ml-[13px] my-0.5">
-              {node.children.map((child) => renderTreeNode(child, depth + 1))}
-            </div>
-          )}
+          <div className="flex items-center space-x-1 shrink-0 ml-1">
+            {node.gitStatus && (
+              <span className={`text-[9px] font-mono px-1 py-0.2 rounded font-bold ${
+                node.gitStatus === 'modified'
+                  ? 'bg-amber-500/20 text-amber-500 border border-amber-500/30'
+                  : node.gitStatus === 'untracked'
+                  ? 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/30'
+                  : 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
+              }`}>
+                {node.gitStatus === 'modified' ? '● M' : node.gitStatus === 'untracked' ? '● U' : '● S'}
+              </span>
+            )}
+            {node.fileCount !== undefined && node.fileCount > 0 && (
+              <span className="text-[9px] font-mono text-[var(--text-muted)] px-1 py-0.2 rounded bg-[var(--card-elevated)] border border-[var(--border-subtle)]">
+                {node.fileCount}
+              </span>
+            )}
+          </div>
         </div>
       );
     }
@@ -353,10 +397,12 @@ export default function RepoTreeExplorer({
 
     return (
       <div
-        key={node.id}
+        role="treeitem"
+        aria-level={depth + 1}
+        aria-selected={isSelected}
         onClick={() => onSelectFile(node.id)}
         style={{ paddingLeft: `${depth * 12 + 18}px` }}
-        className={`flex items-center justify-between py-1 px-1.5 rounded-lg cursor-pointer transition-all group ${
+        className={`flex h-6 box-border items-center justify-between px-1.5 rounded-lg cursor-pointer transition-all group ${
           isSelected
             ? 'bg-sky-100/90 dark:bg-cyan-500/15 border border-sky-300 dark:border-cyan-500/40 text-sky-800 dark:text-cyan-300 font-semibold shadow-xs'
             : 'hover:bg-[var(--card-elevated)] border border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
@@ -519,6 +565,7 @@ export default function RepoTreeExplorer({
         {searchQuery && (
           <button
             onClick={() => setSearchQuery('')}
+            aria-label="Clear repository search"
             className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
           >
             <X className="w-3 h-3" />
@@ -527,7 +574,7 @@ export default function RepoTreeExplorer({
       </div>
 
       {/* 3. Real-Time Hierarchical Folder & File Tree */}
-      <div className="flex-1 overflow-y-auto pr-1 space-y-0.5">
+      <div className="flex min-h-0 flex-1 flex-col pr-1">
         <div className="flex items-center justify-between text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1 px-1">
           <span>Repository Tree</span>
           <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -535,13 +582,36 @@ export default function RepoTreeExplorer({
           </span>
         </div>
 
-        {filteredTree.length === 0 ? (
-          <div className="p-4 text-center text-xs text-[var(--text-muted)] italic">
-            {searchQuery ? 'No matching files or folders found' : 'Scanning repository structure...'}
-          </div>
-        ) : (
-          filteredTree.map((node) => renderTreeNode(node, 0))
-        )}
+        <div
+          ref={treeViewportRef}
+          role="tree"
+          aria-label="Repository files and folders"
+          onScroll={(event) => setTreeScrollTop(event.currentTarget.scrollTop)}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          {visibleRows.length === 0 ? (
+            <div className="p-4 text-center text-xs text-[var(--text-muted)] italic">
+              {searchQuery ? 'No matching files or folders found' : 'Scanning repository structure...'}
+            </div>
+          ) : (
+            <div style={{ height: visibleRows.length * TREE_ROW_HEIGHT, position: 'relative' }}>
+              {windowedRows.map(({ node, depth }, index) => (
+                <div
+                  key={node.id}
+                  style={{
+                    position: 'absolute',
+                    top: (firstVisibleRow + index) * TREE_ROW_HEIGHT,
+                    left: 0,
+                    right: 0,
+                    height: TREE_ROW_HEIGHT,
+                  }}
+                >
+                  {renderTreeNode(node, depth)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

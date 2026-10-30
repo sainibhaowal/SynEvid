@@ -1,5 +1,6 @@
 //! synevid-ui: Local Web Dashboard Server for SynEvid (Code Autopsy).
 
+mod indexer;
 mod server;
 
 use clap::Parser;

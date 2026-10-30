@@ -25,7 +25,7 @@ export default function CapabilitiesModal({ isOpen, onClose, capabilities }: Cap
               Core Plugin Registry &amp; Capabilities (autopsy-plugin-api)
             </h3>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] cursor-pointer">
+          <button aria-label="Close capabilities dialog" onClick={onClose} className="p-1.5 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>

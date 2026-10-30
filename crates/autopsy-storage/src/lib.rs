@@ -14,8 +14,9 @@ use thiserror::Error;
 pub mod rows;
 pub use rows::{
     AiSessionLedgerRecord, AiWorkingCacheEntry, CoChangeEdgeRow, ContractRow, EgoNetwork,
-    ForensicSessionRecord, ForensicWorkflowRecord, GraphEdgeRow, GraphNodeRow, RepoRecord,
-    TemporalFactRow, TestMappingRow, TrajectoryEventRecord, validate_coverage,
+    ForensicSessionRecord, ForensicWorkflowRecord, GraphEdgeRow, GraphNodeRow, GraphUniverseRows,
+    LiveEventRecord, RepoRecord, TemporalFactRow, TestMappingRow, TrajectoryEventRecord,
+    validate_coverage,
 };
 
 #[derive(Debug, Error)]
@@ -48,6 +49,38 @@ impl Default for StorageOptions {
     }
 }
 
+fn is_database_corruption(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+            )
+    )
+}
+
+fn preserve_corrupt_database(path: &Path) -> Result<(), StorageError> {
+    let bytes = fs::read(path)?;
+    let digest = blake3::hash(&bytes).to_hex().to_string();
+    let backup = path.with_extension("db.bak");
+    let backup = if backup.exists() {
+        path.with_extension(format!("db.bak.{}", &digest[..12]))
+    } else {
+        backup
+    };
+    fs::rename(path, &backup)?;
+
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+        if sidecar.exists() {
+            let sidecar_backup = PathBuf::from(format!("{}{}", backup.display(), suffix));
+            fs::rename(sidecar, sidecar_backup)?;
+        }
+    }
+    Ok(())
+}
+
 /// Thread-safe SQLite storage engine with content-addressed disk cache.
 #[derive(Clone)]
 pub struct StorageEngine {
@@ -75,24 +108,23 @@ impl StorageEngine {
     ) -> Result<Self, StorageError> {
         let path = db_path.as_ref();
         if path.exists() {
-            let test_open = Self::open(path, options.clone());
-            match test_open {
+            match Self::open(path, options.clone()) {
                 Ok(engine) => {
-                    let is_ok = {
+                    let check = {
                         let conn = engine.conn.lock().unwrap();
-                        let check: Result<String, _> =
-                            conn.query_row("PRAGMA quick_check;", [], |r| r.get(0));
-                        check.map(|s| s == "ok").unwrap_or(false)
+                        conn.query_row("PRAGMA quick_check;", [], |row| row.get::<_, String>(0))
                     };
-                    if is_ok {
-                        return Ok(engine);
+                    match check {
+                        Ok(result) if result == "ok" => return Ok(engine),
+                        Ok(_) => drop(engine),
+                        Err(error) if is_database_corruption(&error) => drop(engine),
+                        Err(error) => return Err(StorageError::Sqlite(error)),
                     }
                 }
-                Err(_) => {}
+                Err(StorageError::Sqlite(error)) if is_database_corruption(&error) => {}
+                Err(error) => return Err(error),
             }
-            // Corrupt file detected: back up to .bak and recreate cleanly
-            let bak_path = path.with_extension("db.bak");
-            let _ = fs::rename(path, &bak_path);
+            preserve_corrupt_database(path)?;
         }
         Self::open(path, options)
     }
@@ -468,6 +500,39 @@ impl StorageEngine {
             }
         }
 
+        if current_version < 6 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS daemon_state (
+                    state_key TEXT PRIMARY KEY,
+                    state_value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_events (
+                    seq_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    data_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_live_events_type_seq
+                    ON live_events(event_type, seq_id);
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (6, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
+        if current_version < 7 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE INDEX IF NOT EXISTS idx_graph_edges_incoming_ego
+                    ON graph_edges(snapshot_id, target_stable_id, edge_kind, source_file, source_line);
+                CREATE INDEX IF NOT EXISTS idx_graph_edges_outgoing_ego
+                    ON graph_edges(snapshot_id, source_stable_id, edge_kind, target_file, target_line);
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (7, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -832,6 +897,7 @@ mod tests {
             file_set_digest: "files_digest_1".to_string(),
             files: BTreeMap::new(),
             skipped_oversize_files: Vec::new(),
+            traversal_limit_reached: false,
         };
         storage.save_snapshot(&snapshot).unwrap();
 
@@ -967,8 +1033,8 @@ mod tests {
     #[test]
     fn test_migration_002_creates_pillar_tables() {
         let engine = StorageEngine::in_memory().unwrap();
-        // 002 creates the tables; 003 reshapes two of them; 004 adds Phase 1 visual tables; 005 adds Phase 4 forensics.
-        assert_eq!(engine.schema_version().unwrap(), 5);
+        // Migrations 002–007 add core persistence, cockpit, forensics, daemon state, and ego-query indexes.
+        assert_eq!(engine.schema_version().unwrap(), 7);
 
         let tables = table_names(&engine);
         for expected in [
@@ -1006,12 +1072,36 @@ mod tests {
             "idx_co_change_matrix_a",
             "idx_co_change_matrix_b",
             "idx_workflow_session",
+            "idx_graph_edges_incoming_ego",
+            "idx_graph_edges_outgoing_ego",
         ] {
             assert!(
                 indexes.contains(&expected.to_string()),
                 "missing index {expected}; found {indexes:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_migration_007_adds_ego_query_indexes_to_v6_database() {
+        let mut engine = StorageEngine::in_memory().unwrap();
+        {
+            let conn = engine.conn.lock().unwrap();
+            conn.execute_batch(
+                "DROP INDEX idx_graph_edges_incoming_ego;
+                 DROP INDEX idx_graph_edges_outgoing_ego;
+                 DELETE FROM schema_migrations WHERE version = 7;",
+            )
+            .unwrap();
+        }
+        assert_eq!(engine.schema_version().unwrap(), 6);
+
+        engine.run_migrations().unwrap();
+
+        assert_eq!(engine.schema_version().unwrap(), 7);
+        let indexes = index_names(&engine);
+        assert!(indexes.contains(&"idx_graph_edges_incoming_ego".to_string()));
+        assert!(indexes.contains(&"idx_graph_edges_outgoing_ego".to_string()));
     }
 
     #[test]
@@ -1043,8 +1133,8 @@ mod tests {
             },
         )
         .unwrap();
-        // The upgrade runs through 002, 003, 004 *and* 005 in place.
-        assert_eq!(engine.schema_version().unwrap(), 5);
+        // The upgrade runs through migrations 002–007 in place.
+        assert_eq!(engine.schema_version().unwrap(), 7);
 
         let tables = table_names(&engine);
         assert!(tables.contains(&"temporal_facts".to_string()));
@@ -1074,11 +1164,11 @@ mod tests {
 
         for _ in 0..3 {
             let engine = StorageEngine::open(&db_path, opts()).unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 5);
+            assert_eq!(engine.schema_version().unwrap(), 7);
             // Re-running migrations explicitly must be a no-op.
             let mut engine = engine;
             engine.run_migrations().unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 5);
+            assert_eq!(engine.schema_version().unwrap(), 7);
         }
 
         // Exactly one row per migration version: no duplicate application.
@@ -1086,10 +1176,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(
-            count, 5,
-            "expected versions 1, 2, 3, 4 and 5 exactly once each"
-        );
+        assert_eq!(count, 7, "expected versions 1 through 7 exactly once each");
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -1154,7 +1241,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 5);
+        assert_eq!(engine.schema_version().unwrap(), 7);
 
         // The v2 fact survived, and its coverage is the documented ALTER default. A row
         // that read back as `verified` would be a lie; `unknown` says "no coverage stated".
@@ -1193,7 +1280,7 @@ mod tests {
 
         // Re-running migrations on the upgraded database is a no-op.
         engine.run_migrations().unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 5);
+        assert_eq!(engine.schema_version().unwrap(), 7);
 
         drop(engine);
         let _ = fs::remove_dir_all(temp_dir);

@@ -148,6 +148,9 @@ pub struct RepoSnapshot {
     /// `#[serde(default)]` keeps pre-cap snapshots loadable.
     #[serde(default)]
     pub skipped_oversize_files: Vec<String>,
+    /// True when the configured traversal-node budget stopped discovery early.
+    #[serde(default)]
+    pub traversal_limit_reached: bool,
 }
 
 /// Normalized callable or interface contract.

@@ -51,6 +51,7 @@ export interface GitGalaxy {
   commits: CommitGalaxyNode[];
   branches: BranchRef[];
   tags: TagRef[];
+  error?: string;
 }
 
 export interface TimeTravelNode {
@@ -131,6 +132,10 @@ export interface ForensicSession {
   files_touched_count: number;
   total_events_count: number;
   status: 'ACTIVE' | 'VERIFIED_PASS' | 'BLOCKED_FAIL' | 'CLOSED' | string;
+}
+
+export interface ForensicSessionsResponse {
+  sessions: ForensicSession[];
 }
 
 export interface ForensicWorkflow {
@@ -296,21 +301,49 @@ export interface UniverseNode {
   y: number;
   z?: number;
   cluster_id?: number;
+  label?: string;
+  kind?: string;
+  file_path?: string;
+  start_line?: number;
+  end_line?: number;
+  status?: string;
+  caller_count?: number;
+  callee_count?: number;
 }
 
 export interface UniverseEdge {
+  id?: string;
   source: string;
   target: string;
   kind: string;
+  source_file?: string;
+  source_line?: number;
+  source_col?: number;
+  target_file?: string;
+  target_line?: number;
+  confidence?: string;
 }
 
 export interface GraphUniverse {
   repo_id: string;
+  snapshot_id?: string;
   dimensions: '2D' | '3D';
+  coverage_state?: string;
   node_count: number;
   edge_count: number;
+  total_node_count?: number;
+  total_edge_count?: number;
+  is_truncated?: boolean;
   nodes: UniverseNode[];
   edges: UniverseEdge[];
+}
+
+export interface SourceFileResponse {
+  repo_id: string;
+  file_path: string;
+  content: string;
+  size_bytes: number;
+  coverage_state: string;
 }
 
 export interface GraphNodeRow {
@@ -346,6 +379,7 @@ export interface EgoNetwork {
   target_node: GraphNodeRow | null;
   incoming_callers: GraphEdgeRow[];
   outgoing_callees: GraphEdgeRow[];
+  coverage_state?: string;
 }
 
 export interface DamagedCallerItem {
@@ -365,7 +399,14 @@ export interface DeadSymbolItem {
 }
 
 export interface SimulateEditResponse {
-  verdict: 'PASS' | 'WARN' | 'FAIL';
+  repo_id: string;
+  verdict: string;
+  coverage_state: string;
+  coverage_note?: string | null;
+  baseline_snapshot_id?: string | null;
+  candidate_snapshot_id?: string | null;
+  impacted_entities: string[];
+  impact_truncated: boolean;
   damaged_callers: DamagedCallerItem[];
   newly_dead_symbols: DeadSymbolItem[];
   broken_imports: string[];
@@ -439,6 +480,8 @@ const FALLBACK_CAPS: Capabilities = {
 export class SynevidApiClient {
   private baseUrl: string;
 
+  private static readonly SIMULATION_TIMEOUT_MS = 60_000;
+
   constructor(baseUrl?: string) {
     if (typeof window !== 'undefined') {
       this.baseUrl = baseUrl || localStorage.getItem('synevid_api_url') || 'http://127.0.0.1:3333';
@@ -462,14 +505,19 @@ export class SynevidApiClient {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
 
+    const headers: Record<string, string> = {};
+    if (options?.body) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (options?.headers) {
+      Object.assign(headers, options.headers);
+    }
+
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         ...options,
         signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(options?.headers || {}),
-        },
+        headers,
       });
       clearTimeout(id);
       if (!res.ok) {
@@ -579,169 +627,106 @@ export class SynevidApiClient {
   }
 
   public async getUniverse(dim: '2D' | '3D' = '3D'): Promise<GraphUniverse> {
-    try {
-      const q = dim === '2D' ? '?dim=2d' : '?dim=3d';
-      const raw = await this.fetchWithTimeout<any>(`/api/v1/graph/universe${q}`, undefined, 20000);
-      const rawNodes = raw.nodes;
-      const normalizedNodes: UniverseNode[] = Array.isArray(rawNodes)
-        ? rawNodes
-        : rawNodes && typeof rawNodes === 'object'
-        ? Object.entries(rawNodes).map(([id, val]: [string, any]) => ({
-            id,
-            x: typeof val.x === 'number' ? (Math.abs(val.x) > 5 ? val.x / 150 : val.x) : 0,
-            y: typeof val.y === 'number' ? (Math.abs(val.y) > 5 ? val.y / 150 : val.y) : 0,
-            z: typeof val.z === 'number' ? (Math.abs(val.z) > 5 ? val.z / 150 : val.z) : 0,
-            cluster_id: val.cluster_id ?? 1,
-          }))
-        : [];
-      return {
-        repo_id: raw.repo_id || 'active',
-        dimensions: raw.dimensions || dim,
-        node_count: normalizedNodes.length,
-        edge_count: (raw.edges || []).length,
-        nodes: normalizedNodes,
-        edges: raw.edges || [],
-      };
-    } catch {
-      return {
-        repo_id: '8f43a0e1b2',
-        dimensions: dim,
-        node_count: 7,
-        edge_count: 8,
-        nodes: [
-          { id: 'src/index.ts', x: 0.0, y: 0.0, z: 0.0, cluster_id: 0 },
-          { id: 'src/controllers/OrderController.ts', x: -0.45, y: -0.32, z: 0.2, cluster_id: 1 },
-          { id: 'src/services/PaymentService.ts', x: 0.42, y: -0.28, z: -0.15, cluster_id: 2 },
-          { id: 'src/repositories/UserRepository.ts', x: 0.62, y: 0.38, z: 0.1, cluster_id: 3 },
-          { id: 'src/domain/Order.ts', x: -0.55, y: 0.45, z: -0.25, cluster_id: 1 },
-          { id: 'src/services/NotificationService.ts', x: 0.1, y: 0.65, z: 0.3, cluster_id: 2 },
-          { id: 'src/infra/DatabasePool.ts', x: 0.75, y: -0.1, z: 0.05, cluster_id: 3 },
-        ],
-        edges: [
-          { source: 'src/index.ts', target: 'src/controllers/OrderController.ts', kind: 'imports' },
-          { source: 'src/controllers/OrderController.ts', target: 'src/services/PaymentService.ts', kind: 'calls' },
-          { source: 'src/services/PaymentService.ts', target: 'src/repositories/UserRepository.ts', kind: 'calls' },
-          { source: 'src/controllers/OrderController.ts', target: 'src/domain/Order.ts', kind: 'references' },
-          { source: 'src/services/PaymentService.ts', target: 'src/services/NotificationService.ts', kind: 'calls' },
-          { source: 'src/repositories/UserRepository.ts', target: 'src/infra/DatabasePool.ts', kind: 'calls' },
-          { source: 'src/index.ts', target: 'src/infra/DatabasePool.ts', kind: 'initializes' },
-          { source: 'src/domain/Order.ts', target: 'src/services/PaymentService.ts', kind: 'references' },
-        ],
-      };
+    const q = dim === '2D' ? '?dim=2d' : '?dim=3d';
+    const raw = await this.fetchWithTimeout<any>(`/api/v1/graph/universe${q}`, undefined, 20000);
+    if (raw.error_code || raw.error) {
+      throw new Error(String(raw.error || raw.error_code));
     }
+    const rawNodes = raw.nodes;
+    const entries: Array<[string, Record<string, unknown>]> = Array.isArray(rawNodes)
+      ? rawNodes.map((node: Record<string, unknown>) => [String(node.id ?? ''), node])
+      : rawNodes && typeof rawNodes === 'object'
+      ? Object.entries(rawNodes as Record<string, Record<string, unknown>>)
+      : [];
+    const normalizeCoordinate = (value: unknown): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+      return Math.abs(value) > 5 ? value / 150 : value;
+    };
+    const normalizedNodes = entries.map(([id, node]) => ({
+      ...node,
+      id,
+      x: normalizeCoordinate(node.x),
+      y: normalizeCoordinate(node.y),
+      z: normalizeCoordinate(node.z),
+      cluster_id: typeof node.cluster_id === 'number' ? node.cluster_id : 1,
+      label: typeof node.label === 'string' ? node.label : undefined,
+      kind: typeof node.kind === 'string' ? node.kind : undefined,
+      file_path: typeof node.file_path === 'string' ? node.file_path : undefined,
+      start_line: typeof node.start_line === 'number' ? node.start_line : undefined,
+      end_line: typeof node.end_line === 'number' ? node.end_line : undefined,
+      status: typeof node.status === 'string' ? node.status : undefined,
+      caller_count: typeof node.caller_count === 'number' ? node.caller_count : undefined,
+      callee_count: typeof node.callee_count === 'number' ? node.callee_count : undefined,
+    })) as UniverseNode[];
+    const edges = Array.isArray(raw.edges)
+      ? raw.edges.filter((edge: unknown) => {
+          if (!edge || typeof edge !== 'object') return false;
+          const record = edge as Record<string, unknown>;
+          return typeof record.source === 'string' && typeof record.target === 'string';
+        }) as UniverseEdge[]
+      : [];
+    return {
+      repo_id: typeof raw.repo_id === 'string' ? raw.repo_id : '',
+      snapshot_id: typeof raw.snapshot_id === 'string' ? raw.snapshot_id : undefined,
+      dimensions: raw.dimensions === '2D' ? '2D' : dim,
+      coverage_state: typeof raw.coverage_state === 'string' ? raw.coverage_state : 'unknown',
+      node_count: normalizedNodes.length,
+      edge_count: edges.length,
+      total_node_count: typeof raw.total_node_count === 'number' ? raw.total_node_count : normalizedNodes.length,
+      total_edge_count: typeof raw.total_edge_count === 'number' ? raw.total_edge_count : edges.length,
+      is_truncated: raw.is_truncated === true,
+      nodes: normalizedNodes,
+      edges,
+    };
   }
 
   public async getEgoNetwork(symbolId: string): Promise<EgoNetwork> {
-    try {
-      return await this.fetchWithTimeout<EgoNetwork>(`/api/v1/graph/ego?id=${encodeURIComponent(symbolId)}`);
-    } catch {
-      return {
-        target_node: {
-          snapshot_id: 'snap_active_worktree',
-          stable_id: symbolId,
-          node_kind: 'function',
-          qualified_name: symbolId,
-          file_path: 'src/services/PaymentService.ts',
-          start_line: 35,
-          end_line: 60,
-          signature_hash: 'blake3:92fa77c8e9',
-          visibility: 'public',
-          is_exported: true,
-          is_dead_code: false,
-          coverage_state: 'verified',
-        },
-        incoming_callers: [
-          {
-            snapshot_id: 'snap_active_worktree',
-            edge_id: 'edge_ego_1',
-            source_stable_id: 'OrderController.createOrder',
-            target_stable_id: symbolId,
-            edge_kind: 'calls',
-            source_file: 'src/controllers/OrderController.ts',
-            source_line: 42,
-            source_col: 18,
-            target_file: 'src/services/PaymentService.ts',
-            target_line: 35,
-            confidence: 'exact',
-          },
-          {
-            snapshot_id: 'snap_active_worktree',
-            edge_id: 'edge_ego_2',
-            source_stable_id: 'CheckoutService.processCheckout',
-            target_stable_id: symbolId,
-            edge_kind: 'calls',
-            source_file: 'src/services/CheckoutService.ts',
-            source_line: 88,
-            source_col: 12,
-            target_file: 'src/services/PaymentService.ts',
-            target_line: 35,
-            confidence: 'exact',
-          },
-        ],
-        outgoing_callees: [
-          {
-            snapshot_id: 'snap_active_worktree',
-            edge_id: 'edge_ego_3',
-            source_stable_id: symbolId,
-            target_stable_id: 'UserRepository.findById',
-            edge_kind: 'calls',
-            source_file: 'src/services/PaymentService.ts',
-            source_line: 48,
-            source_col: 10,
-            target_file: 'src/repositories/UserRepository.ts',
-            target_line: 19,
-            confidence: 'exact',
-          },
-        ],
-      };
-    }
+    const raw = await this.fetchWithTimeout<EgoNetwork & { error?: string; error_code?: string }>(
+      `/api/v1/graph/ego?id=${encodeURIComponent(symbolId)}`
+    );
+    if (raw.error_code || raw.error) throw new Error(String(raw.error || raw.error_code));
+    return {
+      ...raw,
+      incoming_callers: Array.isArray(raw.incoming_callers) ? raw.incoming_callers : [],
+      outgoing_callees: Array.isArray(raw.outgoing_callees) ? raw.outgoing_callees : [],
+      coverage_state: raw.coverage_state || raw.target_node?.coverage_state || 'unknown',
+    };
   }
 
-  public async simulateEdit(filePath: string, unsavedBuffer: string): Promise<SimulateEditResponse> {
-    try {
-      return await this.fetchWithTimeout<SimulateEditResponse>('/api/v1/simulate/edit', {
-        method: 'POST',
-        body: JSON.stringify({ file_path: filePath, unsaved_buffer: unsavedBuffer }),
-      });
-    } catch {
-      // Local client-side simulation fallback when daemon is offline
-      const isBreaking = unsavedBuffer.includes('taxRate: number') || unsavedBuffer.includes('strictMode: boolean');
-      const isSyntaxErr = unsavedBuffer.includes('(((') || unsavedBuffer.includes('syntax_error_mock');
-      const isDead = !unsavedBuffer.includes('legacyFormat') && unsavedBuffer.length > 30;
-
-      const damaged: DamagedCallerItem[] = isBreaking
-        ? [
-            {
-              stable_id: 'OrderController.createPayment',
-              file_path: 'src/controllers/OrderController.ts',
-              calling_line: 42,
-              calling_col: 18,
-              diagnostic: 'Arity mismatch: expected 3 arguments, caller passes 2',
-              severity: 'breaking_error',
-            },
-          ]
-        : [];
-
-      const dead: DeadSymbolItem[] = isDead
-        ? [
-            {
-              stable_id: 'PaymentService.legacyFormat',
-              file_path: filePath,
-              line: 88,
-              diagnostic: '0 remaining callers across workspace',
-            },
-          ]
-        : [];
-
-      return {
-        verdict: isBreaking || isSyntaxErr ? 'FAIL' : isDead ? 'WARN' : 'PASS',
-        damaged_callers: damaged,
-        newly_dead_symbols: dead,
-        broken_imports: [],
-        syntax_errors: isSyntaxErr ? ['SyntaxError: Unexpected token or unclosed parenthesis at line 3'] : [],
-        computation_latency_ms: 12,
-      };
+  public async readSourceFile(filePath: string, repoId?: string): Promise<SourceFileResponse> {
+    const normalized = normalizeCrossPlatformPath(filePath).replace(/^\/+/, '');
+    const query = new URLSearchParams({ path: normalized });
+    if (repoId) query.set('repo_id', repoId);
+    const response = await this.fetchWithTimeout<SourceFileResponse & { error?: string; error_code?: string }>(
+      `/api/v1/files/content?${query.toString()}`
+    );
+    if (response.error_code || response.error) {
+      throw new Error(String(response.error || response.error_code));
     }
+    return response;
+  }
+
+  public async simulateEdit(
+    filePath: string,
+    unsavedBuffer: string,
+    repoId?: string
+  ): Promise<SimulateEditResponse> {
+    const response = await this.fetchWithTimeout<SimulateEditResponse & { error?: string; error_code?: string }>(
+      '/api/v1/simulate/edit',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          file_path: filePath,
+          unsaved_buffer: unsavedBuffer,
+          repo_id: repoId,
+        }),
+      },
+      SynevidApiClient.SIMULATION_TIMEOUT_MS,
+    );
+    if (response.error_code || response.error) {
+      throw new Error(String(response.error || response.error_code));
+    }
+    return response;
   }
 
   public async getInvariants() {
@@ -792,32 +777,16 @@ export class SynevidApiClient {
   public async getGitGalaxy(limit = 200): Promise<GitGalaxy> {
     try {
       return await this.fetchWithTimeout<GitGalaxy>(`/api/v1/git/galaxy?limit=${limit}`);
-    } catch {
+    } catch (error: unknown) {
       return {
-        repo_id: 'local_git_repo',
-        head_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317',
-        active_branch: 'main',
-        total_commits: 1,
-        commits: [
-          {
-            oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317',
-            short_oid: 'a0382e3',
-            parents: [],
-            author_name: 'SynEvid Engineer',
-            author_email: 'engineer@synevid.dev',
-            timestamp: Math.floor(Date.now() / 1000),
-            summary: 'Initial repo commit',
-            lane: 0,
-            is_head: true,
-            branch_names: ['main'],
-            tags: ['v0.4.0'],
-            symbols_modified: 4,
-            blast_radius_score: 2,
-            verification_verdict: 'PASS',
-          },
-        ],
-        branches: [{ name: 'main', target_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317', is_active: true }],
-        tags: [{ name: 'v0.4.0', target_oid: 'a0382e3bab199cab4a2cb7912dab85f46f178317' }],
+        repo_id: '',
+        head_oid: null,
+        active_branch: null,
+        total_commits: 0,
+        commits: [],
+        branches: [],
+        tags: [],
+        error: error instanceof Error ? error.message : 'Git history is unavailable because the daemon request failed.',
       };
     }
   }
@@ -998,7 +967,11 @@ export class SynevidApiClient {
   }
 
   public async listForensicSessions(): Promise<ForensicSession[]> {
-    return await this.fetchWithTimeout<ForensicSession[]>('/api/v1/forensics/sessions');
+    const response = await this.fetchWithTimeout<ForensicSessionsResponse>('/api/v1/forensics/sessions');
+    if (!Array.isArray(response.sessions)) {
+      throw new TypeError('Invalid forensic sessions response: expected a sessions array');
+    }
+    return response.sessions;
   }
 
   public async startForensicSession(actorName: string = 'Claude-Code', actorKind: string = 'AI_AGENT'): Promise<{ session_id: string; status: string }> {

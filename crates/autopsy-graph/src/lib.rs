@@ -357,6 +357,32 @@ impl DependencyGraph {
         }
     }
 
+    pub fn replace_file_edges(
+        &mut self,
+        file_path: &str,
+        source_symbols: &BTreeSet<SymbolId>,
+        new_edges: Vec<Edge>,
+    ) {
+        let removed = self
+            .inner
+            .edge_indices()
+            .filter(|edge_index| {
+                let edge = &self.inner[*edge_index];
+                source_symbols.contains(&edge.source)
+                    || edge
+                        .location
+                        .as_ref()
+                        .is_some_and(|location| location.path == file_path)
+            })
+            .collect::<Vec<_>>();
+        for edge_index in removed {
+            self.inner.remove_edge(edge_index);
+        }
+        for edge in new_edges {
+            self.add_edge(edge);
+        }
+    }
+
     fn rebuild_node_index(&mut self) {
         self.node_indices.clear();
         for idx in self.inner.node_indices() {

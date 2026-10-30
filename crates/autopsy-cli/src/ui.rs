@@ -7,17 +7,16 @@
 #![allow(clippy::collapsible_if)]
 
 use crate::{
-    ANALYZER_VERSION, Cli, CliError, EXIT_PASS, OutputFormat, build_snapshot_and_graph,
-    load_or_default_config,
+    ANALYZER_VERSION, Cli, CliError, EXIT_PASS, OutputFormat, StorageEngineConfig,
+    build_snapshot_and_graph, builtin_plugin_registry, load_or_default_config,
+    open_storage_engine_with_registry,
 };
 use autopsy_domain::{CoverageState, FindingStatus, SymbolId};
 use autopsy_graph_layout::DeterministicForceLayout;
 use autopsy_impact::{ImpactDirection, ImpactEngine, ImpactProfile, ImpactQuery};
 use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
 use autopsy_plugin_api::{GraphLayoutPlugin, PluginRegistry};
-use autopsy_storage::{
-    EgoNetwork, GraphEdgeRow, GraphNodeRow, RepoRecord, StorageEngine, StorageOptions,
-};
+use autopsy_storage::{EgoNetwork, GraphEdgeRow, GraphNodeRow, RepoRecord, StorageEngine};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Cursor;
@@ -144,8 +143,18 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
         .to_hex()
         .to_string();
 
-    let db_path = cli.repo_root.join(".autopsy").join("storage.db");
-    let storage = StorageEngine::open_or_recover(&db_path, StorageOptions::default()).ok();
+    let autopsy_dir = cli.repo_root.join(".autopsy");
+    let registry = builtin_plugin_registry(&root_canon);
+    let storage = open_storage_engine_with_registry(
+        &registry,
+        &StorageEngineConfig {
+            database_path: autopsy_dir.join("storage.db"),
+            cache_dir: Some(autopsy_dir.join("cache")),
+            use_wal: true,
+            recover_corruption: true,
+        },
+    )
+    .ok();
 
     let display_name = root_canon
         .file_name()

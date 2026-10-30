@@ -223,15 +223,6 @@ impl ImpactEngine {
         let mut node_hops: BTreeMap<NodeIndex, usize> = BTreeMap::new();
         let mut truncated = false;
 
-        // Collect strongly connected components for cycle condensation
-        let sccs = graph.find_cycles();
-        let mut scc_map: BTreeMap<SymbolId, usize> = BTreeMap::new();
-        for (idx, scc) in sccs.iter().enumerate() {
-            for sym in scc {
-                scc_map.insert(sym.clone(), idx);
-            }
-        }
-
         // Validate and seed start nodes
         let mut seed_indices = Vec::new();
         for seed in &query.seed_symbols {

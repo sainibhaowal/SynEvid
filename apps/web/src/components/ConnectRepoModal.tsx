@@ -176,6 +176,7 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
           </div>
           <button
             onClick={onClose}
+            aria-label="Close connect repository dialog"
             className="p-1.5 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />

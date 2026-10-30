@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FolderGit2,
   Orbit,
@@ -31,6 +31,7 @@ import {
   Capabilities,
   GraphUniverse,
   EgoNetwork,
+  SimulateEditResponse,
   InvariantFinding,
   TrajectoryRun,
   DaemonLiveEvent,
@@ -38,8 +39,6 @@ import {
 
 import CockpitHeader from '@/components/CockpitHeader';
 import DashboardOverview from '@/components/DashboardOverview';
-import CodeUniverse3D from '@/components/CodeUniverse3D';
-import EgoNetworkInspector from '@/components/EgoNetworkInspector';
 import LiveEditSimulator from '@/components/LiveEditSimulator';
 import BlastRadiusSection from '@/components/BlastRadiusSection';
 import InvariantVerificationSection from '@/components/InvariantVerificationSection';
@@ -50,6 +49,49 @@ import { GitGalaxySection } from '@/components/GitGalaxySection';
 import ConnectRepoModal from '@/components/ConnectRepoModal';
 import CapabilitiesModal from '@/components/CapabilitiesModal';
 import RepoTreeExplorer from '@/components/RepoTreeExplorer';
+import WorkspaceManualModal from '@/components/WorkspaceManualModal';
+import { BookOpen } from 'lucide-react';
+
+const CodeUniverse3D = React.lazy(() => import('@/components/CodeUniverse3D'));
+
+type GraphLoadStage = 'idle' | 'scheduled' | 'requesting' | 'downloading' | 'parsing' | 'preparing' | 'transferring' | 'mounting' | 'ready' | 'error';
+
+const GRAPH_STAGE_LABELS: Record<GraphLoadStage, string> = {
+  idle: 'Waiting for a repository',
+  scheduled: 'Scheduling canvas work',
+  requesting: 'Opening persisted graph',
+  downloading: 'Streaming graph independently',
+  parsing: 'Parsing graph off the UI thread',
+  preparing: 'Preparing deterministic nodes and edges',
+  transferring: 'Transferring prepared graph',
+  mounting: 'Starting GPU canvas',
+  ready: 'Canvas ready',
+  error: 'Canvas unavailable',
+};
+
+function CanvasLoadingState({ stage, progress }: { stage: GraphLoadStage; progress: number }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center" aria-live="polite">
+      <div className="relative w-16 h-16 mb-5">
+        <div className="absolute inset-0 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 animate-pulse" />
+        <div className="absolute inset-2 rounded-xl border border-cyan-400/50 animate-spin" style={{ animationDuration: '2.4s' }} />
+        <Orbit className="absolute inset-0 m-auto w-6 h-6 text-cyan-300" />
+      </div>
+      <h3 className="text-sm font-bold text-[var(--text-primary)] font-mono">Canvas loading independently</h3>
+      <p className="text-xs text-[var(--text-muted)] font-mono mt-1.5">{GRAPH_STAGE_LABELS[stage]}</p>
+      <div className="w-72 max-w-full h-1.5 rounded-full bg-[var(--card-elevated)] overflow-hidden mt-4 border border-[var(--border-subtle)]">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-500 via-sky-400 to-violet-500 transition-[width] duration-300 ease-out"
+          style={{ width: `${Math.max(2, Math.min(progress, 100))}%` }}
+        />
+      </div>
+      <div className="mt-3 flex items-center gap-2 text-[10px] font-mono text-[var(--text-muted)]">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+        Cockpit, explorer, simulator, and navigation remain available
+      </div>
+    </div>
+  );
+}
 
 export default function OperationalCockpitPage() {
   // Navigation State (Region 2 Workspaces)
@@ -71,10 +113,19 @@ export default function OperationalCockpitPage() {
 
   // Modules State
   const [universe, setUniverse] = useState<GraphUniverse | null>(null);
+  const [universeError, setUniverseError] = useState<string | null>(null);
+  const [graphLoadStage, setGraphLoadStage] = useState<GraphLoadStage>('idle');
+  const [graphLoadProgress, setGraphLoadProgress] = useState<number>(0);
+  const graphWorkerRef = useRef<Worker | null>(null);
+  const graphRequestIdRef = useRef(0);
+  const graphScheduleRef = useRef<number | null>(null);
   const [repoFiles, setRepoFiles] = useState<RepoFileItem[]>([]);
   const [explorerSearch, setExplorerSearch] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [currentSymbol, setCurrentSymbol] = useState<string>('PaymentService.chargeCard');
+  const [canvasSelection, setCanvasSelection] = useState<string | null>(null);
+  const [simulatorFilePath, setSimulatorFilePath] = useState<string | null>(null);
+  const [simulation, setSimulation] = useState<SimulateEditResponse | null>(null);
+  const [currentSymbol, setCurrentSymbol] = useState<string>('');
   const [egoNetwork, setEgoNetwork] = useState<EgoNetwork | null>(null);
   const [invariants, setInvariants] = useState<InvariantFinding[]>([]);
   const [trajectoryRuns, setTrajectoryRuns] = useState<TrajectoryRun[]>([]);
@@ -87,18 +138,99 @@ export default function OperationalCockpitPage() {
   // Modals
   const [isConnectModalOpen, setIsConnectModalOpen] = useState<boolean>(false);
   const [isCapabilitiesModalOpen, setIsCapabilitiesModalOpen] = useState<boolean>(false);
+  const [isManualModalOpen, setIsManualModalOpen] = useState<boolean>(false);
+  const [manualWorkspaceId, setManualWorkspaceId] = useState<string>('ws-repos');
   const [isEgoLoading, setIsEgoLoading] = useState<boolean>(false);
+  const [isRefreshingGates, setIsRefreshingGates] = useState<boolean>(false);
+
+  const loadUniverse = useCallback((dimension: '2D' | '3D' = '3D') => {
+    const worker = graphWorkerRef.current;
+    const requestId = graphRequestIdRef.current + 1;
+    graphRequestIdRef.current = requestId;
+    setUniverseError(null);
+    setGraphLoadStage('scheduled');
+    setGraphLoadProgress(1);
+    const begin = () => {
+      if (requestId !== graphRequestIdRef.current) return;
+      if (worker) {
+        worker.postMessage({ type: 'load', requestId, dimension });
+        return;
+      }
+      setGraphLoadStage('requesting');
+      api.getUniverse(dimension).then((nextUniverse) => {
+        if (requestId !== graphRequestIdRef.current) return;
+        setGraphLoadStage('mounting');
+        startTransition(() => setUniverse(nextUniverse));
+        setGraphLoadProgress(100);
+        setGraphLoadStage('ready');
+      }).catch((error: unknown) => {
+        if (requestId !== graphRequestIdRef.current) return;
+        setUniverseError(error instanceof Error ? error.message : 'Repository graph is unavailable');
+        setGraphLoadStage('error');
+      });
+    };
+    const browserWindow = window as Window;
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      graphScheduleRef.current = window.requestIdleCallback(begin, { timeout: 350 });
+    } else {
+      graphScheduleRef.current = browserWindow.setTimeout(begin, 32);
+    }
+  }, []);
+
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/graphUniverse.worker.ts', import.meta.url));
+    graphWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent<Record<string, unknown>>) => {
+      const requestId = Number(event.data.requestId);
+      if (requestId !== graphRequestIdRef.current) return;
+      if (event.data.type === 'progress') {
+        setGraphLoadStage(String(event.data.stage) as GraphLoadStage);
+        setGraphLoadProgress(Number(event.data.progress) || 0);
+        return;
+      }
+      if (event.data.type === 'complete') {
+        setGraphLoadStage('mounting');
+        setGraphLoadProgress(99);
+        startTransition(() => {
+          setUniverse(event.data.universe as GraphUniverse);
+          setGraphLoadProgress(100);
+          setGraphLoadStage('ready');
+        });
+        return;
+      }
+      if (event.data.type === 'error') {
+        setUniverse(null);
+        setUniverseError(String(event.data.message || 'Repository graph is unavailable'));
+        setGraphLoadStage('error');
+      }
+    };
+    return () => {
+      graphRequestIdRef.current += 1;
+      worker.postMessage({ type: 'cancel', requestId: graphRequestIdRef.current });
+      worker.terminate();
+      graphWorkerRef.current = null;
+      if (graphScheduleRef.current !== null) {
+        if ('cancelIdleCallback' in window) window.cancelIdleCallback(graphScheduleRef.current);
+        else (window as Window).clearTimeout(graphScheduleRef.current);
+      }
+    };
+  }, []);
 
   const refreshAll = async (overrideRepoId?: string) => {
     try {
-      const status = await api.getStatus();
-      setSnapshotId(status.snapshot_id);
-      setCoverageState(status.coverage_state);
+      const [status, rList, caps] = await Promise.all([
+        api.getStatus(),
+        api.listRepos(),
+        api.getCapabilities(),
+      ]);
+
+      setSnapshotId(status.snapshot_id || 'active-worktree');
+      setCoverageState(status.coverage_state || 'verified');
       setFilesScanned(status.files_scanned);
       setSymbolCount(status.symbol_count);
       setEdgeCount(status.edge_count);
+      setCapabilities(caps);
 
-      const rList = await api.listRepos();
       const userRepos = rList.filter(
         (r) => !r.root_path?.endsWith('SynEvid') && !r.display_name?.toLowerCase().includes('synevid')
       );
@@ -108,14 +240,16 @@ export default function OperationalCockpitPage() {
       let targetId = '';
       if (overrideRepoId && userRepos.some((r) => r.repo_id === overrideRepoId)) {
         targetId = overrideRepoId;
+      } else if (status.active_repo_id && userRepos.some((r) => r.repo_id === status.active_repo_id)) {
+        targetId = status.active_repo_id;
       } else if (activeRepoId && userRepos.some((r) => r.repo_id === activeRepoId)) {
         targetId = activeRepoId;
       } else if (savedId && userRepos.some((r) => r.repo_id === savedId)) {
         targetId = savedId;
-      } else if (status.active_repo_id && userRepos.some((r) => r.repo_id === status.active_repo_id)) {
-        targetId = status.active_repo_id;
       } else if (userRepos.length > 0) {
-        targetId = userRepos[0].repo_id;
+        // Prefer fast native Linux repositories over slow /mnt/ mounts on startup
+        const nativeRepo = userRepos.find((r) => !r.root_path?.startsWith('/mnt/'));
+        targetId = nativeRepo ? nativeRepo.repo_id : userRepos[0].repo_id;
       }
 
       if (targetId) {
@@ -127,39 +261,37 @@ export default function OperationalCockpitPage() {
         if (activeRepo) {
           setRepoRoot(activeRepo.root_path);
         }
+        if (status.active_repo_id && status.active_repo_id !== targetId) {
+          await api.switchRepo(targetId).catch(() => {});
+        }
       } else {
         setActiveRepoId('');
         setRepoRoot('');
       }
 
-      const caps = await api.getCapabilities();
-      setCapabilities(caps);
+      // Fetch files immediately so Explorer renders in <50ms
+      api.getFiles().then((filesRes) => {
+        setRepoFiles(filesRes.files || []);
+        setFilesScanned(filesRes.total_files || 0);
+      }).catch(() => {
+        setRepoFiles([]);
+      });
 
-      const filesRes = await api.getFiles();
-      if (filesRes && filesRes.files && filesRes.files.length > 0) {
-        setRepoFiles(filesRes.files);
-        setFilesScanned(filesRes.total_files);
+      loadUniverse('3D');
+      if (currentSymbol) {
+        api.getEgoNetwork(currentSymbol).then((ego) => setEgoNetwork(ego)).catch(() => setEgoNetwork(null));
+      } else {
+        setEgoNetwork(null);
       }
-
-      const uni = await api.getUniverse('3D');
-      setUniverse(uni);
-
-      const ego = await api.getEgoNetwork(currentSymbol);
-      setEgoNetwork(ego);
-
-      const inv = await api.getInvariants();
-      setInvariants(inv.findings || []);
-
-      const traj = await api.getTrajectory();
-      setTrajectoryRuns(traj.runs || []);
+      api.getInvariants().then((inv) => setInvariants(inv.findings || [])).catch(() => setInvariants([]));
+      api.getTrajectory().then((traj) => setTrajectoryRuns(traj.runs || []));
     } catch (err) {
       console.error('Failed to refresh data', err);
     }
   };
 
   useEffect(() => {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('synevid_active_repo_id') : null;
-    refreshAll(saved || undefined);
+    refreshAll();
 
     // Subscribe to SSE Live stream
     const unsubscribe = api.subscribeLiveEvents(
@@ -178,40 +310,31 @@ export default function OperationalCockpitPage() {
   }, []);
 
   const displayedFiles = useMemo(() => {
-    let source: { path: string; name: string; ext: string; dir: string; status: 'verified' | 'impacted' }[] = [];
-    if (repoFiles.length > 0) {
-      source = repoFiles;
-    } else if (universe?.nodes) {
-      const raw = Array.isArray(universe.nodes)
-        ? universe.nodes
-        : Object.entries(universe.nodes).map(([id, val]: [string, any]) => ({ id, ...val }));
-      source = raw.map((node: any) => {
-        const p = typeof node === 'string' ? node : node.id;
-        const ext = p.split('.').pop()?.toLowerCase() || '';
-        const name = p.split('/').pop() || p;
-        const dir = p.includes('/') ? p.substring(0, p.lastIndexOf('/')) : '';
-        const isDamaged =
-          invariants.some(
-            (inv) =>
-              inv.locations?.some((loc) => loc.path.includes(p)) ||
-              inv.entities?.some((ent) => ent.includes(p))
-          ) || p.includes('PaymentService');
-        return {
-          path: p,
-          name,
-          ext,
-          dir,
-          status: (isDamaged ? 'impacted' : 'verified') as 'verified' | 'impacted',
-        };
-      });
-    }
+    const source = repoFiles.map((file) => {
+      const isDamaged = simulation?.damaged_callers.some((caller) => caller.file_path === file.path) ||
+        simulation?.newly_dead_symbols.some((symbol) => symbol.file_path === file.path);
+      return { ...file, status: isDamaged ? 'impacted' as const : file.status };
+    });
 
     if (!explorerSearch) return source;
     const q = explorerSearch.toLowerCase();
     return source.filter((f) => f.path.toLowerCase().includes(q) || f.name.toLowerCase().includes(q));
-  }, [repoFiles, universe, invariants, explorerSearch]);
+  }, [repoFiles, simulation, explorerSearch]);
 
   const handleSelectRepo = async (repoId: string) => {
+    setUniverse(null);
+    setUniverseError(null);
+    graphRequestIdRef.current += 1;
+    graphWorkerRef.current?.postMessage({ type: 'cancel', requestId: graphRequestIdRef.current });
+    setGraphLoadStage('idle');
+    setGraphLoadProgress(0);
+    setRepoFiles([]);
+    setSelectedFile(null);
+    setCanvasSelection(null);
+    setCurrentSymbol('');
+    setEgoNetwork(null);
+    setSimulatorFilePath(null);
+    setSimulation(null);
     setActiveRepoId(repoId);
     if (typeof window !== 'undefined') {
       localStorage.setItem('synevid_active_repo_id', repoId);
@@ -222,19 +345,115 @@ export default function OperationalCockpitPage() {
 
   const handleSearchSymbol = async (symbolId: string) => {
     setCurrentSymbol(symbolId);
+    if (!symbolId) {
+      setEgoNetwork(null);
+      setIsEgoLoading(false);
+      return;
+    }
     setIsEgoLoading(true);
     try {
       const ego = await api.getEgoNetwork(symbolId);
       setEgoNetwork(ego);
+    } catch {
+      setEgoNetwork(null);
     } finally {
       setIsEgoLoading(false);
     }
+  };
+
+  const handleCanvasNodeSelect = (symbolId: string) => {
+    setCanvasSelection(symbolId || null);
+    if (!symbolId) {
+      setSelectedFile(null);
+      void handleSearchSymbol('');
+      return;
+    }
+    const node = universe?.nodes.find((candidate) => candidate.id === symbolId);
+    const filePath = node?.file_path || (symbolId.startsWith('file:') ? symbolId.slice('file:'.length) : null);
+    if (filePath) setSelectedFile(filePath);
+    void handleSearchSymbol(symbolId.startsWith('file:') ? '' : symbolId);
+  };
+
+  const handleOpenSimulator = (symbolId: string) => {
+    const node = universe?.nodes.find((candidate) => candidate.id === symbolId);
+    const egoFilePath = egoNetwork?.target_node?.stable_id === symbolId
+      ? egoNetwork.target_node.file_path
+      : undefined;
+    const filePath = node?.file_path || egoFilePath || selectedFile;
+    setCanvasSelection(symbolId);
+    if (filePath) {
+      setSelectedFile(filePath);
+      setSimulatorFilePath(filePath);
+    } else {
+      setSimulatorFilePath(null);
+    }
+    setSimulation(null);
+    setActiveWorkspace('ws-simulator');
+  };
+
+  const handleSelectRepositoryFile = (filePath: string) => {
+    setSelectedFile(filePath);
+    setSimulatorFilePath(filePath);
+    setSimulation(null);
+    const fileNode = universe?.nodes.find((node) => node.file_path === filePath && node.kind === 'file') ||
+      universe?.nodes.find((node) => node.file_path === filePath);
+    setCanvasSelection(fileNode?.id || null);
+    void handleSearchSymbol(filePath);
+    if (activeWorkspace !== 'ws-canvas') setActiveWorkspace('ws-canvas');
   };
 
   const handleToggleDimensions = () => {
     if (!universe) return;
     const nextDim = universe.dimensions === '3D' ? '2D' : '3D';
     setUniverse((prev) => (prev ? { ...prev, dimensions: nextDim } : null));
+  };
+
+  const handleOpenVerificationGates = async () => {
+    setActiveWorkspace('ws-gates');
+    setIsRefreshingGates(true);
+    try {
+      const result = await api.getInvariants();
+      setInvariants(result.findings || []);
+    } catch (err) {
+      console.error('Failed to refresh gate findings', err);
+    } finally {
+      setIsRefreshingGates(false);
+    }
+  };
+
+  const handleExportReport = () => {
+    const activeRepo = repos.find((repo) => repo.repo_id === activeRepoId);
+    const report = {
+      schema_version: 'synevid.report.v1',
+      application: { name: 'SynEvid', version: '0.5.0' },
+      repository: {
+        id: activeRepoId || null,
+        name: activeRepo?.display_name || null,
+        root_path: repoRoot || null,
+      },
+      snapshot_id: snapshotId,
+      coverage_state: coverageState,
+      metrics: {
+        files_scanned: filesScanned,
+        symbol_count: symbolCount,
+        edge_count: edgeCount,
+      },
+      findings: invariants,
+    };
+    const filenameBase = (activeRepo?.display_name || 'workspace')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'workspace';
+    const downloadUrl = URL.createObjectURL(
+      new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+    );
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = 'synevid-report-' + filenameBase + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
   };
 
   const failingRulesCount = invariants.filter((f) => f.status === 'fail').length;
@@ -251,6 +470,13 @@ export default function OperationalCockpitPage() {
     { id: 'ws-settings', label: 'Settings & Plugins', icon: Sliders, shortcut: 'Alt+8' },
   ];
 
+  const activeWorkspaceItem = WORKSPACES.find((w) => w.id === activeWorkspace);
+
+  const handleOpenManualForCurrentWorkspace = (targetId?: string) => {
+    setManualWorkspaceId(targetId || activeWorkspace);
+    setIsManualModalOpen(true);
+  };
+
   return (
     <div className="h-screen w-screen bg-[var(--background)] text-[var(--foreground)] flex flex-col font-sans overflow-hidden p-2.5 gap-2.5 transition-colors duration-150">
         {/* Region 1: Top Global Header Bar */}
@@ -261,6 +487,8 @@ export default function OperationalCockpitPage() {
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
           onOpenCapabilitiesModal={() => setIsCapabilitiesModalOpen(true)}
           onOpenTerminal={() => setActiveWorkspace('ws-ai')}
+          onOpenManual={() => handleOpenManualForCurrentWorkspace()}
+          activeWorkspaceName={activeWorkspaceItem?.label}
           onRefresh={refreshAll}
           liveSeq={liveSeq}
           isLiveConnected={isLiveConnected}
@@ -296,18 +524,28 @@ export default function OperationalCockpitPage() {
               })}
             </div>
 
-            {/* Bottom Collapse Drawer Toggle */}
-            <button
-              onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
-              className="p-2.5 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] transition-colors cursor-pointer"
-              title={isDrawerCollapsed ? 'Expand Context Drawer (Ctrl+[)' : 'Collapse Context Drawer (Ctrl+[)'}
-            >
-              {isDrawerCollapsed ? (
-                <PanelLeftOpen className="w-4 h-4" />
-              ) : (
-                <PanelLeftClose className="w-4 h-4" />
-              )}
-            </button>
+            {/* Bottom Collapse Drawer Toggle & Quick Manual Button */}
+            <div className="flex flex-col items-center space-y-1.5 w-full">
+              <button
+                onClick={() => handleOpenManualForCurrentWorkspace()}
+                className="p-2.5 rounded-xl text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 border border-transparent hover:border-cyan-500/30 transition-all cursor-pointer group"
+                title={`Open Manual for ${activeWorkspaceItem?.label || 'Workspace'}`}
+              >
+                <BookOpen className="w-4 h-4 group-hover:scale-110 transition-transform" />
+              </button>
+
+              <button
+                onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+                className="p-2.5 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] transition-colors cursor-pointer"
+                title={isDrawerCollapsed ? 'Expand Context Drawer (Ctrl+[)' : 'Collapse Context Drawer (Ctrl+[)'}
+              >
+                {isDrawerCollapsed ? (
+                  <PanelLeftOpen className="w-4 h-4" />
+                ) : (
+                  <PanelLeftClose className="w-4 h-4" />
+                )}
+              </button>
+            </div>
           </aside>
 
           {/* Region 3: Real-Time Hierarchical Repository Tree Explorer */}
@@ -317,13 +555,7 @@ export default function OperationalCockpitPage() {
                 <RepoTreeExplorer
                   files={displayedFiles}
                   selectedFilePath={selectedFile}
-                  onSelectFile={(filePath) => {
-                    setSelectedFile(filePath);
-                    handleSearchSymbol(filePath);
-                    if (activeWorkspace !== 'ws-canvas') {
-                      setActiveWorkspace('ws-canvas');
-                    }
-                  }}
+                  onSelectFile={handleSelectRepositoryFile}
                   onRefresh={refreshAll}
                 />
               </div>
@@ -331,14 +563,15 @@ export default function OperationalCockpitPage() {
               {/* Quick Actions at Drawer Bottom */}
               <div className="pt-2.5 mt-2 border-t border-[var(--border-subtle)] space-y-1.5 shrink-0">
                 <button
-                  onClick={() => setActiveWorkspace('ws-gates')}
+                  onClick={handleOpenVerificationGates}
+                  disabled={isRefreshingGates}
                   className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-semibold text-xs font-mono transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-sm"
                 >
                   <Play className="w-3.5 h-3.5" />
-                  <span>Run Verification Gates</span>
+                  <span>{isRefreshingGates ? 'Loading Gates...' : 'Open Gates & Policy'}</span>
                 </button>
                 <button
-                  onClick={() => setIsCapabilitiesModalOpen(true)}
+                  onClick={handleExportReport}
                   className="w-full py-1.5 px-3 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-semibold text-xs font-mono transition-colors flex items-center justify-center space-x-2 cursor-pointer shadow-xs"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -358,21 +591,44 @@ export default function OperationalCockpitPage() {
                 : 'p-6 overflow-y-auto'
             }`}
           >
-            {activeWorkspace === 'ws-canvas' && universe && (
-              <CodeUniverse3D
-                universe={universe}
-                onSelectNode={(id) => {
-                  handleSearchSymbol(id);
-                }}
-                onOpenSimulator={(id) => {
-                  handleSearchSymbol(id);
-                  setActiveWorkspace('ws-simulator');
-                }}
-                onToggleDimensions={handleToggleDimensions}
-              />
+            {activeWorkspace === 'ws-canvas' && universe && universe.nodes.length > 0 && (
+              <Suspense fallback={<CanvasLoadingState stage="mounting" progress={99} />}>
+                <CodeUniverse3D
+                  universe={universe}
+                  egoNetwork={egoNetwork}
+                  focusNodeId={canvasSelection}
+                  simulation={simulation}
+                  simulationFilePath={simulatorFilePath}
+                  onSelectNode={handleCanvasNodeSelect}
+                  onOpenSimulator={handleOpenSimulator}
+                  onToggleDimensions={handleToggleDimensions}
+                />
+              </Suspense>
             )}
 
-            {activeWorkspace === 'ws-simulator' && <LiveEditSimulator />}
+            {activeWorkspace === 'ws-canvas' && (!universe || universe.nodes.length === 0) && (
+              graphLoadStage !== 'idle' && graphLoadStage !== 'error'
+                ? <CanvasLoadingState stage={graphLoadStage} progress={graphLoadProgress} />
+                : <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                    <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center mb-4 animate-pulse">
+                      <Orbit className="w-6 h-6 text-cyan-400" />
+                    </div>
+                    <h3 className="text-sm font-bold text-[var(--text-primary)] font-mono">
+                      {universeError ? 'Repository analysis unavailable' : 'Connect a repository to explore its graph'}
+                    </h3>
+                    <p className="text-xs text-[var(--text-muted)] font-mono mt-1.5 max-w-md">
+                      {universeError || 'The canvas will show persisted symbols and verified dependency edges from the selected repository.'}
+                    </p>
+                  </div>
+            )}
+
+            {activeWorkspace === 'ws-simulator' && (
+              <LiveEditSimulator
+                filePath={simulatorFilePath}
+                repoId={activeRepoId}
+                onSimulationChange={setSimulation}
+              />
+            )}
 
             {activeWorkspace === 'ws-repos' && (
               <DashboardOverview
@@ -493,6 +749,13 @@ export default function OperationalCockpitPage() {
           isOpen={isCapabilitiesModalOpen}
           onClose={() => setIsCapabilitiesModalOpen(false)}
           capabilities={capabilities}
+        />
+
+        {/* Region 7: End-to-End User Manual Modal */}
+        <WorkspaceManualModal
+          isOpen={isManualModalOpen}
+          onClose={() => setIsManualModalOpen(false)}
+          workspaceId={manualWorkspaceId}
         />
       </div>
   );

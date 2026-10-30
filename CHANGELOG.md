@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - Electron Shell Recovery & Cockpit Actions (2026-10-29)
+
+### Added
+- **Photorealistic Sci-Fi 3D Code Universe Engine (`apps/web`):**
+  - **Volumetric Deep-Space Cosmos:** Embedded a 2,400-node procedural starfield particle engine (`denseUniverseRenderer.ts`) scattering stellar white, electric cyan, and cosmic violet stars across a 4,000-unit spherical radius with additive blending.
+  - **Smoked Obsidian Hologram Cards:** Replaced flat, cartoon/pastel opaque blocks with high-end sci-fi frosted obsidian plates featuring $45^\circ$ chamfered angular borders, glowing neon laser edges, precision corner HUD reticle brackets, micro-circuit scan lines, and monospace telemetry typography (`FILE // SYS-LOCK`).
+  - **Spatial Anti-Stacking & Honeycomb De-Clustering:** Expanded layout bounds from $720 \times 520 \times 560$ to $1,100 \times 850 \times 900$ and introduced alternating honeycomb stagger offsets (`(row % 2) * 115px`, `(column % 2) * 35px`) to eliminate line-of-sight occlusion in large monorepos (5,000+ nodes).
+  - **Glowing Additive Laser Call Highways:** Upgraded semantic call and import edge clouds with high-opacity additive neon lines (cyan for calls, violet for imports, red/magenta for simulation breaks).
+- **Interactive Rich Visual Workspace Operational Manuals (`apps/web`):**
+  - Built an end-to-end, rich visual technical manual system embedded in the application covering all 8 workspaces (`ws-repos`, `ws-canvas`, `ws-simulator`, `ws-git`, `ws-trajectory`, `ws-gates`, `ws-ai`, and `ws-settings`).
+  - Added structured process flow diagrams (`diagramSteps`), mathematical equations (`mathFormulas`), technical comparison tables (`comparisonTable`), visual infographic feature boxes (`infoCards`), and keyboard shortcuts/controls reference tables.
+  - Two-pane reader component (`WorkspaceManualModal.tsx`) with left-rail table of contents and chapter counters.
+  - Linked to global header bar (`Manual` button with `BookOpen` icon) and left workspace rail with automatic selection of the active workspace.
+  - Bundled 100% offline with zero outbound HTTP calls, zero telemetry, and zero LLM calls.
+
+### Fixed
+- **Electron Production Startup:** Keep the branded splash visible and retry until the cockpit responds instead of navigating to Chromium's load-error page after a fixed timeout. Start the production Next.js build when available, clear inherited `ELECTRON_RUN_AS_NODE`, and remove duplicate WSL service prestarts from desktop launchers.
+- **Cockpit Quick Actions:** Wire the repository drawer action to open Gates & Policy and refresh current findings; rename it to avoid implying that the current stub endpoint executes verification. Wire Export Report to download a JSON snapshot of the current repository telemetry and findings.
+- **Renderer Security:** Preserve the Electron sandbox and restrictive content security policy without `unsafe-eval`.
+- **Shell Developer Tools:** Enable docked Electron DevTools with F12 or Ctrl/Cmd+Shift+I; either shortcut toggles the pane.
+- **Forensic Timeline Rendering:** Unwrap the daemon's `{ sessions: [...] }` response at the API boundary; guard malformed payloads instead of crashing the whole cockpit on `.find()`.
+- **App-Wide Icon Tooltips:** Replace inconsistent native hover labels with a shared rounded, pointer-notched tooltip across titled controls; add accessible labels to previously unlabeled icon actions.
+
+### Phase 2 Live Canvas Validation
+
+- Replace the dense canvas's `0.7x` resolution shortcut and disabled MSAA with DPR-aware rendering up to `2x`, always-on WebGL antialiasing, sRGB output, 512px mipmapped card textures, anisotropic filtering, 68px screen-stable cards, and high-contrast module tinting.
+- Reframe dense graphs around their actual 3D volume: arrange modules across deterministic depth shelves, increase file spacing, fit the initial camera to the dense graph, and soften light-theme module colors for readable cards and edges.
+- Decouple the heavy graph lifecycle from the cockpit: stream and parse the graph in a cancellable Web Worker, normalize nodes/edges off the UI thread, lazy-load the Three.js canvas bundle, and defer GPU mounting to an idle/transition stage. The explorer, workspace rail, simulator, header, and repository controls remain interactive behind a dedicated animated canvas progress state.
+- Add a native Electron presentation-event meter for the visible canvas. The restarted 5,000-node shell now reports approximately 26–35 presented FPS, below the required 60 FPS target; the browser render-call counter remains a clearly labeled fallback.
+- Re-benchmark the active 67,087-node/347,021-edge repository endpoint: 5,000 nodes, 12,000 edges, 6,016,166-byte response; 20 warm sequential requests measured p50 149.09 ms / p95 185.73 ms, 64 requests at concurrency 16 measured p50 1,615.90 ms / p95 2,917.13 ms, and the first request after a controlled restart took 30.190656 s.
+- Rebuild production CSS and restart Electron. The former startup-screenshot/accessibility-tree mismatch is resolved; all eight workspaces and all 18 canvas controls/states passed a live sweep (26 total). The active graph exposes 27 dynamic folder filters; five visible pills passed native activation/reset and the common handler is regression-tested, while off-screen native automation remains explicitly unclaimed.
+- Register theme presentation marks synchronously before DOM mutation, eliminating the IPC race, and expose a separate application-mutation metric. Live mutation samples were 0.1–1.0 ms; native presentation included a 12.3 ms sample and later cadence-bound 27.1–38.0 ms samples.
+- Remove synthetic Git Galaxy history fallback and return an explicit empty history for repositories with no `.git`; add Rust/UI regression tests. Settings dependency exploration uses persisted edges instead of the old payment example.
+- Correct canvas mouse navigation so 3D/2.5D orbit and dense pointer-pan follow the cursor instead of feeling inverted; add source regression checks for all drag modes.
+- Make dense overview file-first: remove symbol particles, connect semantic edges between colored document cards, normalize module legends, and make synthetic file-card clicks open the real profile with local camera focus.
+- Normalize persisted `file::<path>` rows during file-card profile lookup and include edge file provenance so callers and callees remain visible when symbol rows omit explicit file metadata.
+- Enlarge the dense rounded file-card surface and folded-file icon for overview readability, and keep WSL daemon/Next child processes attached and hidden so cold Electron starts do not open a terminal over the cockpit.
+- Add a single world-space focused-file billboard with real path, status, line range, and relationship counts; clicking a file now flies to a readable front-facing card while preserving the existing side profile. Stagger dense module islands across deterministic depth shelves to avoid the former flat card wall without replacing the bounded GPU overview.
+- Color each focused-file billboard from its actual module/legend assignment instead of applying the same cyan preview palette to every file.
+
+### Phase 1 Analysis Integration
+
+- Connect and refresh repositories through registered analyzers, persist actual snapshots and semantic graph edges, and restore missing local state after SQLite recovery.
+- Remove the sample ego-network fallback; report actual call-site lines and return `unknown` for absent graph data.
+- Make incremental edit simulation compare AST-backed overlays against real baselines, reuse path-scoped analysis artifacts, and report measured elapsed time without modifying source files.
+- Register and detect eight workspace ecosystems, validate broadcast event names, replay ordered live events across restarts, and add canonical BLAKE3-digested repository exports.
+- Refuse to persist a baseline snapshot when all referenced content-addressed file blobs cannot be preserved.
+- Add a registered `StorageEnginePlugin` provider and SQLite migration 007 ego-query indexes; verify v6-to-v7 upgrade and reopen behavior.
+- Invalidate incremental analysis caches when workspace-resolution manifests or analysis configuration change, preventing stale import edges after path-alias updates.
+- Replace 200 ms SSE polling with condition-variable event wakeups; bound filesystem Git-marker checks to four workers while preserving sorted directory results.
+- Verify release-profile Phase 1 targets on WSL2/i5-12450H: 2,000-file polyglot edit p95 42.943 ms, 1,000-directory browse p95 10.738 ms, live-event wake p95 2.316 ms, and 1,000-node/5,000-edge ego lookup p95 3.351 ms.
+- Verify 100 overlay-vs-cold results, 100/100 snapshot/layout determinism, SQLite corruption recovery, persisted event replay, and a workspace-resolution invalidation regression test.
+
+### Phase 2 Canvas & Simulator Integration
+
+- Feed the canvas persisted repository symbols and semantic dependency edges; show real source/target lines and selected-file ego relationships without demo fallbacks.
+- Scope incremental coverage to the edited file and relevant graph edges, so a verified TypeScript target can return `PASS` even when unrelated repository files remain honestly `Unknown` or `Partial`; retain explicit coverage notes for incomplete targets.
+- Derive deterministic rounded document-card anchors from persisted symbol file paths when a bounded graph slice has no explicit file nodes. Place cards and lightweight symbols in a bounded cluster lattice with depth layers for a navigable mind-map/network view instead of a spherical particle cloud; focus/search opens the real file path and source range.
+- Load the selected repository file into an unsaved editor buffer and simulate it through the registered analyzer; overlay damaged callers, removed-export references, syntax errors, and newly dead private/internal symbols while keeping unsupported files `Unknown`/`Partial`.
+- Add a file-scoped incremental overlay path with a cached baseline symbol index, avoiding whole-graph reconstruction and duplicate draft parsing. Remove an unused whole-graph SCC pass from impact traversal.
+- Keep deterministic seeded layout for large graphs and add a 5,000-node, 100-repeat determinism/performance regression.
+- Bound graph-universe responses in SQLite: degree-ranked hubs plus a deterministic stable-ID spread return at most 5,000 nodes and 12,000 prioritized edges without materializing the full edge table in application memory. Preserve full counts, exact selected-node caller/callee counts, honest coverage, and source/target lines; use a connection-local temporary selected-ID table with no persistent schema change.
+- Switch large canvas scenes to batched `THREE.Points` nodes and `THREE.LineSegments` edges with a 1.35 device-pixel-ratio cap. The overview is explicitly described as sampled and GPU-batched, not viewport-driven dynamic LOD.
+- Verify the real scan-to-graph-to-editor flow against temporary repositories, including exact caller/callee lines, deleted exports, dead code, syntax errors, unsupported SQL, path traversal, and unchanged source bytes.
+- Historical pre-projection release benchmark on WSL2, 8 vCPU Intel i5-12450H: a 15,000-node/10,002-edge full graph response in 0.78s. The new SQLite projection returned a 5,000-node/12,000-edge view from a synthetic 15,000-node/30,000-edge in-memory fixture in 103.908ms (single hot-cache observation, not p95 or a disk benchmark). The active 67,087-node/347,021-edge repository has since been re-benchmarked through the new sidecar; real-repository measurements and limitations are recorded in `docs/evidence/94-phase2-real-canvas-simulator-and-performance.md`. The separate 50-edit connected-caller benchmark remains p50 20ms, p95 27ms, max 33ms (engine-reported), with HTTP round-trip p95 41.8ms.
+- Theme changes now suppress CSS transitions for the swap frame, and light/dark node-state colors meet the tested 7:1 WCAG AAA contrast ratio. Runtime native Electron theme mark-to-present timing is measured at 80.7 ms, above the `<16 ms` target. A read-only probe of the live daemon returned a persisted 350-node/352-edge graph and exact source/target ego-line fields.
+- Added accessible names to all seven previously unlabeled canvas controls. A TypeScript AST audit confirms all 26 canvas buttons have click handlers and accessible names; the restarted live shell exposed all controls, but its final full manual sweep remains partial.
+- Added `apps/web/test/phase2_ui.test.mjs` and `npm test` to keep workspace navigation, canvas control/overlay wiring, bounded-renderer wiring, native-meter fallback wiring, and light/dark contrast checks repeatable (12/12 passing).
+- Make canvas selection parent-owned to avoid duplicate state synchronization, synchronize imperative WebGL refs before paint, and apply simulations present at initial mount after the overlay callback is installed. Strengthen the UI AST regression to require callable, non-empty handlers for all 26 canvas buttons.
+- Verify `cargo test -p autopsy-storage -p synevid-ui -p autopsy-graph-layout` (16 + 16 + 2), `apps/web-inspector npm test` (37/37), TypeScript compilation, release daemon build, and a staged Next production build/root HTTP 200. Native 5,000-node FPS and theme timing are now measured but below target; the full workspace Rust run hits the graph-layout 20-second performance assertion in this environment and Clippy is unavailable. See `docs/evidence/94-phase2-real-canvas-simulator-and-performance.md`.
+
 ## [0.5.0] - Real-Time Forensic Trajectory Timeline, AI Zero-Token-Waste Working Cache & Live MCP Cockpit (2026-10-28)
 
 ### Added

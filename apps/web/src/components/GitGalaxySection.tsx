@@ -106,6 +106,10 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
     try {
       const data = await api.getGitGalaxy(200);
       setGalaxy(data);
+      if (data.error) {
+        setError(data.error);
+        return;
+      }
       if (data.commits && data.commits.length > 0) {
         const headCommit = data.commits.find((c) => c.is_head) || data.commits[0];
         setSelectedCommitOid(headCommit.oid);
@@ -612,7 +616,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
               </span>
             </div>
             <p className="text-xs text-[var(--text-muted)] font-mono mt-0.5">
-              Active branch: <span className="text-violet-500 font-bold">{galaxy?.active_branch || 'main'}</span> &bull; Uncommitted changes:{' '}
+              Active branch: <span className="text-violet-500 font-bold">{galaxy?.active_branch || 'Not detected'}</span> &bull; Uncommitted changes:{' '}
               <span className={`font-bold ${gitStatus?.total_uncommitted ? 'text-amber-500' : 'text-emerald-500'}`}>
                 {gitStatus?.total_uncommitted || 0} files
               </span>
@@ -706,6 +710,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
               loadStatus();
             }}
             disabled={loading || statusLoading}
+            aria-label="Refresh Git data"
             className="p-1.5 rounded-lg bg-[var(--card-elevated)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] transition-all cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading || statusLoading ? 'animate-spin' : ''}`} />
@@ -1436,6 +1441,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                           <button
                             onClick={() => handleBranchAction(branch.name, 'delete')}
                             disabled={isMutating}
+                            aria-label={`Delete branch ${branch.name}`}
                             className="p-1 rounded text-rose-400 hover:bg-rose-500/20 cursor-pointer"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -1500,6 +1506,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                       <button
                         onClick={() => handleDeleteTag(tag.name)}
                         disabled={isMutating}
+                        aria-label={`Delete tag ${tag.name}`}
                         className="p-1 rounded text-rose-400 hover:bg-rose-500/20 cursor-pointer"
                       >
                         <Trash2 className="w-3 h-3" />

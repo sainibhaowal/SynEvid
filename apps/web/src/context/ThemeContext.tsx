@@ -1,8 +1,52 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useSyncExternalStore } from 'react';
 
 type ThemeMode = 'dark' | 'light';
+
+function applyTheme(t: ThemeMode) {
+  const root = document.documentElement;
+  const desktopBridge = (window as any).synevidDesktop;
+  if (desktopBridge?.markNextPresentedFrame) {
+    desktopBridge.markNextPresentedFrame();
+  }
+  const mutationStartedAt = performance.now();
+  root.setAttribute('data-theme-switching', 'true');
+  root.classList.remove('dark', 'light');
+  root.classList.add(t);
+  root.style.colorScheme = t;
+  root.setAttribute('data-theme', t);
+  const mutationMs = performance.now() - mutationStartedAt;
+  root.setAttribute('data-theme-mutation-ms', mutationMs.toFixed(3));
+  window.dispatchEvent(new CustomEvent('synevid-theme-change', { detail: { mutationMs } }));
+  window.requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
+}
+
+function getThemeSnapshot(): ThemeMode {
+  if (typeof document === 'undefined') return 'dark';
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function subscribeToTheme(onChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== 'synevid_theme' && event.key !== null) return;
+    try {
+      const stored = localStorage.getItem('synevid_theme');
+      if (stored === 'light' || stored === 'dark') applyTheme(stored);
+    } catch {}
+    onChange();
+  };
+  window.addEventListener('synevid-theme-change', onChange);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener('synevid-theme-change', onChange);
+    window.removeEventListener('storage', onStorage);
+  };
+}
+
+function getServerThemeSnapshot(): ThemeMode {
+  return 'dark';
+}
 
 interface ThemeContextType {
   theme: ThemeMode;
@@ -17,35 +61,12 @@ const ThemeContext = createContext<ThemeContextType>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeMode>('dark');
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    try {
-      const isHtmlLight = document.documentElement.classList.contains('light');
-      const saved = localStorage.getItem('synevid_theme') as ThemeMode;
-      const initial: ThemeMode = saved === 'light' || isHtmlLight ? 'light' : 'dark';
-      setThemeState(initial);
-      applyTheme(initial);
-    } catch (e) {
-      applyTheme('dark');
-    }
-    setMounted(true);
-  }, []);
-
-  const applyTheme = (t: ThemeMode) => {
-    const root = document.documentElement;
-    root.classList.remove('dark', 'light');
-    root.classList.add(t);
-    root.style.colorScheme = t;
-    root.setAttribute('data-theme', t);
-  };
+  const theme = useSyncExternalStore(subscribeToTheme, getThemeSnapshot, getServerThemeSnapshot);
 
   const setTheme = (t: ThemeMode) => {
-    setThemeState(t);
     try {
       localStorage.setItem('synevid_theme', t);
-    } catch (e) {}
+    } catch {}
     applyTheme(t);
   };
 

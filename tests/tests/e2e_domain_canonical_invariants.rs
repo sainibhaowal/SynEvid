@@ -44,6 +44,7 @@ fn test_e2e_canonical_json_schema_shape_compatibility() {
         file_set_digest: "digest_456".to_string(),
         files,
         skipped_oversize_files: Vec::new(),
+        traversal_limit_reached: false,
     };
 
     let snapshot_json = serde_json::to_string_pretty(&snapshot).unwrap();

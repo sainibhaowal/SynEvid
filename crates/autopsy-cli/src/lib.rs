@@ -51,7 +51,14 @@ use autopsy_evidence::EvidenceReceipt;
 use autopsy_graph::DependencyGraph;
 use autopsy_impact::{ImpactDirection, ImpactEngine, ImpactProfile, ImpactQuery};
 use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
-use autopsy_repo::{AutopsyConfig, scan_repository};
+use autopsy_plugin_api::{
+    LanguageAdapterPlugin, PluginDescriptor, PluginError, PluginRegistry, StorageEngineConfig,
+    StorageEnginePlugin,
+};
+use autopsy_repo::{
+    AutopsyConfig, classify_language, create_snapshot_with_scan_state, is_generated_code,
+    is_safe_relative_path, is_text_language, normalize_line_endings, scan_repository,
+};
 use autopsy_report::{
     AutopsyReport, CoverageSummary, SnapshotSummary, convert_domain_findings,
     convert_impact_result_detail, convert_semantic_diff,
@@ -62,6 +69,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
 pub const EXIT_PASS: i32 = 0;
@@ -70,6 +78,184 @@ pub const EXIT_ANALYSIS_ERROR: i32 = 3;
 pub const EXIT_UNSUPPORTED: i32 = 4;
 
 pub const ANALYZER_VERSION: &str = "0.1.0";
+pub const SQLITE_STORAGE_PLUGIN_ID: &str = "storage.sqlite";
+
+struct SqliteStorageEnginePlugin;
+
+impl PluginDescriptor for SqliteStorageEnginePlugin {
+    fn plugin_id(&self) -> &'static str {
+        SQLITE_STORAGE_PLUGIN_ID
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "SQLite WAL Storage"
+    }
+
+    fn description(&self) -> &'static str {
+        "Local SQLite persistence with optional WAL and corruption recovery"
+    }
+}
+
+impl StorageEnginePlugin for SqliteStorageEnginePlugin {
+    fn backend_name(&self) -> &'static str {
+        "sqlite"
+    }
+
+    fn open(&self, config: &StorageEngineConfig) -> Result<StorageEngine, PluginError> {
+        let options = StorageOptions {
+            use_wal: config.use_wal,
+            cache_dir: config.cache_dir.clone(),
+        };
+        let result = if config.recover_corruption {
+            StorageEngine::open_or_recover(&config.database_path, options)
+        } else {
+            StorageEngine::open(&config.database_path, options)
+        };
+        result.map_err(|error| {
+            PluginError::Execution(self.plugin_id().to_string(), error.to_string())
+        })
+    }
+}
+
+pub fn register_builtin_storage_plugins(registry: &PluginRegistry) {
+    registry.register_storage_engine(Arc::new(SqliteStorageEnginePlugin));
+}
+
+pub fn open_storage_engine_with_registry(
+    registry: &PluginRegistry,
+    config: &StorageEngineConfig,
+) -> Result<StorageEngine, CliError> {
+    registry
+        .open_storage_engine(SQLITE_STORAGE_PLUGIN_ID, config)
+        .map_err(|error| CliError::Storage(error.to_string()))
+}
+
+struct RuntimeLanguagePlugin {
+    plugin_id: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+    language_name: &'static str,
+    extensions: &'static [&'static str],
+    adapter_factory: fn(&Path) -> Arc<dyn LanguageAdapter>,
+    default_root: PathBuf,
+}
+
+impl PluginDescriptor for RuntimeLanguagePlugin {
+    fn plugin_id(&self) -> &'static str {
+        self.plugin_id
+    }
+
+    fn version(&self) -> &'static str {
+        "0.1.0"
+    }
+
+    fn display_name(&self) -> &'static str {
+        self.display_name
+    }
+
+    fn description(&self) -> &'static str {
+        self.description
+    }
+}
+
+impl LanguageAdapterPlugin for RuntimeLanguagePlugin {
+    fn file_extensions(&self) -> &'static [&'static str] {
+        self.extensions
+    }
+
+    fn language_name(&self) -> &'static str {
+        self.language_name
+    }
+
+    fn estimate_coverage(&self, _source: &[u8]) -> CoverageState {
+        CoverageState::Unknown
+    }
+
+    fn analyzer(&self) -> Option<Arc<dyn LanguageAdapter>> {
+        Some((self.adapter_factory)(&self.default_root))
+    }
+
+    fn analyzer_for_root(&self, root: &Path) -> Option<Arc<dyn LanguageAdapter>> {
+        Some((self.adapter_factory)(root))
+    }
+
+    fn analyzer_available(&self) -> bool {
+        true
+    }
+}
+
+pub fn register_builtin_language_plugins(registry: &PluginRegistry, root: &Path) {
+    let plugins: Vec<RuntimeLanguagePlugin> = vec![
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.typescript",
+            display_name: "TypeScript / JavaScript Analyzer",
+            description: "Tree-sitter-backed TypeScript and JavaScript parser and graph extractor",
+            language_name: "TypeScript",
+            extensions: &[".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
+            adapter_factory: |root| Arc::new(TypeScriptAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.python",
+            display_name: "Python Analyzer",
+            description: "AST-backed Python symbol, contract, and dependency analyzer",
+            language_name: "Python",
+            extensions: &[".py"],
+            adapter_factory: |root| Arc::new(PythonAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.go",
+            display_name: "Go Analyzer",
+            description: "AST-backed Go symbol, contract, and dependency analyzer",
+            language_name: "Go",
+            extensions: &[".go"],
+            adapter_factory: |root| Arc::new(GoAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.rust",
+            display_name: "Rust Analyzer",
+            description: "AST-backed Rust symbol, contract, and dependency analyzer",
+            language_name: "Rust",
+            extensions: &[".rs"],
+            adapter_factory: |root| Arc::new(RustAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.java",
+            display_name: "Java / Kotlin Analyzer",
+            description: "AST-backed Java and Kotlin symbol, contract, and dependency analyzer",
+            language_name: "Java / Kotlin",
+            extensions: &[".java", ".kt", ".kts"],
+            adapter_factory: |root| Arc::new(JavaAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+        RuntimeLanguagePlugin {
+            plugin_id: "lang.csharp",
+            display_name: "C# Analyzer",
+            description: "AST-backed C# symbol, contract, and dependency analyzer",
+            language_name: "C#",
+            extensions: &[".cs"],
+            adapter_factory: |root| Arc::new(CSharpAdapter::with_root_dir(root)),
+            default_root: root.to_path_buf(),
+        },
+    ];
+    for plugin in plugins {
+        registry.register_language(Arc::new(plugin));
+    }
+}
+
+pub fn builtin_plugin_registry(root: &Path) -> PluginRegistry {
+    let registry = PluginRegistry::new();
+    register_builtin_language_plugins(&registry, root);
+    register_builtin_storage_plugins(&registry);
+    registry
+}
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -1277,12 +1463,16 @@ fn get_storage(cli: &Cli) -> Result<StorageEngine, CliError> {
         .clone()
         .unwrap_or_else(|| autopsy_dir.join("cache"));
 
-    let options = StorageOptions {
-        use_wal: cli.wal,
-        cache_dir: Some(cache_dir),
-    };
-
-    StorageEngine::open(db_path, options).map_err(|e| CliError::Storage(e.to_string()))
+    let registry = builtin_plugin_registry(&cli.repo_root);
+    open_storage_engine_with_registry(
+        &registry,
+        &StorageEngineConfig {
+            database_path: db_path,
+            cache_dir: Some(cache_dir),
+            use_wal: cli.wal,
+            recover_corruption: false,
+        },
+    )
 }
 
 /// Load or synthesize default autopsy configuration.
@@ -1327,14 +1517,35 @@ pub fn load_or_default_config(repo_root: &Path) -> Result<AutopsyConfig, CliErro
 }
 
 /// Pipeline result holding parsed artifacts.
+#[derive(Clone)]
 pub struct AnalysisArtifacts {
     pub snapshot: RepoSnapshot,
     pub graph: DependencyGraph,
     pub symbols: Vec<Symbol>,
+    pub symbol_index: BTreeMap<String, SymbolId>,
+    pub edges: Vec<Edge>,
+    pub contracts: Vec<Contract>,
+    pub file_coverage: BTreeMap<String, CoverageState>,
+    pub coverage_state: CoverageState,
+    pub unsupported_constructs: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct OverlayFileArtifacts {
+    pub snapshot: RepoSnapshot,
+    pub symbols: Vec<Symbol>,
     pub edges: Vec<Edge>,
     pub contracts: Vec<Contract>,
     pub coverage_state: CoverageState,
-    pub unsupported_constructs: Vec<String>,
+    pub parse_result: BufferParseResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferParseResult {
+    pub syntax_valid: bool,
+    pub parser_available: bool,
+    pub coverage_state: CoverageState,
+    pub diagnostics: Vec<String>,
 }
 
 /// Languages with full adapter analysis (symbol graph + contracts).
@@ -1345,6 +1556,83 @@ fn is_analyzed_language(language: &str) -> bool {
         "typescript" | "javascript" | "python" | "go" | "rust" | "java" | "kotlin" | "csharp"
     )
 }
+
+fn should_analyze_file(registry: &PluginRegistry, unit: &FileUnit, root: &Path) -> bool {
+    is_analyzed_language(unit.language.as_str())
+        || registry
+            .find_language_analyzer_for_path(Path::new(&unit.path), root)
+            .is_some()
+}
+
+fn resolution_context_digest(snapshot: &RepoSnapshot) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(snapshot.config_hash.as_bytes());
+    hasher.update(&[0]);
+    for (path, unit) in &snapshot.files {
+        let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+        if matches!(
+            name.as_str(),
+            "tsconfig.json"
+                | "jsconfig.json"
+                | "package.json"
+                | "package-lock.json"
+                | "yarn.lock"
+                | "pnpm-lock.yaml"
+                | "pnpm-workspace.yaml"
+                | "nx.json"
+                | "turbo.json"
+                | "pyproject.toml"
+                | "setup.cfg"
+                | "setup.py"
+                | "requirements.txt"
+                | "go.mod"
+                | "go.work"
+                | "cargo.toml"
+                | "cargo.lock"
+                | "pom.xml"
+                | "build.gradle"
+                | "build.gradle.kts"
+                | "settings.gradle"
+                | "settings.gradle.kts"
+                | "directory.build.props"
+                | "directory.build.targets"
+                | "global.json"
+        ) || name.ends_with(".csproj")
+            || name.ends_with(".sln")
+        {
+            hasher.update(path.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(unit.content_hash.as_bytes());
+            hasher.update(&[0]);
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn file_analysis_cache_key(
+    registry: &PluginRegistry,
+    unit: &FileUnit,
+    root: &Path,
+    resolution_context: &str,
+) -> String {
+    let extension = Path::new(&unit.path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("");
+    let adapter_identity = registry
+        .find_language_analyzer_for_path(Path::new(&unit.path), root)
+        .map(|adapter| format!("{}:{}", adapter.language_id(), adapter.version()))
+        .unwrap_or_else(|| format!("{}:{ANALYZER_VERSION}", unit.language));
+    blake3::hash(
+        format!(
+            "{}\0{}\0{}\0{adapter_identity}\0{resolution_context}",
+            unit.content_hash, unit.path, extension
+        )
+        .as_bytes(),
+    )
+    .to_hex()
+    .to_string()
+}
 /// Canonical (LF-normalized) bytes for a file, mirroring
 /// `scan_repository` exactly: text languages are line-ending
 /// normalized, all other content passes through byte-identical.
@@ -1354,6 +1642,64 @@ fn canonical_file_bytes(raw: &[u8], language: &str) -> Vec<u8> {
     } else {
         raw.to_vec()
     }
+}
+
+fn read_worktree_file_canonical(
+    repo_root: &Path,
+    relative_path: &str,
+    language: &str,
+    expected_hash: &str,
+    max_file_bytes: u64,
+) -> Result<Vec<u8>, CliError> {
+    if !is_safe_relative_path(relative_path) {
+        return Err(CliError::Analysis(format!(
+            "unsafe repository-relative file path: {relative_path}"
+        )));
+    }
+    let canonical_root = repo_root
+        .canonicalize()
+        .map_err(|error| CliError::Analysis(error.to_string()))?;
+    let mut path = repo_root.to_path_buf();
+    for segment in relative_path.split('/') {
+        path.push(segment);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| CliError::Analysis(format!("{}: {error}", path.display())))?;
+        if metadata.file_type().is_symlink() {
+            return Err(CliError::Analysis(format!(
+                "repository file became a symlink during analysis: {relative_path}"
+            )));
+        }
+    }
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| CliError::Analysis(format!("{}: {error}", path.display())))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(CliError::Analysis(format!(
+            "repository file escapes the repository root: {relative_path}"
+        )));
+    }
+    let metadata = std::fs::metadata(&canonical_path)
+        .map_err(|error| CliError::Analysis(format!("{}: {error}", canonical_path.display())))?;
+    if metadata.len() > max_file_bytes {
+        return Err(CliError::Analysis(format!(
+            "repository file exceeds max_file_bytes during analysis: {relative_path}"
+        )));
+    }
+    let raw = std::fs::read(&canonical_path)
+        .map_err(|error| CliError::Analysis(format!("{}: {error}", canonical_path.display())))?;
+    if raw.len() as u64 > max_file_bytes {
+        return Err(CliError::Analysis(format!(
+            "repository file exceeds max_file_bytes during analysis: {relative_path}"
+        )));
+    }
+    let canonical = canonical_file_bytes(&raw, language);
+    if blake3::hash(&canonical).to_hex().as_str() != expected_hash {
+        return Err(CliError::Analysis(format!(
+            "repository changed while indexing {}; retry the analysis",
+            relative_path
+        )));
+    }
+    Ok(canonical)
 }
 
 /// File-local analysis result: everything derivable from one file in
@@ -1381,10 +1727,32 @@ struct FileAnalysisArtifact {
     unsupported: Vec<String>,
 }
 
+static FILE_ANALYSIS_MEMORY_CACHE: OnceLock<Mutex<BTreeMap<String, FileAnalysisArtifact>>> =
+    OnceLock::new();
+const FILE_ANALYSIS_MEMORY_CACHE_CAPACITY: usize = 4096;
+
+fn artifact_cache_scope(root: &Path) -> String {
+    root.canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn remember_file_artifact(scope: &str, cache_key: &str, artifact: FileAnalysisArtifact) {
+    let cache = FILE_ANALYSIS_MEMORY_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(format!("{scope}\0{cache_key}"), artifact);
+        while cache.len() > FILE_ANALYSIS_MEMORY_CACHE_CAPACITY {
+            cache.pop_first();
+        }
+    }
+}
+
 /// Parses one file and extracts its file-local model.
 /// Returns None when the file cannot be parsed (caller skips it).
 /// The adapter is selected by the file's classified language.
 fn analyze_single_file(
+    registry: &PluginRegistry,
     ts_adapter: &TypeScriptAdapter,
     py_adapter: &PythonAdapter,
     go_adapter: &GoAdapter,
@@ -1395,35 +1763,47 @@ fn analyze_single_file(
     unit: &FileUnit,
     content_str: &str,
 ) -> Option<FileLocalAnalysis> {
-    macro_rules! analyze_with {
-        ($adapter:expr) => {{
-            let adapter = $adapter;
-            let parsed: ParsedFile = adapter.parse(parse_ctx, unit, content_str).ok()?;
-            let mut unsupported_here = Vec::new();
-            if matches!(parsed.coverage, CoverageState::Unsupported) {
-                for construct in &parsed.dynamic_constructs {
-                    unsupported_here.push(format!("{:?}", construct.kind));
-                }
-            }
-            let symbols = adapter.extract_symbols(&parsed).ok()?;
-            let contracts = adapter.extract_contracts(&parsed).unwrap_or_default();
-            Some(FileLocalAnalysis {
-                symbols,
-                contracts,
-                coverage: parsed.coverage,
-                unsupported: unsupported_here,
-                parsed: Some(parsed),
-            })
-        }};
+    if let Some(adapter) =
+        registry.find_language_analyzer_for_path(Path::new(&unit.path), &parse_ctx.project_root)
+    {
+        return analyze_with_adapter(adapter.as_ref(), parse_ctx, unit, content_str);
     }
-    match unit.language.as_str() {
-        "python" => analyze_with!(py_adapter),
-        "go" => analyze_with!(go_adapter),
-        "rust" => analyze_with!(rust_adapter),
-        "java" | "kotlin" => analyze_with!(java_adapter),
-        "csharp" => analyze_with!(csharp_adapter),
-        _ => analyze_with!(ts_adapter),
-    }
+    let adapter: &dyn LanguageAdapter = match unit.language.as_str() {
+        "python" => py_adapter,
+        "go" => go_adapter,
+        "rust" => rust_adapter,
+        "java" | "kotlin" => java_adapter,
+        "csharp" => csharp_adapter,
+        _ => ts_adapter,
+    };
+    analyze_with_adapter(adapter, parse_ctx, unit, content_str)
+}
+
+fn analyze_with_adapter(
+    adapter: &dyn LanguageAdapter,
+    parse_ctx: &ParseContext,
+    unit: &FileUnit,
+    content_str: &str,
+) -> Option<FileLocalAnalysis> {
+    let parsed: ParsedFile = adapter.parse(parse_ctx, unit, content_str).ok()?;
+    let unsupported = if matches!(parsed.coverage, CoverageState::Unsupported) {
+        parsed
+            .dynamic_constructs
+            .iter()
+            .map(|construct| format!("{:?}", construct.kind))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let symbols = adapter.extract_symbols(&parsed).ok()?;
+    let contracts = adapter.extract_contracts(&parsed).unwrap_or_default();
+    Some(FileLocalAnalysis {
+        symbols,
+        contracts,
+        coverage: parsed.coverage,
+        unsupported,
+        parsed: Some(parsed),
+    })
 }
 
 /// Executes repository scan, AST extraction, symbol table, multigraph, and contract model.
@@ -1435,25 +1815,775 @@ pub fn build_snapshot_and_graph(
     revision: Option<&str>,
     persist: Option<&StorageEngine>,
 ) -> Result<AnalysisArtifacts, CliError> {
+    let registry = builtin_plugin_registry(repo_root);
+    build_snapshot_and_graph_with_registry(repo_root, config, revision, persist, &registry)
+}
+
+pub fn build_snapshot_and_graph_with_registry(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    revision: Option<&str>,
+    persist: Option<&StorageEngine>,
+    registry: &PluginRegistry,
+) -> Result<AnalysisArtifacts, CliError> {
     let snapshot = scan_repository(repo_root, config, ANALYZER_VERSION, revision)
         .map_err(|e| CliError::Config(e.to_string()))?;
 
     // Read current worktree contents for every scanned file.
     let mut contents: BTreeMap<String, String> = BTreeMap::new();
     for (file_path, unit) in &snapshot.files {
-        if !is_analyzed_language(unit.language.as_str()) {
+        if !should_analyze_file(registry, unit, repo_root) {
             continue;
         }
-        let full_path = repo_root.join(file_path);
-        if let Ok(raw) = std::fs::read(&full_path) {
-            let canonical = canonical_file_bytes(&raw, &unit.language);
-            if let Ok(text) = String::from_utf8(canonical) {
-                contents.insert(file_path.clone(), text);
-            }
+        let canonical = read_worktree_file_canonical(
+            repo_root,
+            file_path,
+            &unit.language,
+            &unit.content_hash,
+            config.analysis.max_file_bytes,
+        )?;
+        if let Ok(text) = String::from_utf8(canonical) {
+            contents.insert(file_path.clone(), text);
         }
     }
 
-    analyze_contents(repo_root, snapshot, contents, persist)
+    analyze_contents(repo_root, snapshot, contents, persist, registry)
+}
+
+pub fn parse_source_buffer(
+    repo_root: &Path,
+    relative_path: &str,
+    source: &[u8],
+) -> BufferParseResult {
+    let registry = builtin_plugin_registry(repo_root);
+    parse_source_buffer_with_registry(repo_root, relative_path, source, &registry)
+}
+
+pub fn parse_source_buffer_with_registry(
+    repo_root: &Path,
+    relative_path: &str,
+    source: &[u8],
+    registry: &PluginRegistry,
+) -> BufferParseResult {
+    let language = classify_language(Path::new(relative_path));
+    let Some(source) = std::str::from_utf8(source).ok() else {
+        return BufferParseResult {
+            syntax_valid: false,
+            parser_available: false,
+            coverage_state: CoverageState::Unknown,
+            diagnostics: vec![format!("{relative_path}: source buffer is not valid UTF-8")],
+        };
+    };
+    let file = FileUnit {
+        path: relative_path.to_string(),
+        language: language.clone(),
+        content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
+        is_generated: false,
+    };
+    let context = ParseContext::new(repo_root);
+    let registered_adapter =
+        registry.find_language_analyzer_for_path(Path::new(relative_path), repo_root);
+    let fallback_adapter: Option<Arc<dyn LanguageAdapter>> = match language.as_str() {
+        "python" => Some(Arc::new(PythonAdapter::with_root_dir(repo_root))),
+        "go" => Some(Arc::new(GoAdapter::with_root_dir(repo_root))),
+        "rust" => Some(Arc::new(RustAdapter::with_root_dir(repo_root))),
+        "java" | "kotlin" => Some(Arc::new(JavaAdapter::with_root_dir(repo_root))),
+        "csharp" => Some(Arc::new(CSharpAdapter::with_root_dir(repo_root))),
+        "typescript" | "javascript" => Some(Arc::new(TypeScriptAdapter::with_root_dir(repo_root))),
+        _ => None,
+    };
+    let Some(adapter) = registered_adapter.or(fallback_adapter) else {
+        return BufferParseResult {
+            syntax_valid: false,
+            parser_available: false,
+            coverage_state: CoverageState::Unknown,
+            diagnostics: vec![format!(
+                "{relative_path}: no language adapter is registered for {language}"
+            )],
+        };
+    };
+    let result = adapter.parse(&context, &file, source);
+    match result {
+        Ok(parsed) => BufferParseResult {
+            syntax_valid: parsed.syntax_valid,
+            parser_available: true,
+            coverage_state: parsed.coverage,
+            diagnostics: parsed
+                .diagnostics
+                .iter()
+                .map(|diagnostic| {
+                    let location = diagnostic
+                        .location
+                        .as_ref()
+                        .map(|location| format!("{}:{}: ", location.path, location.start_line));
+                    format!(
+                        "{}{}",
+                        location.unwrap_or_else(|| format!("{relative_path}: ")),
+                        diagnostic.message
+                    )
+                })
+                .collect(),
+        },
+        Err(error) => BufferParseResult {
+            syntax_valid: false,
+            parser_available: true,
+            coverage_state: CoverageState::Unknown,
+            diagnostics: vec![format!("{relative_path}: {error}")],
+        },
+    }
+}
+
+/// Builds a candidate analysis from unsaved file buffers without writing to the worktree.
+/// Unchanged file analyses reuse cached artifacts when a baseline and storage are available.
+pub fn build_snapshot_and_graph_with_overlays(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    revision: Option<&str>,
+    base_snapshot: Option<&RepoSnapshot>,
+    overlays: &BTreeMap<String, Vec<u8>>,
+    persist: Option<&StorageEngine>,
+) -> Result<AnalysisArtifacts, CliError> {
+    let registry = builtin_plugin_registry(repo_root);
+    build_snapshot_and_graph_with_overlays_and_registry(
+        repo_root,
+        config,
+        revision,
+        base_snapshot,
+        overlays,
+        persist,
+        &registry,
+    )
+}
+
+pub fn build_snapshot_and_graph_with_overlays_and_registry(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    revision: Option<&str>,
+    base_snapshot: Option<&RepoSnapshot>,
+    overlays: &BTreeMap<String, Vec<u8>>,
+    persist: Option<&StorageEngine>,
+    registry: &PluginRegistry,
+) -> Result<AnalysisArtifacts, CliError> {
+    let scanned = scan_repository(repo_root, config, ANALYZER_VERSION, revision)
+        .map_err(|error| CliError::Config(error.to_string()))?;
+    let mut files = scanned.files;
+    let mut canonical_overlays = BTreeMap::new();
+
+    for (raw_path, raw_content) in overlays {
+        let normalized_path = raw_path.replace('\\', "/");
+        if !is_safe_relative_path(&normalized_path) {
+            return Err(CliError::Analysis(format!(
+                "unsafe repository-relative edit path: {raw_path}"
+            )));
+        }
+        if normalized_path
+            .split('/')
+            .any(|segment| segment == ".git" || segment == ".autopsy")
+        {
+            return Err(CliError::Analysis(format!(
+                "edit buffer cannot target an internal repository path: {normalized_path}"
+            )));
+        }
+        if !files.contains_key(&normalized_path) {
+            return Err(CliError::Analysis(format!(
+                "edit buffer path was not discovered inside the repository: {normalized_path}"
+            )));
+        }
+        if raw_content.len() as u64 > config.analysis.max_file_bytes {
+            return Err(CliError::Analysis(format!(
+                "edit buffer exceeds max_file_bytes for {normalized_path}"
+            )));
+        }
+        let relative_path = Path::new(&normalized_path);
+        let language = classify_language(relative_path);
+        let canonical = if is_text_language(&language) {
+            normalize_line_endings(raw_content)
+        } else {
+            raw_content.clone()
+        };
+        let content_hash = blake3::hash(&canonical).to_hex().to_string();
+        files.insert(
+            normalized_path.clone(),
+            FileUnit {
+                path: normalized_path.clone(),
+                language,
+                content_hash,
+                is_generated: is_generated_code(&canonical),
+            },
+        );
+        canonical_overlays.insert(normalized_path, canonical);
+    }
+
+    let snapshot = create_snapshot_with_scan_state(
+        files,
+        scanned.skipped_oversize_files,
+        scanned.traversal_limit_reached,
+        &scanned.revision,
+        &scanned.config_hash,
+        ANALYZER_VERSION,
+    );
+
+    if let (Some(base), Some(storage)) = (base_snapshot, persist)
+        && let Some((artifacts, _, _)) = try_incremental_artifacts(
+            repo_root,
+            base,
+            &snapshot,
+            storage,
+            &canonical_overlays,
+            config.analysis.max_file_bytes,
+            registry,
+        )
+    {
+        return Ok(artifacts);
+    }
+
+    let mut contents = BTreeMap::new();
+    for (file_path, unit) in &snapshot.files {
+        if !should_analyze_file(registry, unit, repo_root) {
+            continue;
+        }
+        let canonical = if let Some(overlay) = canonical_overlays.get(file_path) {
+            overlay.clone()
+        } else {
+            read_worktree_file_canonical(
+                repo_root,
+                file_path,
+                &unit.language,
+                &unit.content_hash,
+                config.analysis.max_file_bytes,
+            )?
+        };
+        if let Ok(text) = String::from_utf8(canonical) {
+            contents.insert(file_path.clone(), text);
+        }
+    }
+    analyze_contents(repo_root, snapshot, contents, persist, registry)
+}
+
+pub fn build_snapshot_and_graph_for_overlay_with_registry(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    base_snapshot: &RepoSnapshot,
+    overlays: &BTreeMap<String, Vec<u8>>,
+    storage: &StorageEngine,
+    registry: &PluginRegistry,
+) -> Result<AnalysisArtifacts, CliError> {
+    if base_snapshot.config_hash != config.content_hash() {
+        return build_snapshot_and_graph_with_overlays_and_registry(
+            repo_root,
+            config,
+            Some(&base_snapshot.revision),
+            Some(base_snapshot),
+            overlays,
+            Some(storage),
+            registry,
+        );
+    }
+
+    let mut files = base_snapshot.files.clone();
+    let mut canonical_overlays = BTreeMap::new();
+    for (raw_path, raw_content) in overlays {
+        let normalized_path = raw_path.replace('\\', "/");
+        if !is_safe_relative_path(&normalized_path)
+            || normalized_path
+                .split('/')
+                .any(|segment| segment == ".git" || segment == ".autopsy")
+        {
+            return Err(CliError::Analysis(format!(
+                "unsafe repository-relative edit path: {raw_path}"
+            )));
+        }
+        let unit = files.get_mut(&normalized_path).ok_or_else(|| {
+            CliError::Analysis(format!(
+                "edit buffer path was not discovered in the baseline: {normalized_path}"
+            ))
+        })?;
+        if raw_content.len() as u64 > config.analysis.max_file_bytes {
+            return Err(CliError::Analysis(format!(
+                "edit buffer exceeds max_file_bytes for {normalized_path}"
+            )));
+        }
+        let canonical = canonical_file_bytes(raw_content, &unit.language);
+        unit.content_hash = blake3::hash(&canonical).to_hex().to_string();
+        unit.is_generated = is_generated_code(&canonical);
+        canonical_overlays.insert(normalized_path, canonical);
+    }
+
+    let snapshot = create_snapshot_with_scan_state(
+        files,
+        base_snapshot.skipped_oversize_files.clone(),
+        base_snapshot.traversal_limit_reached,
+        &base_snapshot.revision,
+        &base_snapshot.config_hash,
+        ANALYZER_VERSION,
+    );
+
+    if let Some((artifacts, _, _)) = try_incremental_artifacts(
+        repo_root,
+        base_snapshot,
+        &snapshot,
+        storage,
+        &canonical_overlays,
+        config.analysis.max_file_bytes,
+        registry,
+    ) {
+        return Ok(artifacts);
+    }
+
+    build_snapshot_and_graph_with_overlays_and_registry(
+        repo_root,
+        config,
+        Some(&base_snapshot.revision),
+        Some(base_snapshot),
+        overlays,
+        Some(storage),
+        registry,
+    )
+}
+
+pub fn build_snapshot_and_graph_for_overlay_from_artifacts_with_registry(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    base_artifacts: &AnalysisArtifacts,
+    overlays: &BTreeMap<String, Vec<u8>>,
+    storage: &StorageEngine,
+    registry: &PluginRegistry,
+) -> Result<AnalysisArtifacts, CliError> {
+    let base_snapshot = &base_artifacts.snapshot;
+    if base_snapshot.config_hash != config.content_hash()
+        || base_snapshot.traversal_limit_reached
+        || !base_snapshot.skipped_oversize_files.is_empty()
+    {
+        return build_snapshot_and_graph_for_overlay_with_registry(
+            repo_root,
+            config,
+            base_snapshot,
+            overlays,
+            storage,
+            registry,
+        );
+    }
+
+    let mut files = base_snapshot.files.clone();
+    let mut canonical_overlays = BTreeMap::new();
+    for (raw_path, raw_content) in overlays {
+        let normalized_path = raw_path.replace('\\', "/");
+        if !is_safe_relative_path(&normalized_path)
+            || normalized_path
+                .split('/')
+                .any(|segment| segment == ".git" || segment == ".autopsy")
+        {
+            return Err(CliError::Analysis(format!(
+                "unsafe repository-relative edit path: {raw_path}"
+            )));
+        }
+        let unit = files.get_mut(&normalized_path).ok_or_else(|| {
+            CliError::Analysis(format!(
+                "edit buffer path was not discovered in the baseline: {normalized_path}"
+            ))
+        })?;
+        if raw_content.len() as u64 > config.analysis.max_file_bytes {
+            return Err(CliError::Analysis(format!(
+                "edit buffer exceeds max_file_bytes for {normalized_path}"
+            )));
+        }
+        let canonical = canonical_file_bytes(raw_content, &unit.language);
+        unit.content_hash = blake3::hash(&canonical).to_hex().to_string();
+        unit.is_generated = is_generated_code(&canonical);
+        canonical_overlays.insert(normalized_path, canonical);
+    }
+
+    let snapshot = create_snapshot_with_scan_state(
+        files,
+        base_snapshot.skipped_oversize_files.clone(),
+        base_snapshot.traversal_limit_reached,
+        &base_snapshot.revision,
+        &base_snapshot.config_hash,
+        ANALYZER_VERSION,
+    );
+    let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
+    let py_adapter = PythonAdapter::with_root_dir(repo_root);
+    let go_adapter = GoAdapter::with_root_dir(repo_root);
+    let rust_adapter = RustAdapter::with_root_dir(repo_root);
+    let java_adapter = JavaAdapter::with_root_dir(repo_root);
+    let csharp_adapter = CSharpAdapter::with_root_dir(repo_root);
+    let parse_ctx = ParseContext {
+        project_root: repo_root.to_path_buf(),
+        options: BTreeMap::new(),
+    };
+    let mut candidate_locals = BTreeMap::new();
+    let mut candidate_symbols_by_file = BTreeMap::new();
+    let mut replaced_sources = BTreeSet::new();
+    let mut replaced_sources_by_file = BTreeMap::new();
+    let mut replacement_edges_by_file = BTreeMap::new();
+
+    for (file_path, content) in &canonical_overlays {
+        let unit = snapshot
+            .files
+            .get(file_path)
+            .expect("overlay paths are validated against the baseline manifest");
+        let Ok(content) = std::str::from_utf8(content) else {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        };
+        let Some(local) = analyze_single_file(
+            registry,
+            &ts_adapter,
+            &py_adapter,
+            &go_adapter,
+            &rust_adapter,
+            &java_adapter,
+            &csharp_adapter,
+            &parse_ctx,
+            unit,
+            content,
+        ) else {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        };
+        if local.coverage != CoverageState::Verified {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        }
+
+        let mut prior_symbols = base_artifacts
+            .symbols
+            .iter()
+            .filter(|symbol| {
+                symbol
+                    .range
+                    .as_ref()
+                    .is_some_and(|location| location.path == *file_path)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut candidate_symbols = local.symbols.clone();
+        prior_symbols.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+        candidate_symbols.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+        if prior_symbols
+            .iter()
+            .map(|symbol| &symbol.stable_id)
+            .ne(candidate_symbols.iter().map(|symbol| &symbol.stable_id))
+            || prior_symbols
+                .iter()
+                .zip(&candidate_symbols)
+                .any(|(before, after)| {
+                    before
+                        .range
+                        .as_ref()
+                        .map(|range| (&range.path, range.start_line))
+                        != after
+                            .range
+                            .as_ref()
+                            .map(|range| (&range.path, range.start_line))
+                })
+        {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        }
+        let file_sources = prior_symbols
+            .iter()
+            .map(|symbol| symbol.stable_id.clone())
+            .collect::<BTreeSet<_>>();
+        replaced_sources.extend(file_sources.iter().cloned());
+        replaced_sources_by_file.insert(file_path.clone(), file_sources);
+
+        let Some(parsed) = local.parsed.as_ref() else {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        };
+        let mut symbol_index = BTreeMap::new();
+        for symbol in &base_artifacts.symbols {
+            symbol_index.insert(symbol.qualified_name.clone(), symbol.stable_id.clone());
+        }
+        let edges = if let Some(adapter) =
+            registry.find_language_analyzer_for_path(Path::new(file_path), repo_root)
+        {
+            adapter.extract_edges(parsed, &symbol_index)
+        } else {
+            match unit.language.as_str() {
+                "python" => py_adapter.extract_edges(parsed, &symbol_index),
+                "go" => go_adapter.extract_edges(parsed, &symbol_index),
+                "rust" => rust_adapter.extract_edges(parsed, &symbol_index),
+                "java" | "kotlin" => java_adapter.extract_edges(parsed, &symbol_index),
+                "csharp" => csharp_adapter.extract_edges(parsed, &symbol_index),
+                _ => ts_adapter.extract_edges(parsed, &symbol_index),
+            }
+        };
+        let Ok(edges) = edges else {
+            return build_snapshot_and_graph_for_overlay_with_registry(
+                repo_root,
+                config,
+                base_snapshot,
+                overlays,
+                storage,
+                registry,
+            );
+        };
+        replacement_edges_by_file.insert(file_path.clone(), edges);
+        candidate_symbols_by_file.insert(file_path.clone(), candidate_symbols);
+        candidate_locals.insert(file_path.clone(), local);
+    }
+
+    let mut graph = base_artifacts.graph.clone();
+    for symbols in candidate_symbols_by_file.values() {
+        for symbol in symbols {
+            graph.add_node(symbol.clone());
+        }
+    }
+    for (file_path, edges) in &replacement_edges_by_file {
+        graph.replace_file_edges(
+            file_path,
+            replaced_sources_by_file
+                .get(file_path)
+                .expect("each overlay records its source symbols"),
+            edges.clone(),
+        );
+    }
+    let replacement_edges = replacement_edges_by_file
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut edges = base_artifacts
+        .edges
+        .iter()
+        .filter(|edge| {
+            !replaced_sources.contains(&edge.source)
+                && !edge
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| canonical_overlays.contains_key(&location.path))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    edges.extend(replacement_edges);
+    edges.sort_by(|left, right| {
+        (&left.kind, &left.source, &left.target).cmp(&(&right.kind, &right.source, &right.target))
+    });
+
+    let mut contracts = base_artifacts
+        .contracts
+        .iter()
+        .filter(|contract| !replaced_sources.contains(&contract.owner))
+        .cloned()
+        .collect::<Vec<_>>();
+    for local in candidate_locals.values() {
+        contracts.extend(local.contracts.iter().cloned());
+    }
+    contracts.sort_by(|left, right| left.owner.cmp(&right.owner));
+
+    let mut symbols = base_artifacts
+        .symbols
+        .iter()
+        .filter(|symbol| {
+            !symbol
+                .range
+                .as_ref()
+                .is_some_and(|range| candidate_symbols_by_file.contains_key(&range.path))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    symbols.extend(candidate_symbols_by_file.values().flatten().cloned());
+    symbols.sort_by(|left, right| {
+        left.stable_id
+            .cmp(&right.stable_id)
+            .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+    });
+    let symbol_index = index_symbols(&symbols);
+    let mut file_coverage = base_artifacts.file_coverage.clone();
+    for (file_path, local) in &candidate_locals {
+        file_coverage.insert(file_path.clone(), local.coverage);
+    }
+
+    Ok(AnalysisArtifacts {
+        snapshot,
+        graph,
+        symbols,
+        symbol_index,
+        edges,
+        contracts,
+        file_coverage,
+        coverage_state: base_artifacts.coverage_state,
+        unsupported_constructs: base_artifacts.unsupported_constructs.clone(),
+    })
+}
+
+pub fn analyze_file_overlay_from_artifacts_with_registry(
+    repo_root: &Path,
+    config: &AutopsyConfig,
+    base_artifacts: &AnalysisArtifacts,
+    relative_path: &str,
+    source: &[u8],
+    registry: &PluginRegistry,
+) -> Result<Option<OverlayFileArtifacts>, CliError> {
+    let base_snapshot = &base_artifacts.snapshot;
+    let baseline_file_coverage = base_artifacts
+        .file_coverage
+        .get(relative_path)
+        .copied()
+        .unwrap_or(base_artifacts.coverage_state);
+    if base_snapshot.config_hash != config.content_hash()
+        || baseline_file_coverage != CoverageState::Verified
+        || base_snapshot.traversal_limit_reached
+        || !base_snapshot.skipped_oversize_files.is_empty()
+    {
+        return Ok(None);
+    }
+
+    let relative_path = relative_path.replace('\\', "/");
+    if !is_safe_relative_path(&relative_path)
+        || relative_path
+            .split('/')
+            .any(|segment| segment == ".git" || segment == ".autopsy")
+    {
+        return Err(CliError::Analysis(format!(
+            "unsafe repository-relative edit path: {relative_path}"
+        )));
+    }
+
+    let mut files = base_snapshot.files.clone();
+    let unit = files.get_mut(&relative_path).ok_or_else(|| {
+        CliError::Analysis(format!(
+            "edit buffer path was not discovered in the baseline: {relative_path}"
+        ))
+    })?;
+    if source.len() as u64 > config.analysis.max_file_bytes {
+        return Err(CliError::Analysis(format!(
+            "edit buffer exceeds max_file_bytes for {relative_path}"
+        )));
+    }
+    let canonical = canonical_file_bytes(source, &unit.language);
+    unit.content_hash = blake3::hash(&canonical).to_hex().to_string();
+    unit.is_generated = is_generated_code(&canonical);
+    let snapshot = create_snapshot_with_scan_state(
+        files,
+        base_snapshot.skipped_oversize_files.clone(),
+        base_snapshot.traversal_limit_reached,
+        &base_snapshot.revision,
+        &base_snapshot.config_hash,
+        ANALYZER_VERSION,
+    );
+    if !should_analyze_file(registry, &snapshot.files[&relative_path], repo_root) {
+        return Ok(None);
+    }
+    let Ok(content) = std::str::from_utf8(&canonical) else {
+        return Ok(None);
+    };
+    let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
+    let py_adapter = PythonAdapter::with_root_dir(repo_root);
+    let go_adapter = GoAdapter::with_root_dir(repo_root);
+    let rust_adapter = RustAdapter::with_root_dir(repo_root);
+    let java_adapter = JavaAdapter::with_root_dir(repo_root);
+    let csharp_adapter = CSharpAdapter::with_root_dir(repo_root);
+    let parse_ctx = ParseContext {
+        project_root: repo_root.to_path_buf(),
+        options: BTreeMap::new(),
+    };
+    let Some(local) = analyze_single_file(
+        registry,
+        &ts_adapter,
+        &py_adapter,
+        &go_adapter,
+        &rust_adapter,
+        &java_adapter,
+        &csharp_adapter,
+        &parse_ctx,
+        &snapshot.files[&relative_path],
+        content,
+    ) else {
+        return Ok(None);
+    };
+    let Some(parsed) = local.parsed.as_ref() else {
+        return Ok(None);
+    };
+    let parse_result = buffer_parse_result_from_parsed(&relative_path, parsed);
+
+    let edges = if let Some(adapter) =
+        registry.find_language_analyzer_for_path(Path::new(&relative_path), repo_root)
+    {
+        adapter.extract_edges(parsed, &base_artifacts.symbol_index)
+    } else {
+        match snapshot.files[&relative_path].language.as_str() {
+            "python" => py_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+            "go" => go_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+            "rust" => rust_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+            "java" | "kotlin" => java_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+            "csharp" => csharp_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+            _ => ts_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
+        }
+    }
+    .map_err(|error| CliError::Analysis(error.to_string()))?;
+
+    Ok(Some(OverlayFileArtifacts {
+        snapshot,
+        symbols: local.symbols,
+        edges,
+        contracts: local.contracts,
+        coverage_state: local.coverage,
+        parse_result,
+    }))
+}
+
+fn buffer_parse_result_from_parsed(relative_path: &str, parsed: &ParsedFile) -> BufferParseResult {
+    BufferParseResult {
+        syntax_valid: parsed.syntax_valid,
+        parser_available: true,
+        coverage_state: parsed.coverage,
+        diagnostics: parsed
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                let location = diagnostic
+                    .location
+                    .as_ref()
+                    .map(|location| format!("{}:{}: ", location.path, location.start_line));
+                format!(
+                    "{}{}",
+                    location.unwrap_or_else(|| format!("{relative_path}: ")),
+                    diagnostic.message
+                )
+            })
+            .collect(),
+    }
+}
+
+fn index_symbols(symbols: &[Symbol]) -> BTreeMap<String, SymbolId> {
+    let mut symbol_index = BTreeMap::new();
+    for symbol in symbols {
+        symbol_index.insert(symbol.qualified_name.clone(), symbol.stable_id.clone());
+    }
+    symbol_index
 }
 
 /// Rebuilds analysis artifacts for a STORED snapshot from the
@@ -1467,9 +2597,38 @@ pub fn build_artifacts_from_snapshot(
     snapshot: RepoSnapshot,
     storage: &StorageEngine,
 ) -> Result<AnalysisArtifacts, CliError> {
-    let contents = load_snapshot_contents(&snapshot, storage)?;
-    // Root dir is irrelevant here: contents come from CAS, never disk.
-    analyze_contents(Path::new(""), snapshot, contents, Some(storage))
+    let registry = builtin_plugin_registry(Path::new(""));
+    build_artifacts_from_snapshot_with_registry(snapshot, storage, &registry, Path::new(""))
+}
+
+fn build_repository_snapshot_artifacts(
+    cli: &Cli,
+    snapshot: RepoSnapshot,
+    storage: &StorageEngine,
+) -> Result<AnalysisArtifacts, CliError> {
+    let registry = builtin_plugin_registry(&cli.repo_root);
+    build_artifacts_from_snapshot_with_registry(snapshot, storage, &registry, &cli.repo_root)
+}
+
+pub fn build_artifacts_from_snapshot_with_registry(
+    snapshot: RepoSnapshot,
+    storage: &StorageEngine,
+    registry: &PluginRegistry,
+    repo_root: &Path,
+) -> Result<AnalysisArtifacts, CliError> {
+    if let Some((artifacts, _, _)) = try_incremental_artifacts(
+        repo_root,
+        &snapshot,
+        &snapshot,
+        storage,
+        &BTreeMap::new(),
+        u64::MAX,
+        registry,
+    ) {
+        return Ok(artifacts);
+    }
+    let contents = load_snapshot_contents(&snapshot, storage, registry, repo_root)?;
+    analyze_contents(repo_root, snapshot, contents, Some(storage), registry)
 }
 
 /// Two-phase deterministic analysis over explicit file contents.
@@ -1483,6 +2642,7 @@ fn analyze_contents(
     snapshot: RepoSnapshot,
     contents: BTreeMap<String, String>,
     persist_storage: Option<&StorageEngine>,
+    registry: &PluginRegistry,
 ) -> Result<AnalysisArtifacts, CliError> {
     let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
@@ -1497,14 +2657,17 @@ fn analyze_contents(
 
     // Phase 1: file-local analysis (parse + symbols + contracts + coverage).
     let mut local_by_path: BTreeMap<String, FileLocalAnalysis> = BTreeMap::new();
+    let mut analysis_gap = false;
     for (file_path, unit) in &snapshot.files {
-        if !is_analyzed_language(unit.language.as_str()) {
+        if !should_analyze_file(registry, unit, repo_root) {
             continue;
         }
         let Some(content_str) = contents.get(file_path) else {
+            analysis_gap = true;
             continue;
         };
         if let Some(local) = analyze_single_file(
+            registry,
             &ts_adapter,
             &py_adapter,
             &go_adapter,
@@ -1516,10 +2679,13 @@ fn analyze_contents(
             content_str,
         ) {
             local_by_path.insert(file_path.clone(), local);
+        } else {
+            analysis_gap = true;
         }
     }
 
     let (artifacts, edges_by_file, local_back) = assemble_artifacts(
+        registry,
         &ts_adapter,
         &py_adapter,
         &go_adapter,
@@ -1531,11 +2697,19 @@ fn analyze_contents(
         local_by_path,
         &BTreeMap::new(),
         &contents,
+        analysis_gap,
     )?;
 
     // Write-through per-file artifact cache for future incrementals.
     if let Some(storage) = persist_storage {
-        let _ = store_file_artifacts(storage, &snapshot, &local_back, &edges_by_file);
+        let _ = store_file_artifacts(
+            storage,
+            &snapshot,
+            &local_back,
+            &edges_by_file,
+            registry,
+            repo_root,
+        );
     }
 
     Ok(artifacts)
@@ -1558,6 +2732,7 @@ type AssembledArtifacts = (
 /// `contents` only when their edges must be extracted.
 #[allow(clippy::too_many_arguments)]
 fn assemble_artifacts(
+    registry: &PluginRegistry,
     ts_adapter: &TypeScriptAdapter,
     py_adapter: &PythonAdapter,
     go_adapter: &GoAdapter,
@@ -1569,6 +2744,7 @@ fn assemble_artifacts(
     mut local_by_path: BTreeMap<String, FileLocalAnalysis>,
     cached_edges: &BTreeMap<String, Vec<Edge>>,
     contents: &BTreeMap<String, String>,
+    analysis_gap: bool,
 ) -> Result<AssembledArtifacts, CliError> {
     let mut all_symbols: Vec<Symbol> = Vec::new();
     let mut symbol_index: BTreeMap<String, SymbolId> = BTreeMap::new();
@@ -1607,25 +2783,37 @@ fn assemble_artifacts(
             if local.parsed.is_none()
                 && let Some(unit) = snapshot.files.get(file_path)
                 && let Some(content_str) = contents.get(file_path)
-                && let Ok(parsed) = match unit.language.as_str() {
-                    "python" => py_adapter.parse(parse_ctx, unit, content_str),
-                    "go" => go_adapter.parse(parse_ctx, unit, content_str),
-                    "rust" => rust_adapter.parse(parse_ctx, unit, content_str),
-                    "java" | "kotlin" => java_adapter.parse(parse_ctx, unit, content_str),
-                    "csharp" => csharp_adapter.parse(parse_ctx, unit, content_str),
-                    _ => ts_adapter.parse(parse_ctx, unit, content_str),
-                }
             {
-                local.parsed = Some(parsed);
+                let parsed = if let Some(adapter) = registry
+                    .find_language_analyzer_for_path(Path::new(file_path), &parse_ctx.project_root)
+                {
+                    adapter.parse(parse_ctx, unit, content_str).ok()
+                } else {
+                    match unit.language.as_str() {
+                        "python" => py_adapter.parse(parse_ctx, unit, content_str).ok(),
+                        "go" => go_adapter.parse(parse_ctx, unit, content_str).ok(),
+                        "rust" => rust_adapter.parse(parse_ctx, unit, content_str).ok(),
+                        "java" | "kotlin" => java_adapter.parse(parse_ctx, unit, content_str).ok(),
+                        "csharp" => csharp_adapter.parse(parse_ctx, unit, content_str).ok(),
+                        _ => ts_adapter.parse(parse_ctx, unit, content_str).ok(),
+                    }
+                };
+                local.parsed = parsed;
             }
             if let Some(parsed) = local.parsed.as_ref() {
-                let edges = match parsed.file.language.as_str() {
-                    "python" => py_adapter.extract_edges(parsed, &symbol_index),
-                    "go" => go_adapter.extract_edges(parsed, &symbol_index),
-                    "rust" => rust_adapter.extract_edges(parsed, &symbol_index),
-                    "java" | "kotlin" => java_adapter.extract_edges(parsed, &symbol_index),
-                    "csharp" => csharp_adapter.extract_edges(parsed, &symbol_index),
-                    _ => ts_adapter.extract_edges(parsed, &symbol_index),
+                let edges = if let Some(adapter) = registry
+                    .find_language_analyzer_for_path(Path::new(file_path), &parse_ctx.project_root)
+                {
+                    adapter.extract_edges(parsed, &symbol_index)
+                } else {
+                    match parsed.file.language.as_str() {
+                        "python" => py_adapter.extract_edges(parsed, &symbol_index),
+                        "go" => go_adapter.extract_edges(parsed, &symbol_index),
+                        "rust" => rust_adapter.extract_edges(parsed, &symbol_index),
+                        "java" | "kotlin" => java_adapter.extract_edges(parsed, &symbol_index),
+                        "csharp" => csharp_adapter.extract_edges(parsed, &symbol_index),
+                        _ => ts_adapter.extract_edges(parsed, &symbol_index),
+                    }
                 };
                 if let Ok(edges) = edges {
                     for edge in &edges {
@@ -1642,6 +2830,11 @@ fn assemble_artifacts(
     all_edges.sort_by(|a, b| (&a.kind, &a.source, &a.target).cmp(&(&b.kind, &b.source, &b.target)));
     all_contracts.sort_by(|a, b| a.owner.cmp(&b.owner));
 
+    let mut file_coverage = BTreeMap::new();
+    for (file_path, local) in &local_by_path {
+        file_coverage.insert(file_path.clone(), local.coverage);
+    }
+
     let mut unsupported_constructs = BTreeSet::new();
     let mut had_unknown = false;
     let mut had_partial = false;
@@ -1657,23 +2850,28 @@ fn assemble_artifacts(
             CoverageState::Verified => {}
         }
     }
-    let overall_coverage = if had_unknown {
+    let incomplete_scan =
+        snapshot.traversal_limit_reached || !snapshot.skipped_oversize_files.is_empty();
+    let overall_coverage = if had_unknown || analysis_gap {
         CoverageState::Unknown
     } else if !unsupported_constructs.is_empty() {
         CoverageState::Unsupported
-    } else if had_partial {
+    } else if had_partial || incomplete_scan {
         CoverageState::Partial
     } else {
         CoverageState::Verified
     };
 
+    let symbol_index = index_symbols(&all_symbols);
     Ok((
         AnalysisArtifacts {
             snapshot,
             graph,
             symbols: all_symbols,
+            symbol_index,
             edges: all_edges,
             contracts: all_contracts,
+            file_coverage,
             coverage_state: overall_coverage,
             unsupported_constructs: unsupported_constructs.into_iter().collect(),
         },
@@ -1719,23 +2917,26 @@ pub fn cache_snapshot_contents(
     repo_root: &Path,
     snapshot: &RepoSnapshot,
     storage: &StorageEngine,
+    max_file_bytes: u64,
 ) -> Result<usize, CliError> {
-    use blake3::hash as blake3_hash;
     let mut cached = 0usize;
     for (file_path, unit) in &snapshot.files {
-        let full_path = repo_root.join(file_path);
-        let Ok(raw) = std::fs::read(&full_path) else {
-            continue;
+        let canonical = match read_worktree_file_canonical(
+            repo_root,
+            file_path,
+            &unit.language,
+            &unit.content_hash,
+            max_file_bytes,
+        ) {
+            Ok(canonical) => canonical,
+            Err(error) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "warning: skipping content cache for {file_path}: {error}"
+                );
+                continue;
+            }
         };
-        let canonical = canonical_file_bytes(&raw, &unit.language);
-        if blake3_hash(&canonical).to_hex().to_string() != unit.content_hash {
-            let _ = writeln!(
-                std::io::stderr(),
-                "warning: file changed during scan, skipping content cache: {}",
-                file_path
-            );
-            continue;
-        }
         storage
             .put_cache_object(&canonical)
             .map_err(|e| CliError::Storage(e.to_string()))?;
@@ -1745,16 +2946,20 @@ pub fn cache_snapshot_contents(
 }
 
 /// Stores per-file analysis artifacts in the incremental cache.
-/// Artifacts are keyed by content hash: unchanged files map to
-/// identical keys, so later `--incremental` runs reuse them exactly.
+/// Cache keys include the content hash, repository-relative path,
+/// extension, adapter identity/version, and workspace resolution context.
 /// Only successfully analyzed files are stored.
 fn store_file_artifacts(
     storage: &StorageEngine,
     snapshot: &RepoSnapshot,
     local_by_path: &BTreeMap<String, FileLocalAnalysis>,
     edges_by_file: &BTreeMap<String, Vec<Edge>>,
+    registry: &PluginRegistry,
+    root: &Path,
 ) -> Result<usize, CliError> {
     let mut stored = 0usize;
+    let cache_scope = artifact_cache_scope(root);
+    let resolution_context = resolution_context_digest(snapshot);
     for (file_path, local) in local_by_path {
         let Some(unit) = snapshot.files.get(file_path) else {
             continue;
@@ -1768,20 +2973,35 @@ fn store_file_artifacts(
             unsupported: local.unsupported.clone(),
         };
         let bytes = serde_json::to_vec(&artifact).map_err(|e| CliError::Analysis(e.to_string()))?;
+        let cache_key = file_analysis_cache_key(registry, unit, root, &resolution_context);
         storage
-            .put_file_artifact(&unit.content_hash, &bytes)
+            .put_file_artifact(&cache_key, &bytes)
             .map_err(|e| CliError::Storage(e.to_string()))?;
+        remember_file_artifact(&cache_scope, &cache_key, artifact);
         stored += 1;
     }
     Ok(stored)
 }
 
-/// Loads a cached per-file artifact by content hash.
+/// Loads a cached per-file artifact by its composite cache key.
 /// Returns None on cache miss or corrupt entry (caller falls back to
 /// fresh analysis — never a hard error).
-fn load_file_artifact(storage: &StorageEngine, content_hash: &str) -> Option<FileAnalysisArtifact> {
-    let bytes = storage.get_file_artifact(content_hash).ok()??;
-    serde_json::from_slice(&bytes).ok()
+fn load_file_artifact(
+    storage: &StorageEngine,
+    cache_scope: &str,
+    cache_key: &str,
+) -> Option<FileAnalysisArtifact> {
+    let memory_key = format!("{cache_scope}\0{cache_key}");
+    if let Some(cache) = FILE_ANALYSIS_MEMORY_CACHE.get()
+        && let Ok(cache) = cache.lock()
+        && let Some(artifact) = cache.get(&memory_key)
+    {
+        return Some(artifact.clone());
+    }
+    let bytes = storage.get_file_artifact(cache_key).ok()??;
+    let artifact: FileAnalysisArtifact = serde_json::from_slice(&bytes).ok()?;
+    remember_file_artifact(cache_scope, cache_key, artifact.clone());
+    Some(artifact)
 }
 
 /// Attempts incremental analysis against a base snapshot.
@@ -1796,6 +3016,9 @@ fn try_incremental_artifacts(
     base_snapshot: &RepoSnapshot,
     new_snapshot: &RepoSnapshot,
     storage: &StorageEngine,
+    overlays: &BTreeMap<String, Vec<u8>>,
+    max_file_bytes: u64,
+    registry: &PluginRegistry,
 ) -> Option<(AnalysisArtifacts, usize, usize)> {
     let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
     let py_adapter = PythonAdapter::with_root_dir(repo_root);
@@ -1808,48 +3031,45 @@ fn try_incremental_artifacts(
         options: BTreeMap::new(),
     };
 
+    let resolution_context = resolution_context_digest(base_snapshot);
+    if resolution_context != resolution_context_digest(new_snapshot) {
+        return None;
+    }
+
     // 1. Load base artifacts; any miss degrades to full analysis.
     let mut base_ids: BTreeSet<SymbolId> = BTreeSet::new();
     let mut base_by_hash: BTreeMap<String, FileAnalysisArtifact> = BTreeMap::new();
+    let cache_scope = artifact_cache_scope(repo_root);
     for unit in base_snapshot.files.values() {
-        if !is_analyzed_language(unit.language.as_str()) {
+        if !should_analyze_file(registry, unit, repo_root) {
             continue;
         }
-        let artifact = load_file_artifact(storage, &unit.content_hash)?;
+        let cache_key = file_analysis_cache_key(registry, unit, repo_root, &resolution_context);
+        let artifact = load_file_artifact(storage, &cache_scope, &cache_key)?;
         for sym in &artifact.symbols {
             base_ids.insert(sym.stable_id.clone());
         }
-        base_by_hash.insert(unit.content_hash.clone(), artifact);
+        base_by_hash.insert(cache_key, artifact);
     }
 
-    // 2. Read worktree contents once (cheap I/O; parsing is the cost).
+    // 2. Keep unchanged source bytes lazy; cached artifacts suffice unless
+    //    the global symbol set changes and cross-file edges need rebuilding.
     let mut contents: BTreeMap<String, String> = BTreeMap::new();
-    for (file_path, unit) in &new_snapshot.files {
-        if !is_analyzed_language(unit.language.as_str()) {
-            continue;
-        }
-        let full_path = repo_root.join(file_path);
-        if let Ok(raw) = std::fs::read(&full_path) {
-            let canonical = canonical_file_bytes(&raw, &unit.language);
-            if let Ok(text) = String::from_utf8(canonical) {
-                contents.insert(file_path.clone(), text);
-            }
-        }
-    }
 
-    // 3. Partition files into reused (no parse at all) vs fresh.
+    // 3. Partition files into cached vs changed analyses.
     let mut local_by_path: BTreeMap<String, FileLocalAnalysis> = BTreeMap::new();
     let mut staged_edges: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
     let mut reused = 0usize;
     let mut total = 0usize;
     for (file_path, unit) in &new_snapshot.files {
-        if !is_analyzed_language(unit.language.as_str()) {
+        if !should_analyze_file(registry, unit, repo_root) {
             continue;
         }
         total += 1;
         let base_unit = base_snapshot.files.get(file_path);
         let same_bytes = base_unit.is_some_and(|b| b.content_hash == unit.content_hash);
-        if same_bytes && let Some(artifact) = base_by_hash.get(&unit.content_hash) {
+        let cache_key = file_analysis_cache_key(registry, unit, repo_root, &resolution_context);
+        if same_bytes && let Some(artifact) = base_by_hash.get(&cache_key) {
             reused += 1;
             staged_edges.insert(file_path.clone(), artifact.edges.clone());
             local_by_path.insert(
@@ -1864,22 +3084,34 @@ fn try_incremental_artifacts(
             );
             continue;
         }
-        // Changed or new file: analyze fresh from worktree bytes.
-        if let Some(content_str) = contents.get(file_path)
-            && let Some(local) = analyze_single_file(
-                &ts_adapter,
-                &py_adapter,
-                &go_adapter,
-                &rust_adapter,
-                &java_adapter,
-                &csharp_adapter,
-                &parse_ctx,
-                unit,
-                content_str,
+        // Changed or new file: only this file's contents are needed now.
+        let canonical = if let Some(overlay) = overlays.get(file_path) {
+            overlay.clone()
+        } else {
+            read_worktree_file_canonical(
+                repo_root,
+                file_path,
+                &unit.language,
+                &unit.content_hash,
+                max_file_bytes,
             )
-        {
-            local_by_path.insert(file_path.clone(), local);
-        }
+            .ok()?
+        };
+        let content_str = String::from_utf8(canonical).ok()?;
+        contents.insert(file_path.clone(), content_str.clone());
+        let local = analyze_single_file(
+            registry,
+            &ts_adapter,
+            &py_adapter,
+            &go_adapter,
+            &rust_adapter,
+            &java_adapter,
+            &csharp_adapter,
+            &parse_ctx,
+            unit,
+            &content_str,
+        )?;
+        local_by_path.insert(file_path.clone(), local);
     }
 
     // 4. Global symbol-id set decides edge reuse soundness.
@@ -1892,10 +3124,27 @@ fn try_incremental_artifacts(
     let cached_edges: BTreeMap<String, Vec<Edge>> = if current_ids == base_ids {
         staged_edges
     } else {
+        // Symbol additions/removals can change resolution in every file.
+        // Load unchanged bytes only for this correctness-critical fallback.
+        for (file_path, unit) in &new_snapshot.files {
+            if !should_analyze_file(registry, unit, repo_root) || contents.contains_key(file_path) {
+                continue;
+            }
+            let canonical = read_worktree_file_canonical(
+                repo_root,
+                file_path,
+                &unit.language,
+                &unit.content_hash,
+                max_file_bytes,
+            )
+            .ok()?;
+            contents.insert(file_path.clone(), String::from_utf8(canonical).ok()?);
+        }
         BTreeMap::new()
     };
 
     let (artifacts, edges_by_file, local_back) = assemble_artifacts(
+        registry,
         &ts_adapter,
         &py_adapter,
         &go_adapter,
@@ -1907,6 +3156,7 @@ fn try_incremental_artifacts(
         local_by_path,
         &cached_edges,
         &contents,
+        false,
     )
     .ok()?;
 
@@ -1930,7 +3180,11 @@ fn try_incremental_artifacts(
                 unsupported: local.unsupported.clone(),
             };
             if let Ok(bytes) = serde_json::to_vec(&artifact) {
-                let _ = storage.put_file_artifact(&unit.content_hash, &bytes);
+                let cache_key =
+                    file_analysis_cache_key(registry, unit, repo_root, &resolution_context);
+                if storage.put_file_artifact(&cache_key, &bytes).is_ok() {
+                    remember_file_artifact(&cache_scope, &cache_key, artifact);
+                }
             }
         }
     }
@@ -1943,10 +3197,12 @@ fn try_incremental_artifacts(
 fn load_snapshot_contents(
     snapshot: &RepoSnapshot,
     storage: &StorageEngine,
+    registry: &PluginRegistry,
+    repo_root: &Path,
 ) -> Result<BTreeMap<String, String>, CliError> {
     let mut contents = BTreeMap::new();
     for (file_path, unit) in &snapshot.files {
-        if !is_analyzed_language(unit.language.as_str()) {
+        if !should_analyze_file(registry, unit, repo_root) {
             continue;
         }
         match storage
@@ -1987,6 +3243,7 @@ fn handle_baseline(
 ) -> Result<i32, CliError> {
     let config = load_or_default_config(&cli.repo_root)?;
     let storage = get_storage(cli)?;
+    let registry = builtin_plugin_registry(&cli.repo_root);
 
     // Full pipeline always runs the complete analysis; incremental
     // reuses per-file artifacts for byte-identical files when possible.
@@ -2004,7 +3261,15 @@ fn handle_baseline(
                 let new_snapshot =
                     scan_repository(&cli.repo_root, &config, ANALYZER_VERSION, revision)
                         .map_err(|e| CliError::Config(e.to_string()))?;
-                match try_incremental_artifacts(&cli.repo_root, &base, &new_snapshot, &storage) {
+                match try_incremental_artifacts(
+                    &cli.repo_root,
+                    &base,
+                    &new_snapshot,
+                    &storage,
+                    &BTreeMap::new(),
+                    config.analysis.max_file_bytes,
+                    &registry,
+                ) {
                     Some((artifacts, reused, total)) => {
                         let _ = writeln!(
                             std::io::stderr(),
@@ -2019,7 +3284,13 @@ fn handle_baseline(
                             std::io::stderr(),
                             "incremental baseline: cache incomplete, running full analysis"
                         );
-                        build_snapshot_and_graph(&cli.repo_root, &config, revision, Some(&storage))?
+                        build_snapshot_and_graph_with_registry(
+                            &cli.repo_root,
+                            &config,
+                            revision,
+                            Some(&storage),
+                            &registry,
+                        )?
                     }
                 }
             }
@@ -2028,11 +3299,23 @@ fn handle_baseline(
                     std::io::stderr(),
                     "incremental baseline: no stored baseline, running full analysis"
                 );
-                build_snapshot_and_graph(&cli.repo_root, &config, revision, Some(&storage))?
+                build_snapshot_and_graph_with_registry(
+                    &cli.repo_root,
+                    &config,
+                    revision,
+                    Some(&storage),
+                    &registry,
+                )?
             }
         }
     } else {
-        build_snapshot_and_graph(&cli.repo_root, &config, revision, Some(&storage))?
+        build_snapshot_and_graph_with_registry(
+            &cli.repo_root,
+            &config,
+            revision,
+            Some(&storage),
+            &registry,
+        )?
     };
 
     // Empty snapshots almost always mean a wrong --repo-root (relative
@@ -2057,23 +3340,26 @@ fn handle_baseline(
         );
     }
 
-    // Persist snapshot record in SQLite database
-    storage
-        .save_snapshot(&artifacts.snapshot)
-        .map_err(|e| CliError::Storage(e.to_string()))?;
-
     // Persist canonical per-file bytes into the content-addressed cache
     // so later `diff` / `verify --baseline-id` can rebuild this exact
     // state (FR-007, FR-010). Keyed by content_hash by construction.
-    let cached_files = cache_snapshot_contents(&cli.repo_root, &artifacts.snapshot, &storage)?;
+    let cached_files = cache_snapshot_contents(
+        &cli.repo_root,
+        &artifacts.snapshot,
+        &storage,
+        config.analysis.max_file_bytes,
+    )?;
     if cached_files != artifacts.snapshot.files.len() {
-        let _ = writeln!(
-            std::io::stderr(),
-            "warning: cached {}/{} snapshot files; before-state rebuild may be incomplete",
-            cached_files,
+        return Err(CliError::Storage(format!(
+            "could not persist all snapshot file contents ({cached_files}/{}); retry after the repository stops changing",
             artifacts.snapshot.files.len()
-        );
+        )));
     }
+
+    // Persist the snapshot only after every referenced file blob is durable.
+    storage
+        .save_snapshot(&artifacts.snapshot)
+        .map_err(|e| CliError::Storage(e.to_string()))?;
 
     // Build and output report
     let coverage = CoverageSummary {
@@ -2127,7 +3413,7 @@ fn handle_diff(
                 .get_snapshot(&SnapshotId::new(id))
                 .map_err(|e| CliError::Storage(e.to_string()))?;
             match stored_opt {
-                Some(stored) => build_artifacts_from_snapshot(stored, &storage)?,
+                Some(stored) => build_repository_snapshot_artifacts(cli, stored, &storage)?,
                 None => build_snapshot_and_graph(&cli.repo_root, &config, Some(id), None)?,
             }
         }
@@ -2162,7 +3448,8 @@ fn handle_diff(
     {
         None
     } else {
-        Some(build_artifacts_from_snapshot(
+        Some(build_repository_snapshot_artifacts(
+            cli,
             before_snapshot.clone(),
             &storage,
         )?)
@@ -2257,7 +3544,7 @@ fn handle_impact(cli: &Cli, req: ImpactRequest<'_>) -> Result<i32, CliError> {
                 .get_snapshot(&SnapshotId::new(id))
                 .map_err(|e| CliError::Storage(e.to_string()))?;
             match stored_opt {
-                Some(stored) => build_artifacts_from_snapshot(stored, &storage)?,
+                Some(stored) => build_repository_snapshot_artifacts(cli, stored, &storage)?,
                 None => {
                     return Err(CliError::Storage(format!(
                         "snapshot '{}' not found; run `baseline` first",
@@ -2479,7 +3766,7 @@ fn handle_verify(
                     base_id
                 ))
             })?;
-        Some(build_artifacts_from_snapshot(stored, &storage)?)
+        Some(build_repository_snapshot_artifacts(cli, stored, &storage)?)
     } else {
         None
     };
@@ -2628,7 +3915,7 @@ fn pinned_or_worktree(cli: &Cli, snapshot_id: Option<&str>) -> Result<AnalysisAr
                         "snapshot '{id}' not stored; capture one with `autopsy baseline --persist`"
                     ))
                 })?;
-            build_artifacts_from_snapshot(stored, &storage)
+            build_repository_snapshot_artifacts(cli, stored, &storage)
         }
         None => {
             let config = load_or_default_config(&cli.repo_root)?;
@@ -3466,5 +4753,50 @@ mod error_repair_tests {
         let repair = CliError::Config("missing field `exclude`".to_string()).repair();
         assert_eq!(repair.what_failed, "config_field_missing");
         assert!(repair.next_action.contains("add the named field"));
+    }
+}
+
+#[cfg(test)]
+mod plugin_scan_tests {
+    use super::*;
+
+    #[test]
+    fn registered_language_plugin_analyzes_its_declared_extension() {
+        let root = std::env::temp_dir().join(format!("autopsy-plugin-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("entry.custom"),
+            "export function customEntry() { return 1; }\n",
+        )
+        .unwrap();
+        let registry = builtin_plugin_registry(&root);
+        registry.register_language(Arc::new(RuntimeLanguagePlugin {
+            plugin_id: "lang.custom_test",
+            display_name: "Test Source Adapter",
+            description: "Exercises adapter dispatch through the plugin registry",
+            language_name: "TypeScript-compatible test source",
+            extensions: &[".custom"],
+            adapter_factory: |root| Arc::new(TypeScriptAdapter::with_root_dir(root)),
+            default_root: root.clone(),
+        }));
+
+        let artifacts = build_snapshot_and_graph_with_registry(
+            &root,
+            &AutopsyConfig::default(),
+            None,
+            None,
+            &registry,
+        )
+        .unwrap();
+
+        assert!(
+            artifacts
+                .symbols
+                .iter()
+                .any(|symbol| symbol.qualified_name.contains("customEntry")),
+            "the registered parser must contribute symbols for its extension"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

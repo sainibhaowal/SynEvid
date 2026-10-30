@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Michroma, Orbitron, Syncopate, Space_Grotesk, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { ThemeProvider } from '@/context/ThemeContext';
+import TooltipLayer from '@/components/TooltipLayer';
 
 const michroma = Michroma({
   subsets: ['latin'],
@@ -81,6 +82,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-[var(--background)] text-[var(--foreground)] font-sans antialiased overflow-x-hidden transition-colors duration-150">
         <ThemeProvider>
           {children}
+          <TooltipLayer />
         </ThemeProvider>
       </body>
     </html>

@@ -1,276 +1,273 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, SimulateEditResponse } from '@/lib/api';
-import {
-  Code2,
-  Zap,
-  CheckCircle2,
-  AlertOctagon,
-  AlertTriangle,
-  Play,
-  RotateCcw,
-  Sparkles,
-} from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, Code2, Play, RotateCcw, Zap } from 'lucide-react';
 
-const PRESETS = {
-  clean: `// Clean Method Matching Callers
-export class PaymentService {
-  public chargeCard(token: string, amount: number): boolean {
-    return true;
-  }
+interface LiveEditSimulatorProps {
+  filePath: string | null;
+  repoId: string;
+  onSimulationChange: (result: SimulateEditResponse | null) => void;
+}
 
-  public legacyFormat(value: string): string {
-    return value.toUpperCase();
-  }
-}`,
-  breaking_arity: `// Introducing Breaking Parameter Arity: taxRate: number
-export class PaymentService {
-  public chargeCard(token: string, amount: number, taxRate: number): boolean {
-    return true;
-  }
-
-  public legacyFormat(value: string): string {
-    return value.toUpperCase();
-  }
-}`,
-  syntax_error: `// Broken Malformed Syntax Simulation
-export class PaymentService {
-  public chargeCard(((syntax_error_mock
-}`,
-  dead_code: `// Removed legacyFormat function entirely
-export class PaymentService {
-  public chargeCard(token: string, amount: number): boolean {
-    return true;
-  }
-}`,
-};
-
-export default function LiveEditSimulator() {
-  const [filePath, setFilePath] = useState('src/services/PaymentService.ts');
-  const [buffer, setBuffer] = useState(PRESETS.clean);
+export default function LiveEditSimulator({
+  filePath,
+  repoId,
+  onSimulationChange,
+}: LiveEditSimulatorProps) {
+  const [buffer, setBuffer] = useState('');
   const [response, setResponse] = useState<SimulateEditResponse | null>(null);
+  const [simulationError, setSimulationError] = useState<string | null>(null);
+  const [sourceLoadError, setSourceLoadError] = useState<string | null>(null);
+  const [isLoadingSource, setIsLoadingSource] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
-
-  const runSimulation = async (content: string) => {
-    setIsSimulating(true);
-    try {
-      const res = await api.simulateEdit(filePath, content);
-      setResponse(res);
-    } catch (err) {
-      console.error('Simulation error', err);
-    } finally {
-      setIsSimulating(false);
-    }
-  };
-
-  const handleBufferChange = (val: string) => {
-    setBuffer(val);
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      runSimulation(val);
-    }, 45);
-  };
-
-  const applyPreset = (key: keyof typeof PRESETS) => {
-    setBuffer(PRESETS[key]);
-    runSimulation(PRESETS[key]);
-  };
+  const [reloadSequence, setReloadSequence] = useState(0);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSequence = useRef(0);
+  const callbackRef = useRef(onSimulationChange);
 
   useEffect(() => {
-    runSimulation(buffer);
+    callbackRef.current = onSimulationChange;
+  }, [onSimulationChange]);
+
+  const runSimulation = useCallback(async (targetPath: string, targetRepoId: string, content: string) => {
+    const sequence = ++requestSequence.current;
+    setIsSimulating(true);
+    setSimulationError(null);
+    try {
+      const result = await api.simulateEdit(targetPath, content, targetRepoId);
+      if (sequence === requestSequence.current) {
+        setResponse(result);
+        callbackRef.current(result);
+      }
+    } catch (error) {
+      if (sequence === requestSequence.current) {
+        const message = error instanceof Error ? error.message : 'Simulation request failed';
+        setResponse(null);
+        setSimulationError(message);
+        callbackRef.current(null);
+      }
+    } finally {
+      if (sequence === requestSequence.current) setIsSimulating(false);
+    }
   }, []);
 
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    requestSequence.current += 1;
+    setResponse(null);
+    setSimulationError(null);
+    setSourceLoadError(null);
+    setBuffer('');
+    callbackRef.current(null);
+
+    if (!filePath || !repoId) {
+      setIsLoadingSource(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingSource(true);
+    void api.readSourceFile(filePath, repoId).then((source) => {
+      if (cancelled) return;
+      setBuffer(source.content);
+      setIsLoadingSource(false);
+      void runSimulation(filePath, repoId, source.content);
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      const message = error instanceof Error ? error.message : 'Unable to load this source file';
+      setSimulationError(message);
+      setSourceLoadError(message);
+      setIsLoadingSource(false);
+    });
+
+    return () => {
+      cancelled = true;
+      requestSequence.current += 1;
+    };
+  }, [filePath, repoId, reloadSequence, runSimulation]);
+
+  useEffect(() => () => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    requestSequence.current += 1;
+  }, []);
+
+  const handleBufferChange = (content: string) => {
+    setBuffer(content);
+    if (!filePath || !repoId) return;
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      void runSimulation(filePath, repoId, content);
+    }, 150);
+  };
+
+  const coverage = response?.coverage_state?.toLowerCase() || 'unknown';
+  const verdict = !response
+    ? 'UNKNOWN'
+    : coverage === 'unknown'
+    ? 'UNKNOWN'
+    : coverage === 'partial' && response.verdict.toUpperCase() === 'PASS'
+    ? 'PARTIAL'
+    : response.verdict.toUpperCase();
+  const verdictClass = verdict === 'FAIL'
+    ? 'bg-rose-500/15 border-rose-500/30 text-rose-600 dark:text-rose-400'
+    : verdict === 'WARN' || verdict === 'PARTIAL'
+    ? 'bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400'
+    : verdict === 'PASS'
+    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+    : 'bg-slate-500/10 border-slate-500/30 text-slate-600 dark:text-slate-300';
+
   return (
-    <div className="space-y-6">
-      {/* Simulation Header */}
+    <div className="space-y-6" data-testid="live-edit-simulator">
       <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <span className="text-xs uppercase font-mono tracking-wider text-[var(--text-muted)] font-semibold">
-              In-Memory Buffer Engine (FR-P1-004)
+              In-Memory Buffer Engine (FR-P2-005)
             </span>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded-xl bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-transparent font-bold">
-              ZERO DISK MUTATION
+              SOURCE FILE IS NEVER WRITTEN
             </span>
           </div>
           <h2 className="text-base font-bold text-[var(--text-primary)] mt-1 flex items-center space-x-2">
-            <span>Sub-50ms Blast Radius &amp; Damage Simulator</span>
+            <Code2 className="w-4 h-4" />
+            <span>Live Edit &amp; Blast Radius Simulator</span>
           </h2>
         </div>
 
-        {/* Real-time Telemetry Badges */}
-        <div className="flex items-center space-x-3 font-mono text-xs">
-          <div
-            className={`px-3 py-1.5 rounded-xl border font-semibold flex items-center space-x-1.5 ${
-              (response?.computation_latency_ms || 12) <= 50
-                ? 'bg-sky-50 dark:bg-cyan-500/10 border-sky-200 dark:border-cyan-500/30 text-sky-700 dark:text-cyan-400'
-                : 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
-            }`}
-          >
+        <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+          <div className="px-3 py-1.5 rounded-xl border bg-[var(--card-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5" />
-            <span>
-              Latency: {response?.computation_latency_ms ?? 12}ms (&le;50ms p95 met)
-            </span>
+            <span>Engine: {response ? `${response.computation_latency_ms}ms` : 'not measured'}</span>
           </div>
+          <div className="px-3 py-1.5 rounded-xl border bg-[var(--card-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)]">
+            Coverage: <strong className="uppercase">{coverage}</strong>
+          </div>
+          <div className={`px-3 py-1.5 rounded-xl border font-bold flex items-center gap-1.5 ${verdictClass}`}>
+            {verdict === 'FAIL' ? <AlertOctagon className="w-3.5 h-3.5" /> :
+              verdict === 'WARN' || verdict === 'PARTIAL' ? <AlertTriangle className="w-3.5 h-3.5" /> :
+                verdict === 'PASS' ? <CheckCircle2 className="w-3.5 h-3.5" /> : null}
+            <span>VERDICT: {verdict}</span>
+          </div>
+        </div>
+      </div>
 
-          <div
-            className={`px-3 py-1.5 rounded-xl border font-bold flex items-center space-x-1.5 ${
-              response?.verdict === 'FAIL'
-                ? 'bg-rose-500/15 border-rose-500/30 text-rose-600 dark:text-rose-400'
-                : response?.verdict === 'WARN'
-                ? 'bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400'
-                : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-            }`}
-          >
-            {response?.verdict === 'FAIL' ? (
-              <>
-                <AlertOctagon className="w-3.5 h-3.5" />
-                <span>VERDICT: FAIL</span>
-              </>
-            ) : response?.verdict === 'WARN' ? (
-              <>
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>VERDICT: WARN</span>
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>VERDICT: PASS</span>
-              </>
+      {response?.coverage_note && (
+        <div className="px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300" role="status">
+          {response.coverage_note}
+        </div>
+      )}
+
+      {!filePath || !repoId ? (
+        <div className="p-8 text-center rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] text-sm text-[var(--text-secondary)]">
+          Select a source file from the repository tree or canvas to load its real contents into the unsaved editor.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <section className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 text-xs font-mono text-[var(--text-muted)]">
+                Target: <strong className="text-[var(--text-primary)] break-all">{filePath}</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReloadSequence((sequence) => sequence + 1)}
+                disabled={isLoadingSource || isSimulating}
+                className="shrink-0 p-2 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                aria-label="Reload source from repository and discard draft"
+                title="Reload source and discard draft"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </div>
+            <textarea
+              aria-label="Unsaved source buffer"
+              data-testid="unsaved-source-buffer"
+              value={buffer}
+              onChange={(event) => handleBufferChange(event.target.value)}
+              disabled={isLoadingSource || Boolean(sourceLoadError)}
+              spellCheck={false}
+              className="w-full h-[min(55vh,520px)] min-h-[320px] p-4 text-xs font-mono leading-relaxed rounded-xl bg-[var(--background)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-cyan-500 resize-y disabled:opacity-60"
+            />
+            <div className="flex items-center justify-between gap-3 text-[11px] font-mono text-[var(--text-muted)]">
+              <span>{isLoadingSource ? 'Loading source from the active repository…' : 'Draft stays in memory; no disk writes.'}</span>
+              <button
+                type="button"
+                onClick={() => void runSimulation(filePath, repoId, buffer)}
+                disabled={isLoadingSource || isSimulating || Boolean(sourceLoadError)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold disabled:opacity-50"
+              >
+                <Play className="w-3.5 h-3.5" />
+                {isSimulating ? 'Analyzing…' : 'Analyze draft'}
+              </button>
+            </div>
+          </section>
+
+          <section className="space-y-4" aria-live="polite">
+            {simulationError && (
+              <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-700 dark:text-amber-300">
+                <strong>Analysis unavailable — coverage is Unknown.</strong>
+                <div className="mt-1 text-xs font-mono break-all">{simulationError}</div>
+                <button
+                  type="button"
+                  onClick={() => sourceLoadError
+                    ? setReloadSequence((sequence) => sequence + 1)
+                    : void runSimulation(filePath, repoId, buffer)}
+                  className="mt-3 px-3 py-1.5 rounded-lg border border-amber-500/40 text-xs font-semibold"
+                >
+                  {sourceLoadError ? 'Retry source load' : 'Retry analysis'}
+                </button>
+              </div>
             )}
-          </div>
-        </div>
-      </div>
 
-      {/* Editor & Diagnostics Split */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* In-Memory Keystroke Buffer Editor */}
-        <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm flex flex-col space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-mono text-[var(--text-muted)] font-medium">
-              Target File: <strong className="text-[var(--text-primary)]">{filePath}</strong>
-            </span>
-            <div className="flex items-center space-x-1 text-[11px] font-mono">
-              <span className="text-[var(--text-muted)]">Presets:</span>
-              <button
-                onClick={() => applyPreset('clean')}
-                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-cyan-500/10 text-[var(--text-secondary)] hover:text-cyan-500 border border-[var(--border-subtle)] transition-colors"
-              >
-                Clean
-              </button>
-              <button
-                onClick={() => applyPreset('breaking_arity')}
-                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-rose-500/10 text-[var(--text-secondary)] hover:text-rose-500 border border-[var(--border-subtle)] transition-colors"
-              >
-                Breaking Arity
-              </button>
-              <button
-                onClick={() => applyPreset('syntax_error')}
-                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-amber-500/10 text-[var(--text-secondary)] hover:text-amber-500 border border-[var(--border-subtle)] transition-colors"
-              >
-                Syntax Error
-              </button>
-              <button
-                onClick={() => applyPreset('dead_code')}
-                className="px-2 py-0.5 rounded-xl bg-[var(--card-elevated)] hover:bg-purple-500/10 text-[var(--text-secondary)] hover:text-purple-500 border border-[var(--border-subtle)] transition-colors"
-              >
-                Dead Code
-              </button>
-            </div>
-          </div>
-
-          <textarea
-            value={buffer}
-            onChange={(e) => handleBufferChange(e.target.value)}
-            spellCheck={false}
-            className="w-full h-[320px] p-4 text-xs font-mono leading-relaxed rounded-xl bg-[var(--background)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:border-cyan-500 resize-none"
-          />
-
-          <div className="text-[11px] font-mono text-[var(--text-muted)] flex justify-between">
-            <span>Simulating live keystrokes. Triggers incremental AST &amp; reachability subgraphs.</span>
-            <span>{isSimulating ? 'Computing...' : 'Ready'}</span>
-          </div>
-        </div>
-
-        {/* Live Diagnostics & Damaged Callers Panel */}
-        <div className="space-y-4">
-          {/* Broken Callers Section */}
-          <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
-            <h3 className="text-xs uppercase font-mono tracking-wider text-rose-600 dark:text-rose-400 font-bold mb-3 flex items-center space-x-1.5">
-              <AlertOctagon className="w-4 h-4" />
-              <span>Damaged Callers ({response?.damaged_callers?.length || 0})</span>
-            </h3>
-
-            <div className="space-y-2.5 max-h-[170px] overflow-y-auto">
-              {response?.damaged_callers && response.damaged_callers.length > 0 ? (
-                response.damaged_callers.map((c, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 font-mono text-xs"
-                  >
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-[var(--text-primary)]">{c.stable_id}</span>
-                      <span className="px-1.5 py-0.5 rounded-xl text-[10px] bg-rose-500/20 text-rose-600 dark:text-rose-300 font-bold">
-                        Line {c.calling_line}:{c.calling_col}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-[var(--text-secondary)]">{c.file_path}</div>
-                    <div className="text-[11px] text-rose-600 dark:text-rose-300 mt-1 font-semibold">
-                      &bull; {c.diagnostic}
-                    </div>
-                  </div>
-                ))
-              ) : response?.syntax_errors && response.syntax_errors.length > 0 ? (
-                response.syntax_errors.map((err, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 font-mono text-xs text-rose-500"
-                  >
-                    <strong>SYNTAX ERROR:</strong> {err}
-                  </div>
-                ))
-              ) : (
-                <div className="p-4 text-center rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
-                  No broken callers detected. Workspace interface contracts fully satisfied.
+            <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+              <h3 className="text-xs uppercase font-mono tracking-wider text-rose-600 dark:text-rose-400 font-bold mb-3">
+                Damaged Callers ({response?.damaged_callers.length ?? 0})
+              </h3>
+              {response?.damaged_callers.length ? response.damaged_callers.map((caller) => (
+                <div key={`${caller.stable_id}:${caller.calling_line}`} className="p-3 mb-2 rounded-xl bg-rose-500/10 border border-rose-500/25 font-mono text-xs">
+                  <strong>{caller.stable_id}</strong>
+                  <div>{caller.file_path}:{caller.calling_line}:{caller.calling_col}</div>
+                  <div className="mt-1">{caller.diagnostic}</div>
                 </div>
+              )) : (
+                <p className="text-xs text-[var(--text-muted)]">No verified damaged callers reported by the analyzer.</p>
               )}
             </div>
-          </div>
 
-          {/* Newly Dead Symbols Section */}
-          <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
-            <h3 className="text-xs uppercase font-mono tracking-wider text-amber-600 dark:text-amber-400 font-bold mb-3 flex items-center space-x-1.5">
-              <AlertTriangle className="w-4 h-4" />
-              <span>Newly Dead / Orphaned Code ({response?.newly_dead_symbols?.length || 0})</span>
-            </h3>
-
-            <div className="space-y-2.5 max-h-[140px] overflow-y-auto">
-              {response?.newly_dead_symbols && response.newly_dead_symbols.length > 0 ? (
-                response.newly_dead_symbols.map((d, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 font-mono text-xs"
-                  >
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-[var(--text-primary)]">{d.stable_id}</span>
-                      <span className="px-1.5 py-0.5 rounded-xl text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-300 font-bold">
-                        Line {d.line}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-[var(--text-secondary)]">{d.diagnostic}</div>
-                  </div>
+            <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+              <h3 className="text-xs uppercase font-mono tracking-wider text-amber-600 dark:text-amber-400 font-bold mb-3">
+                Syntax &amp; Import Diagnostics
+              </h3>
+              {[...(response?.syntax_errors ?? []), ...(response?.broken_imports ?? [])].length ? (
+                [...(response?.syntax_errors ?? []), ...(response?.broken_imports ?? [])].map((diagnostic, index) => (
+                  <div key={`${index}:${diagnostic}`} className="p-2 mb-1 rounded-lg bg-amber-500/10 text-xs font-mono text-[var(--text-secondary)]">{diagnostic}</div>
                 ))
               ) : (
-                <div className="p-4 text-center rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-xs font-mono">
-                  No dead or unreachable symbols introduced by this change.
-                </div>
+                <p className="text-xs text-[var(--text-muted)]">No syntax or import diagnostics reported.</p>
               )}
             </div>
-          </div>
+
+            <div className="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border-subtle)] shadow-sm">
+              <h3 className="text-xs uppercase font-mono tracking-wider text-slate-600 dark:text-slate-300 font-bold mb-3">
+                Newly Dead Symbols ({response?.newly_dead_symbols.length ?? 0})
+              </h3>
+              {response?.newly_dead_symbols.length ? response.newly_dead_symbols.map((symbol) => (
+                <div key={`${symbol.stable_id}:${symbol.line}`} className="p-3 mb-2 rounded-xl bg-slate-500/10 border border-slate-500/25 font-mono text-xs">
+                  <strong>{symbol.stable_id}</strong>
+                  <div>{symbol.file_path}:{symbol.line}</div>
+                  <div className="mt-1">{symbol.diagnostic}</div>
+                </div>
+              )) : (
+                <p className="text-xs text-[var(--text-muted)]">No newly dead symbols reported.</p>
+              )}
+              {response?.impact_truncated && (
+                <p className="mt-3 text-xs font-semibold text-amber-600 dark:text-amber-400">Impact analysis was truncated; treat coverage as Partial.</p>
+              )}
+            </div>
+          </section>
         </div>
-      </div>
+      )}
     </div>
   );
 }

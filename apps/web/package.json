@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@types/three": "^0.186.0",
@@ -20,6 +21,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

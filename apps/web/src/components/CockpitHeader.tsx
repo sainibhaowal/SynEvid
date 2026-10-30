@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Terminal,
+  BookOpen,
 } from 'lucide-react';
 import { useTheme } from '@/context/ThemeContext';
 import { RepoRecord } from '@/lib/api';
@@ -26,11 +27,13 @@ interface CockpitHeaderProps {
   onOpenConnectModal: () => void;
   onOpenCapabilitiesModal: () => void;
   onOpenTerminal?: () => void;
+  onOpenManual?: () => void;
   onRefresh: () => void;
   liveSeq: number;
   isLiveConnected: boolean;
   coverageState: string;
   invariantsPass: boolean;
+  activeWorkspaceName?: string;
 }
 
 export default function CockpitHeader({
@@ -40,11 +43,13 @@ export default function CockpitHeader({
   onOpenConnectModal,
   onOpenCapabilitiesModal,
   onOpenTerminal,
+  onOpenManual,
   onRefresh,
   liveSeq,
   isLiveConnected,
   coverageState,
   invariantsPass,
+  activeWorkspaceName,
 }: CockpitHeaderProps) {
   const { theme, toggleTheme } = useTheme();
 
@@ -73,7 +78,7 @@ export default function CockpitHeader({
                 SYNEVID
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 font-semibold border border-sky-200 dark:border-cyan-500/30">
-                v0.2.6
+                v0.5.0
               </span>
             </div>
             <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-mono font-medium">
@@ -180,6 +185,18 @@ export default function CockpitHeader({
             title="Open Interactive Native Terminal (Alt+7)"
           >
             <Terminal className="w-4 h-4" />
+          </button>
+        )}
+
+        {/* Workspace Manual / Guide Button */}
+        {onOpenManual && (
+          <button
+            onClick={onOpenManual}
+            className="px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-semibold text-xs font-mono transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs group"
+            title={`Open User Manual for ${activeWorkspaceName || 'Current Workspace'}`}
+          >
+            <BookOpen className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+            <span className="hidden md:inline">Manual</span>
           </button>
         )}
 

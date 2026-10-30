@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 autopsy-domain = { path = "../autopsy-domain" }
+autopsy-adapter-api = { path = "../autopsy-adapter-api" }
+autopsy-storage = { path = "../autopsy-storage" }
 blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

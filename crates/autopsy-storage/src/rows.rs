@@ -18,6 +18,7 @@
 
 use crate::{StorageEngine, StorageError};
 use rusqlite::{OptionalExtension, params};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The coverage vocabulary, checked at the write boundary.
 ///
@@ -423,6 +424,13 @@ pub struct RepoRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveEventRecord {
+    pub seq_id: i64,
+    pub event_type: String,
+    pub data_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphNodeRow {
     pub snapshot_id: String,
     pub stable_id: String,
@@ -451,6 +459,18 @@ pub struct GraphEdgeRow {
     pub target_file: String,
     pub target_line: i64,
     pub confidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphUniverseRows {
+    pub total_node_count: usize,
+    pub total_edge_count: usize,
+    pub nodes: Vec<GraphNodeRow>,
+    pub edges: Vec<GraphEdgeRow>,
+    pub inbound_counts: BTreeMap<String, usize>,
+    pub outbound_counts: BTreeMap<String, usize>,
+    pub coverage_counts: BTreeMap<String, usize>,
+    pub is_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -608,6 +628,352 @@ impl StorageEngine {
         Ok(repo)
     }
 
+    pub fn remove_repository(&self, repo_id: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "DELETE FROM repositories WHERE repo_id = ?1",
+            params![repo_id],
+        )? > 0)
+    }
+
+    pub fn set_daemon_state(&self, key: &str, value: &str) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO daemon_state (state_key, state_value) VALUES (?1, ?2)
+             ON CONFLICT(state_key) DO UPDATE SET state_value = excluded.state_value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_daemon_state(&self, key: &str) -> Result<Option<String>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT state_value FROM daemon_state WHERE state_key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn record_live_event(
+        &self,
+        event_type: &str,
+        data_json: &str,
+    ) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO live_events (event_type, data_json) VALUES (?1, ?2)",
+            params![event_type, data_json],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn live_events_since(
+        &self,
+        since_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<LiveEventRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT seq_id, event_type, data_json FROM live_events
+             WHERE seq_id > ?1 ORDER BY seq_id LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![since_seq, limit.max(1)], |row| {
+                Ok(LiveEventRecord {
+                    seq_id: row.get(0)?,
+                    event_type: row.get(1)?,
+                    data_json: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn latest_live_event_seq(&self) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COALESCE(MAX(seq_id), 0) FROM live_events",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn graph_rows_for_snapshot(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<(Vec<GraphNodeRow>, Vec<GraphEdgeRow>), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut node_stmt = conn.prepare_cached(
+            "SELECT snapshot_id, stable_id, node_kind, qualified_name, file_path,
+                    start_line, end_line, signature_hash, visibility, is_exported,
+                    is_dead_code, coverage_state
+             FROM graph_nodes WHERE snapshot_id = ?1 ORDER BY stable_id",
+        )?;
+        let nodes = node_stmt
+            .query_map(params![snapshot_id], |row| {
+                Ok(GraphNodeRow {
+                    snapshot_id: row.get(0)?,
+                    stable_id: row.get(1)?,
+                    node_kind: row.get(2)?,
+                    qualified_name: row.get(3)?,
+                    file_path: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    signature_hash: row.get(7)?,
+                    visibility: row.get(8)?,
+                    is_exported: row.get::<_, i64>(9)? != 0,
+                    is_dead_code: row.get::<_, i64>(10)? != 0,
+                    coverage_state: row.get(11)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut edge_stmt = conn.prepare(
+            "SELECT snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
+                    source_file, source_line, source_col, target_file, target_line, confidence
+             FROM graph_edges WHERE snapshot_id = ?1 ORDER BY edge_id",
+        )?;
+        let edges = edge_stmt
+            .query_map(params![snapshot_id], |row| {
+                Ok(GraphEdgeRow {
+                    snapshot_id: row.get(0)?,
+                    edge_id: row.get(1)?,
+                    source_stable_id: row.get(2)?,
+                    target_stable_id: row.get(3)?,
+                    edge_kind: row.get(4)?,
+                    source_file: row.get(5)?,
+                    source_line: row.get(6)?,
+                    source_col: row.get(7)?,
+                    target_file: row.get(8)?,
+                    target_line: row.get(9)?,
+                    confidence: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((nodes, edges))
+    }
+
+    pub fn graph_universe_rows_for_snapshot(
+        &self,
+        snapshot_id: &str,
+        node_limit: usize,
+        edge_limit: usize,
+    ) -> Result<GraphUniverseRows, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let total_node_count = conn.query_row(
+            "SELECT COUNT(*) FROM graph_nodes WHERE snapshot_id = ?1",
+            params![snapshot_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let total_edge_count = conn.query_row(
+            "SELECT COUNT(*) FROM graph_edges WHERE snapshot_id = ?1",
+            params![snapshot_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let total_node_count = usize::try_from(total_node_count).unwrap_or(usize::MAX);
+        let total_edge_count = usize::try_from(total_edge_count).unwrap_or(usize::MAX);
+        let mut coverage_counts = BTreeMap::new();
+        {
+            let mut statement = conn.prepare_cached(
+                "SELECT coverage_state, COUNT(*) FROM graph_nodes
+                 WHERE snapshot_id = ?1 GROUP BY coverage_state ORDER BY coverage_state",
+            )?;
+            let rows = statement.query_map(params![snapshot_id], |row| {
+                let coverage: String = row.get(0)?;
+                let count = usize::try_from(row.get::<_, i64>(1)?).unwrap_or(usize::MAX);
+                Ok((coverage, count))
+            })?;
+            for row in rows {
+                let (coverage, count) = row?;
+                coverage_counts.insert(coverage, count);
+            }
+        }
+
+        let mut selected_ids = BTreeSet::new();
+        if node_limit > 0 && total_node_count <= node_limit {
+            let mut statement = conn.prepare_cached(
+                "SELECT stable_id FROM graph_nodes WHERE snapshot_id = ?1 ORDER BY stable_id",
+            )?;
+            let rows = statement.query_map(params![snapshot_id], |row| row.get::<_, String>(0))?;
+            selected_ids.extend(rows.collect::<Result<Vec<_>, _>>()?);
+        } else if node_limit > 0 {
+            let hub_limit = node_limit / 2;
+            if hub_limit > 0 {
+                let mut statement = conn.prepare_cached(
+                    "SELECT node.stable_id
+                     FROM graph_nodes AS node
+                     LEFT JOIN (
+                         SELECT source_stable_id, COUNT(*) AS edge_count
+                         FROM graph_edges WHERE snapshot_id = ?1 GROUP BY source_stable_id
+                     ) AS outgoing ON outgoing.source_stable_id = node.stable_id
+                     LEFT JOIN (
+                         SELECT target_stable_id, COUNT(*) AS edge_count
+                         FROM graph_edges WHERE snapshot_id = ?1 GROUP BY target_stable_id
+                     ) AS incoming ON incoming.target_stable_id = node.stable_id
+                     WHERE node.snapshot_id = ?1
+                     ORDER BY COALESCE(outgoing.edge_count, 0) + COALESCE(incoming.edge_count, 0) DESC,
+                              node.stable_id ASC
+                     LIMIT ?2",
+                )?;
+                let rows = statement.query_map(
+                    params![snapshot_id, i64::try_from(hub_limit).unwrap_or(i64::MAX)],
+                    |row| row.get::<_, String>(0),
+                )?;
+                selected_ids.extend(rows.collect::<Result<Vec<_>, _>>()?);
+            }
+
+            let remaining = node_limit.saturating_sub(selected_ids.len());
+            if remaining > 0 {
+                let mut statement = conn.prepare_cached(
+                    "SELECT stable_id FROM graph_nodes WHERE snapshot_id = ?1 ORDER BY stable_id",
+                )?;
+                let rows =
+                    statement.query_map(params![snapshot_id], |row| row.get::<_, String>(0))?;
+                let spread_nodes = rows
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter(|stable_id| !selected_ids.contains(stable_id))
+                    .collect::<Vec<_>>();
+                for index in 0..remaining {
+                    let spread_index = index.saturating_mul(spread_nodes.len()) / remaining;
+                    if let Some(stable_id) = spread_nodes.get(spread_index) {
+                        selected_ids.insert(stable_id.clone());
+                    }
+                }
+            }
+        }
+
+        conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS synevid_graph_universe_selected (
+                stable_id TEXT PRIMARY KEY
+            ) WITHOUT ROWID;
+            DELETE FROM synevid_graph_universe_selected;",
+        )?;
+        {
+            let mut statement = conn.prepare_cached(
+                "INSERT INTO synevid_graph_universe_selected (stable_id) VALUES (?1)",
+            )?;
+            for stable_id in &selected_ids {
+                statement.execute(params![stable_id])?;
+            }
+        }
+
+        let nodes = {
+            let mut statement = conn.prepare_cached(
+                "SELECT node.snapshot_id, node.stable_id, node.node_kind, node.qualified_name,
+                        node.file_path, node.start_line, node.end_line, node.signature_hash,
+                        node.visibility, node.is_exported, node.is_dead_code, node.coverage_state
+                 FROM graph_nodes AS node
+                 JOIN synevid_graph_universe_selected AS selected
+                   ON selected.stable_id = node.stable_id
+                 WHERE node.snapshot_id = ?1 ORDER BY node.stable_id",
+            )?;
+            let rows = statement.query_map(params![snapshot_id], |row| {
+                Ok(GraphNodeRow {
+                    snapshot_id: row.get(0)?,
+                    stable_id: row.get(1)?,
+                    node_kind: row.get(2)?,
+                    qualified_name: row.get(3)?,
+                    file_path: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    signature_hash: row.get(7)?,
+                    visibility: row.get(8)?,
+                    is_exported: row.get::<_, i64>(9)? != 0,
+                    is_dead_code: row.get::<_, i64>(10)? != 0,
+                    coverage_state: row.get(11)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let edges = {
+            let mut statement = conn.prepare_cached(
+                "SELECT edge.snapshot_id, edge.edge_id, edge.source_stable_id, edge.target_stable_id,
+                        edge.edge_kind, edge.source_file, edge.source_line, edge.source_col,
+                        edge.target_file, edge.target_line, edge.confidence
+                 FROM graph_edges AS edge
+                 JOIN synevid_graph_universe_selected AS source
+                   ON source.stable_id = edge.source_stable_id
+                 JOIN synevid_graph_universe_selected AS target
+                   ON target.stable_id = edge.target_stable_id
+                 WHERE edge.snapshot_id = ?1
+                 ORDER BY (LOWER(edge.edge_kind) = 'calls') DESC,
+                          (LOWER(edge.confidence) = 'verified') DESC,
+                          edge.edge_id ASC
+                 LIMIT ?2",
+            )?;
+            let rows = statement.query_map(
+                params![snapshot_id, i64::try_from(edge_limit).unwrap_or(i64::MAX)],
+                |row| {
+                    Ok(GraphEdgeRow {
+                        snapshot_id: row.get(0)?,
+                        edge_id: row.get(1)?,
+                        source_stable_id: row.get(2)?,
+                        target_stable_id: row.get(3)?,
+                        edge_kind: row.get(4)?,
+                        source_file: row.get(5)?,
+                        source_line: row.get(6)?,
+                        source_col: row.get(7)?,
+                        target_file: row.get(8)?,
+                        target_line: row.get(9)?,
+                        confidence: row.get(10)?,
+                    })
+                },
+            )?;
+            let mut edges = rows.collect::<Result<Vec<_>, _>>()?;
+            edges.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
+            edges
+        };
+        let inbound_counts = {
+            let mut statement = conn.prepare_cached(
+                "SELECT edge.target_stable_id, COUNT(*)
+                 FROM graph_edges AS edge
+                 JOIN synevid_graph_universe_selected AS selected
+                   ON selected.stable_id = edge.target_stable_id
+                 WHERE edge.snapshot_id = ?1
+                 GROUP BY edge.target_stable_id ORDER BY edge.target_stable_id",
+            )?;
+            let rows = statement.query_map(params![snapshot_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    usize::try_from(row.get::<_, i64>(1)?).unwrap_or(usize::MAX),
+                ))
+            })?;
+            rows.collect::<Result<BTreeMap<_, _>, _>>()?
+        };
+        let outbound_counts = {
+            let mut statement = conn.prepare_cached(
+                "SELECT edge.source_stable_id, COUNT(*)
+                 FROM graph_edges AS edge
+                 JOIN synevid_graph_universe_selected AS selected
+                   ON selected.stable_id = edge.source_stable_id
+                 WHERE edge.snapshot_id = ?1
+                 GROUP BY edge.source_stable_id ORDER BY edge.source_stable_id",
+            )?;
+            let rows = statement.query_map(params![snapshot_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    usize::try_from(row.get::<_, i64>(1)?).unwrap_or(usize::MAX),
+                ))
+            })?;
+            rows.collect::<Result<BTreeMap<_, _>, _>>()?
+        };
+
+        let is_truncated = nodes.len() < total_node_count || edges.len() < total_edge_count;
+        Ok(GraphUniverseRows {
+            total_node_count,
+            total_edge_count,
+            nodes,
+            edges,
+            inbound_counts,
+            outbound_counts,
+            coverage_counts,
+            is_truncated,
+        })
+    }
+
     /// Batch saves graph nodes and directed line-to-line edges for a snapshot.
     pub fn save_graph_nodes_and_edges(
         &self,
@@ -694,7 +1060,7 @@ impl StorageEngine {
         let conn = self.conn.lock().unwrap();
 
         // Target node
-        let mut node_stmt = conn.prepare(
+        let mut node_stmt = conn.prepare_cached(
             "SELECT snapshot_id, stable_id, node_kind, qualified_name, file_path,
                     start_line, end_line, signature_hash, visibility, is_exported,
                     is_dead_code, coverage_state
@@ -720,10 +1086,11 @@ impl StorageEngine {
             .optional()?;
 
         // Incoming Callers (who calls this target)
-        let mut in_stmt = conn.prepare(
+        let mut in_stmt = conn.prepare_cached(
             "SELECT snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
                     source_file, source_line, source_col, target_file, target_line, confidence
              FROM graph_edges WHERE snapshot_id = ?1 AND target_stable_id = ?2
+               AND edge_kind IN ('calls', 'references', 'imports')
              ORDER BY source_file, source_line;",
         )?;
         let incoming_callers = in_stmt
@@ -745,10 +1112,11 @@ impl StorageEngine {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Outgoing Callees (who this target calls)
-        let mut out_stmt = conn.prepare(
+        let mut out_stmt = conn.prepare_cached(
             "SELECT snapshot_id, edge_id, source_stable_id, target_stable_id, edge_kind,
                     source_file, source_line, source_col, target_file, target_line, confidence
              FROM graph_edges WHERE snapshot_id = ?1 AND source_stable_id = ?2
+               AND edge_kind IN ('calls', 'references', 'imports')
              ORDER BY target_file, target_line;",
         )?;
         let outgoing_callees = out_stmt
@@ -1175,5 +1543,107 @@ impl StorageEngine {
             params![session_id, hit_increment, tokens_spent, tokens_saved, cost_saved],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod graph_universe_tests {
+    use super::*;
+    use autopsy_domain::{RepoSnapshot, SnapshotId};
+
+    #[test]
+    fn graph_universe_projection_is_bounded_deterministic_and_preserves_full_counts() {
+        let storage = StorageEngine::in_memory().unwrap();
+        let snapshot_id = "snapshot-graph-universe";
+        storage
+            .save_snapshot(&RepoSnapshot {
+                snapshot_id: SnapshotId::new(snapshot_id),
+                revision: "revision".to_string(),
+                config_hash: "config".to_string(),
+                file_set_digest: "files".to_string(),
+                files: BTreeMap::new(),
+                skipped_oversize_files: Vec::new(),
+                traversal_limit_reached: false,
+            })
+            .unwrap();
+
+        let nodes = (0..15_000)
+            .map(|index| {
+                let stable_id = format!("node-{index:05}");
+                GraphNodeRow {
+                    snapshot_id: snapshot_id.to_string(),
+                    stable_id: stable_id.clone(),
+                    node_kind: "function".to_string(),
+                    qualified_name: stable_id.clone(),
+                    file_path: format!("src/{stable_id}.ts"),
+                    start_line: 1,
+                    end_line: 4,
+                    signature_hash: String::new(),
+                    visibility: "public".to_string(),
+                    is_exported: true,
+                    is_dead_code: false,
+                    coverage_state: if index == 14_999 {
+                        "partial".to_string()
+                    } else {
+                        "verified".to_string()
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        let edges = (0..30_000)
+            .map(|index| {
+                let source = format!("node-{:05}", index % 2_500);
+                let target = format!("node-{:05}", (index * 31 + 1) % 2_500);
+                GraphEdgeRow {
+                    snapshot_id: snapshot_id.to_string(),
+                    edge_id: format!("edge-{index:05}"),
+                    source_stable_id: source.clone(),
+                    target_stable_id: target.clone(),
+                    edge_kind: "calls".to_string(),
+                    source_file: format!("src/{source}.ts"),
+                    source_line: 2,
+                    source_col: 3,
+                    target_file: format!("src/{target}.ts"),
+                    target_line: 1,
+                    confidence: "verified".to_string(),
+                }
+            })
+            .collect::<Vec<_>>();
+        storage.save_graph_nodes_and_edges(&nodes, &edges).unwrap();
+
+        let projection_started = std::time::Instant::now();
+        let first = storage
+            .graph_universe_rows_for_snapshot(snapshot_id, 5_000, 12_000)
+            .unwrap();
+        eprintln!(
+            "SQLite graph-universe projection 15,000 nodes/30,000 edges: {:.3} ms",
+            projection_started.elapsed().as_secs_f64() * 1_000.0
+        );
+        let second = storage
+            .graph_universe_rows_for_snapshot(snapshot_id, 5_000, 12_000)
+            .unwrap();
+
+        assert_eq!(first.total_node_count, 15_000);
+        assert_eq!(first.total_edge_count, 30_000);
+        assert_eq!(first.nodes.len(), 5_000);
+        assert_eq!(first.edges.len(), 12_000);
+        assert!(first.is_truncated);
+        assert_eq!(first.nodes, second.nodes);
+        assert_eq!(first.edges, second.edges);
+        assert_eq!(first.inbound_counts.get("node-00000"), Some(&12));
+        assert_eq!(first.outbound_counts.get("node-00000"), Some(&12));
+        assert_eq!(first.coverage_counts.get("verified"), Some(&14_999));
+        assert_eq!(first.coverage_counts.get("partial"), Some(&1));
+        assert!(
+            first
+                .edges
+                .iter()
+                .all(|edge| edge.source_line == 2 && edge.target_line == 1)
+        );
+
+        let (persisted_nodes, persisted_edges) =
+            storage.graph_rows_for_snapshot(snapshot_id).unwrap();
+        assert_eq!(persisted_nodes, nodes);
+        assert_eq!(persisted_edges, edges);
     }
 }

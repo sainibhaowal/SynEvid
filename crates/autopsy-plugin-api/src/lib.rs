@@ -9,10 +9,12 @@
 //!
 //! Every plugin is dynamically discoverable, versioned, and hot-swappable at runtime.
 
+use autopsy_adapter_api::LanguageAdapter;
 use autopsy_domain::{CoverageState, RepoSnapshot};
+use autopsy_storage::StorageEngine;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
@@ -49,6 +51,10 @@ pub struct PluginCapabilityInfo {
     pub display_name: String,
     pub description: String,
     pub supported_extensions: Vec<String>,
+    #[serde(default)]
+    pub implementation_available: bool,
+    #[serde(default)]
+    pub active_in_repository: Option<bool>,
 }
 
 /// Pluggable contract for Language Adapters (TS/JS, Python, Go, Rust, Java, C#, and future).
@@ -59,6 +65,17 @@ pub trait LanguageAdapterPlugin: PluginDescriptor {
     fn language_name(&self) -> &'static str;
     /// Estimates semantic coverage state for given file content
     fn estimate_coverage(&self, source: &[u8]) -> CoverageState;
+    /// Returns the parser used by the correctness pipeline when implemented.
+    fn analyzer(&self) -> Option<Arc<dyn LanguageAdapter>> {
+        None
+    }
+    /// Creates a repository-scoped parser for import and workspace resolution.
+    fn analyzer_for_root(&self, _root: &Path) -> Option<Arc<dyn LanguageAdapter>> {
+        self.analyzer()
+    }
+    fn analyzer_available(&self) -> bool {
+        self.analyzer().is_some()
+    }
 }
 
 /// Pluggable contract for Monorepo & Workspace Resolvers (pnpm, Turbo, Cargo, Maven, etc.).
@@ -69,6 +86,13 @@ pub trait WorkspaceResolverPlugin: PluginDescriptor {
     fn ecosystem_name(&self) -> &'static str;
     /// Checks if this workspace type is active at the given root
     fn detect(&self, root: &Path) -> bool;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceResolverMatch {
+    pub plugin_id: String,
+    pub ecosystem_name: String,
+    pub manifest_files: Vec<String>,
 }
 
 /// Pluggable contract for Verification & Policy Gates.
@@ -116,6 +140,19 @@ pub trait GraphLayoutPlugin: PluginDescriptor {
     ) -> Result<BTreeMap<String, NodeCoordinates>, PluginError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageEngineConfig {
+    pub database_path: PathBuf,
+    pub cache_dir: Option<PathBuf>,
+    pub use_wal: bool,
+    pub recover_corruption: bool,
+}
+
+pub trait StorageEnginePlugin: PluginDescriptor {
+    fn backend_name(&self) -> &'static str;
+    fn open(&self, config: &StorageEngineConfig) -> Result<StorageEngine, PluginError>;
+}
+
 /// Central Thread-Safe Dynamic Plugin Registry (Zero Hardcoding Invariant).
 #[derive(Default)]
 pub struct PluginRegistry {
@@ -123,6 +160,7 @@ pub struct PluginRegistry {
     workspaces: RwLock<BTreeMap<String, Arc<dyn WorkspaceResolverPlugin>>>,
     gates: RwLock<BTreeMap<String, Arc<dyn VerificationGatePlugin>>>,
     layouts: RwLock<BTreeMap<String, Arc<dyn GraphLayoutPlugin>>>,
+    storage_engines: RwLock<BTreeMap<String, Arc<dyn StorageEnginePlugin>>>,
 }
 
 impl PluginRegistry {
@@ -154,6 +192,30 @@ impl PluginRegistry {
         map.insert(plugin.plugin_id().to_string(), plugin);
     }
 
+    pub fn register_storage_engine(&self, plugin: Arc<dyn StorageEnginePlugin>) {
+        let mut map = self.storage_engines.write().unwrap();
+        map.insert(plugin.plugin_id().to_string(), plugin);
+    }
+
+    pub fn open_storage_engine(
+        &self,
+        plugin_id: &str,
+        config: &StorageEngineConfig,
+    ) -> Result<StorageEngine, PluginError> {
+        self.storage_engines
+            .read()
+            .map_err(|_| {
+                PluginError::Execution(
+                    plugin_id.to_string(),
+                    "storage registry is poisoned".to_string(),
+                )
+            })?
+            .get(plugin_id)
+            .cloned()
+            .ok_or_else(|| PluginError::NotFound(plugin_id.to_string()))?
+            .open(config)
+    }
+
     /// Finds a language adapter by file extension (e.g. ".ts", ".rs", ".java").
     pub fn find_language_for_extension(&self, ext: &str) -> Option<Arc<dyn LanguageAdapterPlugin>> {
         let map = self.languages.read().unwrap();
@@ -165,6 +227,54 @@ impl PluginRegistry {
         None
     }
 
+    pub fn find_language_analyzer_for_path(
+        &self,
+        path: &Path,
+        root: &Path,
+    ) -> Option<Arc<dyn LanguageAdapter>> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        let dotted_extension = format!(".{extension}");
+        let map = self.languages.read().ok()?;
+        map.values()
+            .filter(|plugin| {
+                plugin
+                    .file_extensions()
+                    .contains(&dotted_extension.as_str())
+            })
+            .find_map(|plugin| plugin.analyzer_for_root(root))
+    }
+
+    pub fn detect_workspaces(&self, root: &Path) -> Vec<WorkspaceResolverMatch> {
+        let map = self.workspaces.read().unwrap();
+        map.values()
+            .filter(|plugin| plugin.detect(root))
+            .map(|plugin| WorkspaceResolverMatch {
+                plugin_id: plugin.plugin_id().to_string(),
+                ecosystem_name: plugin.ecosystem_name().to_string(),
+                manifest_files: plugin
+                    .manifest_files()
+                    .iter()
+                    .filter(|manifest| root.join(manifest).exists())
+                    .map(|manifest| (*manifest).to_string())
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub fn evaluate_gates(
+        &self,
+        baseline: Option<&RepoSnapshot>,
+        candidate: &RepoSnapshot,
+    ) -> Result<Vec<GateEvaluationResult>, PluginError> {
+        let map = self.gates.read().unwrap();
+        let mut results = map
+            .values()
+            .map(|plugin| plugin.evaluate(baseline, candidate))
+            .collect::<Result<Vec<_>, _>>()?;
+        results.sort_by(|left, right| left.gate_id.cmp(&right.gate_id));
+        Ok(results)
+    }
+
     /// Finds a verification gate by gate_id.
     pub fn get_gate(&self, gate_id: &str) -> Option<Arc<dyn VerificationGatePlugin>> {
         let map = self.gates.read().unwrap();
@@ -174,7 +284,11 @@ impl PluginRegistry {
     /// Finds a layout plugin by layout_id.
     pub fn get_layout(&self, layout_id: &str) -> Option<Arc<dyn GraphLayoutPlugin>> {
         let map = self.layouts.read().unwrap();
-        map.get(layout_id).cloned()
+        map.get(layout_id).cloned().or_else(|| {
+            map.values()
+                .find(|plugin| plugin.layout_id() == layout_id)
+                .cloned()
+        })
     }
 
     /// Emits a list of all registered capabilities dynamically (for `/api/v1/capabilities`).
@@ -195,6 +309,8 @@ impl PluginRegistry {
                         .iter()
                         .map(|s| s.to_string())
                         .collect(),
+                    implementation_available: plugin.analyzer_available(),
+                    active_in_repository: None,
                 });
             }
         }
@@ -213,6 +329,8 @@ impl PluginRegistry {
                         .iter()
                         .map(|s| s.to_string())
                         .collect(),
+                    implementation_available: true,
+                    active_in_repository: None,
                 });
             }
         }
@@ -227,6 +345,8 @@ impl PluginRegistry {
                     display_name: plugin.display_name().to_string(),
                     description: plugin.description().to_string(),
                     supported_extensions: Vec::new(),
+                    implementation_available: true,
+                    active_in_repository: None,
                 });
             }
         }
@@ -241,6 +361,24 @@ impl PluginRegistry {
                     display_name: plugin.display_name().to_string(),
                     description: plugin.description().to_string(),
                     supported_extensions: Vec::new(),
+                    implementation_available: true,
+                    active_in_repository: None,
+                });
+            }
+        }
+
+        {
+            let map = self.storage_engines.read().unwrap();
+            for plugin in map.values() {
+                list.push(PluginCapabilityInfo {
+                    plugin_id: plugin.plugin_id().to_string(),
+                    category: "storage_engine".to_string(),
+                    version: plugin.version().to_string(),
+                    display_name: plugin.display_name().to_string(),
+                    description: plugin.description().to_string(),
+                    supported_extensions: Vec::new(),
+                    implementation_available: true,
+                    active_in_repository: None,
                 });
             }
         }
@@ -297,5 +435,60 @@ mod tests {
         assert_eq!(caps.len(), 1);
         assert_eq!(caps[0].plugin_id, "lang.mock_kotlin");
         assert_eq!(caps[0].category, "language_adapter");
+    }
+
+    struct MockStoragePlugin;
+
+    impl PluginDescriptor for MockStoragePlugin {
+        fn plugin_id(&self) -> &'static str {
+            "storage.mock"
+        }
+
+        fn version(&self) -> &'static str {
+            "0.1.0"
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Mock Storage"
+        }
+
+        fn description(&self) -> &'static str {
+            "In-memory storage provider for registry tests"
+        }
+    }
+
+    impl StorageEnginePlugin for MockStoragePlugin {
+        fn backend_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn open(&self, _config: &StorageEngineConfig) -> Result<StorageEngine, PluginError> {
+            StorageEngine::in_memory().map_err(|error| {
+                PluginError::Execution(self.plugin_id().to_string(), error.to_string())
+            })
+        }
+    }
+
+    #[test]
+    fn test_storage_engine_provider_dispatch_and_capability() {
+        let registry = PluginRegistry::new();
+        registry.register_storage_engine(Arc::new(MockStoragePlugin));
+        let config = StorageEngineConfig {
+            database_path: PathBuf::from("unused.db"),
+            cache_dir: None,
+            use_wal: false,
+            recover_corruption: false,
+        };
+
+        let engine = registry
+            .open_storage_engine("storage.mock", &config)
+            .unwrap();
+        assert!(engine.raw_connection().lock().unwrap().is_autocommit());
+
+        let capabilities = registry.list_capabilities();
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].plugin_id, "storage.mock");
+        assert_eq!(capabilities[0].category, "storage_engine");
+        assert!(capabilities[0].implementation_available);
     }
 }

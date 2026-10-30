@@ -68,10 +68,10 @@
   --text-primary: #0f172a;
   --text-secondary: #334155;
   --text-muted: #64748b;
-  --node-verified: #0284c7;
-  --node-damaged: #dc2626;
-  --node-impacted: #d97706;
-  --node-deadcode: #94a3b8;
+  --node-verified: #0c4a6e;
+  --node-damaged: #991b1b;
+  --node-impacted: #7c2d12;
+  --node-deadcode: #334155;
   --edge-call: #0369a1;
   --edge-import: #4f46e5;
   --edge-ui-to-api: #7c3aed;
@@ -99,9 +99,9 @@ html.dark {
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
   --node-verified: #38bdf8;
-  --node-damaged: #f87171;
+  --node-damaged: #fca5a5;
   --node-impacted: #fbbf24;
-  --node-deadcode: #475569;
+  --node-deadcode: #94a3b8;
   --edge-call: #00f0ff;
   --edge-import: #a855f7;
   --edge-ui-to-api: #a78bfa;
@@ -111,6 +111,13 @@ html.dark {
   --purple-glow: rgba(121, 40, 202, 0.4);
   --green: #00e676;
   color-scheme: dark;
+}
+
+html[data-theme-switching],
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 html {
@@ -259,6 +266,101 @@ code, pre, .font-mono {
 .terminal-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 240, 255, 0.7);
   box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+}
+
+.synevid-tooltip {
+  --tooltip-surface: #25272c;
+  position: fixed;
+  z-index: 100000;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 5px;
+  background: var(--tooltip-surface);
+  color: #f8fafc;
+  font-family: var(--font-space), 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  animation: synevid-tooltip-in 120ms ease-out both;
+}
+
+.synevid-tooltip[data-placement='right'] {
+  transform: translateY(-50%);
+}
+
+.synevid-tooltip[data-placement='left'] {
+  transform: translate(-100%, -50%);
+}
+
+.synevid-tooltip[data-placement='bottom'] {
+  transform: translateX(-50%);
+}
+
+.synevid-tooltip[data-placement='top'] {
+  transform: translate(-50%, -100%);
+}
+
+.synevid-tooltip::before {
+  position: absolute;
+  width: 0;
+  height: 0;
+  content: '';
+}
+
+.synevid-tooltip[data-placement='right']::before {
+  top: 50%;
+  left: -5px;
+  transform: translateY(-50%);
+  border-top: 5px solid transparent;
+  border-right: 5px solid var(--tooltip-surface);
+  border-bottom: 5px solid transparent;
+}
+
+.synevid-tooltip[data-placement='left']::before {
+  top: 50%;
+  right: -5px;
+  transform: translateY(-50%);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 5px solid var(--tooltip-surface);
+}
+
+.synevid-tooltip[data-placement='bottom']::before {
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-right: 5px solid transparent;
+  border-bottom: 5px solid var(--tooltip-surface);
+  border-left: 5px solid transparent;
+}
+
+.synevid-tooltip[data-placement='top']::before {
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-top: 5px solid var(--tooltip-surface);
+  border-right: 5px solid transparent;
+  border-left: 5px solid transparent;
+}
+
+@keyframes synevid-tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .synevid-tooltip {
+    animation: none;
+  }
 }
 
 /* Custom Cyber Mesh and Animations */

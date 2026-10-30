@@ -76,6 +76,9 @@ impl GraphLayoutPlugin for DeterministicForceLayout {
         if nodes.is_empty() {
             return Ok(BTreeMap::new());
         }
+        if nodes.len() >= 1000 {
+            return Ok(deterministic_large_layout(nodes, edges, seed_blake3, is_3d));
+        }
 
         let mut rng = DeterministicRng::new(seed_blake3);
 
@@ -248,6 +251,85 @@ impl GraphLayoutPlugin for DeterministicForceLayout {
     }
 }
 
+fn deterministic_large_layout(
+    nodes: &[String],
+    edges: &[(String, String)],
+    seed_blake3: &[u8; 32],
+    is_3d: bool,
+) -> BTreeMap<String, NodeCoordinates> {
+    let mut ordered_nodes = nodes.to_vec();
+    ordered_nodes.sort();
+    let mut adjacency = BTreeMap::<String, BTreeSet<String>>::new();
+    for node in &ordered_nodes {
+        adjacency.insert(node.clone(), BTreeSet::new());
+    }
+    for (source, target) in edges {
+        if adjacency.contains_key(source) && adjacency.contains_key(target) {
+            adjacency.get_mut(source).unwrap().insert(target.clone());
+            adjacency.get_mut(target).unwrap().insert(source.clone());
+        }
+    }
+
+    let mut clusters = BTreeMap::<String, u32>::new();
+    let mut current_cluster = 1u32;
+    for node in &ordered_nodes {
+        if clusters.contains_key(node) {
+            continue;
+        }
+        let mut queue = vec![node.clone()];
+        clusters.insert(node.clone(), current_cluster);
+        while let Some(current) = queue.pop() {
+            if let Some(neighbors) = adjacency.get(&current) {
+                for neighbor in neighbors {
+                    if !clusters.contains_key(neighbor) {
+                        clusters.insert(neighbor.clone(), current_cluster);
+                        queue.push(neighbor.clone());
+                    }
+                }
+            }
+        }
+        current_cluster = current_cluster.saturating_add(1);
+    }
+
+    let mut rng = DeterministicRng::new(seed_blake3);
+    let phase = (rng.next_f64_sym() + 1.0) * std::f64::consts::PI;
+    let count = ordered_nodes.len() as f64;
+    let radius = 200.0 * count.sqrt().max(1.0);
+    let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let mut result = BTreeMap::new();
+    for (index, node) in ordered_nodes.iter().enumerate() {
+        let fraction = (index as f64 + 0.5) / count;
+        let (x, y, z) = if is_3d {
+            let vertical = 1.0 - 2.0 * fraction;
+            let planar = (1.0 - vertical * vertical).max(0.0).sqrt();
+            let angle = phase + index as f64 * golden_angle;
+            (
+                radius * planar * angle.cos(),
+                radius * vertical,
+                radius * planar * angle.sin(),
+            )
+        } else {
+            let distance = radius * fraction.sqrt();
+            let angle = phase + index as f64 * golden_angle;
+            (distance * angle.cos(), distance * angle.sin(), 0.0)
+        };
+        result.insert(
+            node.clone(),
+            NodeCoordinates {
+                x: (x * 10000.0).round() / 10000.0,
+                y: (y * 10000.0).round() / 10000.0,
+                z: if is_3d {
+                    (z * 10000.0).round() / 10000.0
+                } else {
+                    0.0
+                },
+                cluster_id: *clusters.get(node).unwrap_or(&0),
+            },
+        );
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +357,48 @@ mod tests {
         assert_eq!(run1, run2);
         assert_eq!(run1["Controller"].cluster_id, 1);
         assert_eq!(run1["Database"].cluster_id, 1);
+    }
+
+    #[test]
+    fn test_5000_node_layout_is_fast_and_repeatable() {
+        let layout = DeterministicForceLayout;
+        let nodes = (0..5000)
+            .map(|index| format!("module::{index:04}"))
+            .collect::<Vec<_>>();
+        let edges = nodes
+            .windows(2)
+            .map(|pair| (pair[0].clone(), pair[1].clone()))
+            .collect::<Vec<_>>();
+        let seed = *blake3::hash(b"phase-two-large-graph-layout").as_bytes();
+        let compute_started = std::time::Instant::now();
+        let baseline = layout.compute_layout(&nodes, &edges, &seed, true).unwrap();
+        let single_run = compute_started.elapsed();
+        let expected_digest = digest_coordinates(&baseline);
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            let repeat = layout.compute_layout(&nodes, &edges, &seed, true).unwrap();
+            assert_eq!(digest_coordinates(&repeat), expected_digest);
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "5,000-node layout: {:.1} ms/run; 100 deterministic runs: {:.1} ms",
+            single_run.as_secs_f64() * 1000.0,
+            elapsed.as_secs_f64() * 1000.0
+        );
+        assert_eq!(baseline.len(), 5000);
+        assert!(single_run < std::time::Duration::from_secs(1));
+        assert!(elapsed < std::time::Duration::from_secs(20));
+    }
+
+    fn digest_coordinates(coordinates: &BTreeMap<String, NodeCoordinates>) -> blake3::Hash {
+        let mut hasher = blake3::Hasher::new();
+        for (node, coordinate) in coordinates {
+            hasher.update(node.as_bytes());
+            hasher.update(&coordinate.x.to_bits().to_le_bytes());
+            hasher.update(&coordinate.y.to_bits().to_le_bytes());
+            hasher.update(&coordinate.z.to_bits().to_le_bytes());
+            hasher.update(&coordinate.cluster_id.to_le_bytes());
+        }
+        hasher.finalize()
     }
 }

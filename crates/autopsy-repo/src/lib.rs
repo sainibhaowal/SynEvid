@@ -166,6 +166,12 @@ impl AutopsyConfig {
                 reason: "'repository.roots' must contain at least one root directory".to_string(),
             });
         }
+        if self.analysis.max_traversal_nodes == 0 {
+            return Err(RepoError::InvalidConfig {
+                path: path.to_path_buf(),
+                reason: "'analysis.max_traversal_nodes' must be greater than zero".to_string(),
+            });
+        }
         for root in &self.repository.roots {
             if root != "." && !is_safe_relative_path(root) {
                 return Err(RepoError::PathTraversal {
@@ -431,7 +437,26 @@ pub fn create_snapshot(
 /// Create a snapshot that additionally records size-capped exclusions.
 pub fn create_snapshot_with_skipped(
     files: BTreeMap<String, FileUnit>,
+    skipped_oversize_files: Vec<String>,
+    revision: &str,
+    config_hash: &str,
+    analyzer_version: &str,
+) -> RepoSnapshot {
+    create_snapshot_with_scan_state(
+        files,
+        skipped_oversize_files,
+        false,
+        revision,
+        config_hash,
+        analyzer_version,
+    )
+}
+
+/// Create a snapshot with explicit records for bounded-scan outcomes.
+pub fn create_snapshot_with_scan_state(
+    files: BTreeMap<String, FileUnit>,
     mut skipped_oversize_files: Vec<String>,
+    traversal_limit_reached: bool,
     revision: &str,
     config_hash: &str,
     analyzer_version: &str,
@@ -447,6 +472,7 @@ pub fn create_snapshot_with_skipped(
         file_set_digest,
         files,
         skipped_oversize_files,
+        traversal_limit_reached,
     }
 }
 
@@ -469,6 +495,8 @@ pub fn scan_repository(
 
     let mut files: BTreeMap<String, FileUnit> = BTreeMap::new();
     let mut skipped_oversize: Vec<String> = Vec::new();
+    let mut visited_nodes = 0u64;
+    let mut traversal_limit_reached = false;
 
     for root_rel in &config.repository.roots {
         let scan_path = if root_rel == "." {
@@ -488,9 +516,16 @@ pub fn scan_repository(
             .git_exclude(true)
             .follow_links(false) // Hard Invariant: Never follow symlinks outside or within workspace
             .same_file_system(false)
+            .filter_entry(|entry| entry.file_name() != ".autopsy" && entry.file_name() != ".git")
+            .sort_by_file_path(|left, right| left.cmp(right))
             .build();
 
         for entry_res in walker {
+            if visited_nodes >= config.analysis.max_traversal_nodes {
+                traversal_limit_reached = true;
+                break;
+            }
+            visited_nodes += 1;
             let entry = match entry_res {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -524,6 +559,12 @@ pub fn scan_repository(
                 Ok(p) => p,
                 Err(_) => continue, // Discard any path failing traversal sanitization
             };
+            if rel_path
+                .split('/')
+                .any(|segment| segment == ".autopsy" || segment == ".git")
+            {
+                continue;
+            }
 
             // Check against exclude glob patterns
             let mut excluded = false;
@@ -568,13 +609,17 @@ pub fn scan_repository(
                 },
             );
         }
+        if traversal_limit_reached {
+            break;
+        }
     }
 
     let config_hash = config.content_hash();
     let rev = revision.unwrap_or("HEAD");
-    Ok(create_snapshot_with_skipped(
+    Ok(create_snapshot_with_scan_state(
         files,
         skipped_oversize,
+        traversal_limit_reached,
         rev,
         &config_hash,
         analyzer_version,
@@ -901,6 +946,57 @@ directory = ".autopsy/cache"
             rerun.skipped_oversize_files
         );
 
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_traversal_node_limit_is_deterministic_and_reported() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "synevid_test_traversal_limit_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::write(temp_dir.join("a.ts"), "export const a = 1;").unwrap();
+        fs::write(temp_dir.join("b.ts"), "export const b = 2;").unwrap();
+
+        let mut config = AutopsyConfig::default();
+        config.analysis.max_traversal_nodes = 2;
+
+        let first = scan_repository(&temp_dir, &config, "0.0.1", None).unwrap();
+        let second = scan_repository(&temp_dir, &config, "0.0.1", None).unwrap();
+
+        assert!(first.traversal_limit_reached);
+        assert_eq!(
+            first.files.keys().cloned().collect::<Vec<_>>(),
+            vec!["a.ts"]
+        );
+        assert_eq!(first.snapshot_id, second.snapshot_id);
+        assert_eq!(first.files, second.files);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn scan_excludes_internal_autopsy_and_git_state() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "synevid_test_internal_excludes_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(temp_dir.join(".autopsy/cache")).unwrap();
+        fs::create_dir_all(temp_dir.join(".git/objects")).unwrap();
+        fs::write(temp_dir.join("main.ts"), "export const entry = 1;\n").unwrap();
+        fs::write(temp_dir.join(".autopsy/cache/state.json"), "{}\n").unwrap();
+        fs::write(temp_dir.join(".git/objects/metadata"), "private git data\n").unwrap();
+
+        let snapshot =
+            scan_repository(&temp_dir, &AutopsyConfig::default(), "0.0.1", None).unwrap();
+
+        assert_eq!(
+            snapshot.files.keys().cloned().collect::<Vec<_>>(),
+            vec!["main.ts"]
+        );
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }

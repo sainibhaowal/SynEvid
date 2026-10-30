@@ -761,12 +761,16 @@ impl LanguageAdapter for TypeScriptAdapter {
         }
 
         // Also check any external symbols in symbol_index that belong to this file
-        for (qname, sym_id) in symbol_index {
-            if qname.starts_with(&parsed.file.path)
-                && !edges
-                    .iter()
-                    .any(|e| e.target == *sym_id && e.kind == EdgeKind::Contains)
-            {
+        let indexed_path_prefix = format!("{}::", parsed.file.path);
+        let mut contained_symbol_ids = extracted_symbols
+            .iter()
+            .map(|symbol| symbol.stable_id.clone())
+            .collect::<BTreeSet<_>>();
+        for (qname, sym_id) in symbol_index.range(indexed_path_prefix.clone()..) {
+            if !qname.starts_with(&indexed_path_prefix) {
+                break;
+            }
+            if contained_symbol_ids.insert(sym_id.clone()) {
                 edges.push(Edge {
                     source: file_symbol_id.clone(),
                     target: sym_id.clone(),
@@ -1641,8 +1645,9 @@ impl TypeScriptAdapter {
         let resolve_imported = |name: &str, module: &str| -> Option<SymbolId> {
             let prefix = format!("{}::", module);
             let mut candidates: Vec<&SymbolId> = symbol_index
-                .iter()
-                .filter(|(qname, _)| qname.starts_with(&prefix) && short_name(qname) == name)
+                .range(prefix.clone()..)
+                .take_while(|(qname, _)| qname.starts_with(&prefix))
+                .filter(|(qname, _)| short_name(qname) == name)
                 .map(|(_, id)| id)
                 .collect();
             candidates.sort();
@@ -1687,11 +1692,9 @@ impl TypeScriptAdapter {
                             {
                                 let target_prefix = format!("{}::", re_resolved);
                                 let mut mod_candidates: Vec<&SymbolId> = symbol_index
-                                    .iter()
-                                    .filter(|(qname, _)| {
-                                        qname.starts_with(&target_prefix)
-                                            && short_name(qname) == name
-                                    })
+                                    .range(target_prefix.clone()..)
+                                    .take_while(|(qname, _)| qname.starts_with(&target_prefix))
+                                    .filter(|(qname, _)| short_name(qname) == name)
                                     .map(|(_, id)| id)
                                     .collect();
                                 mod_candidates.sort();
@@ -1723,8 +1726,9 @@ impl TypeScriptAdapter {
             if !dir_prefix.is_empty() {
                 let prefix = format!("{}/", dir_prefix);
                 let mut dir_candidates: Vec<&SymbolId> = symbol_index
-                    .iter()
-                    .filter(|(qname, _)| qname.starts_with(&prefix) && short_name(qname) == name)
+                    .range(prefix.clone()..)
+                    .take_while(|(qname, _)| qname.starts_with(&prefix))
+                    .filter(|(qname, _)| short_name(qname) == name)
                     .map(|(_, id)| id)
                     .collect();
                 dir_candidates.sort();
@@ -1926,6 +1930,8 @@ impl TypeScriptAdapter {
         symbol_index: &BTreeMap<String, SymbolId>,
     ) -> (ReceiverMap, ReceiverMap) {
         let declared_returns = self.collect_file_declared_returns(root, content);
+        let mut imported_return_cache = BTreeMap::new();
+        let mut declared_returns_by_file = BTreeMap::new();
         let mut fields = BTreeMap::new();
         let mut locals = BTreeMap::new();
         self.collect_receiver_types_inner(
@@ -1936,6 +1942,8 @@ impl TypeScriptAdapter {
             &declared_returns,
             imported,
             symbol_index,
+            &mut imported_return_cache,
+            &mut declared_returns_by_file,
             &mut fields,
             &mut locals,
         );
@@ -2027,13 +2035,24 @@ impl TypeScriptAdapter {
         fn_name: &str,
         target_mod: &str,
         symbol_index: &BTreeMap<String, SymbolId>,
+        imported_return_cache: &mut BTreeMap<(String, String), Option<String>>,
+        declared_returns_by_file: &mut BTreeMap<String, BTreeMap<String, String>>,
     ) -> Option<String> {
+        let cache_key = (target_mod.to_string(), fn_name.to_string());
+        if let Some(cached) = imported_return_cache.get(&cache_key) {
+            return cached.clone();
+        }
+
         let target_prefix = format!("{}::", target_mod);
         let cand = symbol_index
-            .iter()
-            .find(|(qname, _)| qname.starts_with(&target_prefix) && short_name(qname) == fn_name)
+            .range(target_prefix.clone()..)
+            .take_while(|(qname, _)| qname.starts_with(&target_prefix))
+            .find(|(qname, _)| short_name(qname) == fn_name)
             .map(|(_, id)| id)
             .or_else(|| {
+                if target_mod.starts_with("external::") {
+                    return None;
+                }
                 let matches: Vec<&SymbolId> = symbol_index
                     .iter()
                     .filter(|(qname, _)| short_name(qname) == fn_name)
@@ -2050,10 +2069,22 @@ impl TypeScriptAdapter {
             .map(|c| c.as_str().split('#').next().unwrap_or(target_mod))
             .unwrap_or(target_mod);
 
-        let content = self.read_file_content(declaring_file)?;
-        let tree = self.parse_tree(declaring_file, &content).ok()?;
-        let returns = self.collect_file_declared_returns(tree.root_node(), &content);
-        returns.get(fn_name).cloned()
+        if !declared_returns_by_file.contains_key(declaring_file) {
+            let returns = self
+                .read_file_content(declaring_file)
+                .and_then(|content| {
+                    self.parse_tree(declaring_file, &content)
+                        .ok()
+                        .map(|tree| self.collect_file_declared_returns(tree.root_node(), &content))
+                })
+                .unwrap_or_default();
+            declared_returns_by_file.insert(declaring_file.to_string(), returns);
+        }
+        let resolved = declared_returns_by_file
+            .get(declaring_file)
+            .and_then(|returns| returns.get(fn_name).cloned());
+        imported_return_cache.insert(cache_key, resolved.clone());
+        resolved
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2066,6 +2097,8 @@ impl TypeScriptAdapter {
         declared_returns: &BTreeMap<String, String>,
         imported: &BTreeMap<String, String>,
         symbol_index: &BTreeMap<String, SymbolId>,
+        imported_return_cache: &mut BTreeMap<(String, String), Option<String>>,
+        declared_returns_by_file: &mut BTreeMap<String, BTreeMap<String, String>>,
         fields: &mut BTreeMap<(String, String), String>,
         locals: &mut BTreeMap<(String, String), String>,
     ) {
@@ -2164,6 +2197,8 @@ impl TypeScriptAdapter {
                             callee,
                             target_mod,
                             symbol_index,
+                            imported_return_cache,
+                            declared_returns_by_file,
                         );
                     }
                 }
@@ -2207,6 +2242,8 @@ impl TypeScriptAdapter {
                 declared_returns,
                 imported,
                 symbol_index,
+                imported_return_cache,
+                declared_returns_by_file,
                 fields,
                 locals,
             );
@@ -3387,6 +3424,74 @@ export function run() {
 
         assert_eq!(typed_call.coverage, CoverageState::Verified);
         assert_eq!(typed_call.provenance, "call_expression:typed-receiver");
+    }
+
+    #[test]
+    fn test_imported_return_type_propagation_reuses_parsed_module() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "synevid_ts_imported_returns_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        let factory_source = r#"
+export class UserStore {
+    load(): string { return 'loaded'; }
+}
+
+export function makeStore(): UserStore {
+    return new UserStore();
+}
+"#;
+        let consumer_source = r#"
+import { makeStore } from './factory';
+
+export function run() {
+    const first = makeStore();
+    const second = makeStore();
+    first.load();
+    second.load();
+}
+"#;
+        std::fs::write(root.join("src/factory.ts"), factory_source).unwrap();
+        std::fs::write(root.join("src/app.ts"), consumer_source).unwrap();
+
+        let adapter = TypeScriptAdapter::with_root_dir(&root);
+        let context = ParseContext::new(".");
+        let factory_file = test_file_unit("src/factory.ts");
+        let factory_parsed = adapter
+            .parse(&context, &factory_file, factory_source)
+            .unwrap();
+        let factory_symbols = adapter.extract_symbols(&factory_parsed).unwrap();
+        let consumer_file = test_file_unit("src/app.ts");
+        let consumer_parsed = adapter
+            .parse(&context, &consumer_file, consumer_source)
+            .unwrap();
+        let consumer_symbols = adapter.extract_symbols(&consumer_parsed).unwrap();
+        let mut symbol_index = symbol_index_of(&factory_symbols);
+        symbol_index.extend(symbol_index_of(&consumer_symbols));
+
+        let edges = adapter
+            .extract_edges(&consumer_parsed, &symbol_index)
+            .unwrap();
+        let method_id = SymbolId::new("src/factory.ts#method:UserStore.load");
+        let typed_calls = edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Calls && edge.target == method_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(typed_calls.len(), 2);
+        assert!(
+            typed_calls
+                .iter()
+                .all(|edge| edge.coverage == CoverageState::Verified)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

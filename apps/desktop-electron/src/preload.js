@@ -16,4 +16,10 @@ contextBridge.exposeInMainWorld('synevidDesktop', {
 
   // Daemon Status Query
   getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),
+
+  // Electron compositor presentation meter
+  startFrameMeter: () => ipcRenderer.invoke('frame-meter:start'),
+  getFrameMeterStats: () => ipcRenderer.invoke('frame-meter:stats'),
+  stopFrameMeter: () => ipcRenderer.invoke('frame-meter:stop'),
+  markNextPresentedFrame: () => ipcRenderer.sendSync('frame-meter:mark-sync'),
 });

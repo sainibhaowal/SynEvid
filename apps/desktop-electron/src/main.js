@@ -1,13 +1,104 @@
 const { app, BrowserWindow, ipcMain, dialog, session } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
 
+// In virtualized / WSL2 / multi-GPU environments, avoid crashing GPU child process
+// app.commandLine.appendSwitch('force_high_performance_gpu');
+
 let mainWindow = null;
 let daemonProcess = null;
 let webProcess = null;
+let frameMeter = {
+  active: false,
+  sampleFrames: 0,
+  totalFrames: 0,
+  sampleStartedAt: 0n,
+  fps: null,
+  markStartedAt: null,
+  lastMarkMs: null,
+};
 const DAEMON_PORT = process.env.SYNEVID_PORT || 3333;
 const COCKPIT_URL = process.env.COCKPIT_URL || 'http://127.0.0.1:3000';
+
+function readFrameMeterStats() {
+  if (!frameMeter.active || frameMeter.sampleStartedAt === 0n) {
+    return {
+      active: false,
+      fps: null,
+      totalFrames: frameMeter.totalFrames,
+      presentationLatencyMs: frameMeter.lastMarkMs,
+      source: 'Electron webContents presentation events',
+    };
+  }
+
+  const elapsedMs = Number(process.hrtime.bigint() - frameMeter.sampleStartedAt) / 1_000_000;
+  return {
+    active: true,
+    fps: frameMeter.fps,
+    totalFrames: frameMeter.totalFrames,
+    elapsedMs: Math.round(elapsedMs * 10) / 10,
+    presentationLatencyMs: frameMeter.lastMarkMs,
+    source: 'Electron webContents presentation events',
+  };
+}
+
+function startFrameMeter() {
+  const contents = mainWindow?.webContents;
+  if (!contents || contents.isDestroyed()) {
+    return readFrameMeterStats();
+  }
+  if (frameMeter.active) {
+    return readFrameMeterStats();
+  }
+
+  const now = process.hrtime.bigint();
+  frameMeter = {
+    active: true,
+    sampleFrames: 0,
+    totalFrames: 0,
+    sampleStartedAt: now,
+    fps: null,
+    markStartedAt: null,
+    lastMarkMs: null,
+  };
+  contents.beginFrameSubscription(false, () => {
+    if (!frameMeter.active) return;
+    frameMeter.sampleFrames += 1;
+    frameMeter.totalFrames += 1;
+    if (frameMeter.markStartedAt !== null) {
+      frameMeter.lastMarkMs = Number(process.hrtime.bigint() - frameMeter.markStartedAt) / 1_000_000;
+      frameMeter.markStartedAt = null;
+    }
+    const sampleElapsedNs = process.hrtime.bigint() - frameMeter.sampleStartedAt;
+    if (sampleElapsedNs >= 1_000_000_000n) {
+      frameMeter.fps = (frameMeter.sampleFrames * 1_000_000_000) / Number(sampleElapsedNs);
+      frameMeter.sampleFrames = 0;
+      frameMeter.sampleStartedAt = process.hrtime.bigint();
+    }
+  });
+  return readFrameMeterStats();
+}
+
+function stopFrameMeter() {
+  const contents = mainWindow?.webContents;
+  if (contents && !contents.isDestroyed() && frameMeter.active) {
+    contents.endFrameSubscription();
+  }
+  frameMeter.active = false;
+  frameMeter.sampleFrames = 0;
+  frameMeter.sampleStartedAt = 0n;
+  frameMeter.markStartedAt = null;
+  return readFrameMeterStats();
+}
+
+function markNextPresentedFrame() {
+  if (!frameMeter.active) return readFrameMeterStats();
+  frameMeter.markStartedAt = process.hrtime.bigint();
+  frameMeter.lastMarkMs = null;
+  return readFrameMeterStats();
+}
 
 const SPLASH_HTML = `<!DOCTYPE html>
 <html>
@@ -112,7 +203,7 @@ function toLinuxPath(winOrUncPath) {
 }
 
 // Check health of any HTTP service
-function checkServiceHealth(targetUrl, timeoutMs = 800) {
+function checkServiceHealth(targetUrl, timeoutMs = 1500) {
   return new Promise((resolve) => {
     try {
       const u = new URL(targetUrl);
@@ -124,7 +215,8 @@ function checkServiceHealth(targetUrl, timeoutMs = 800) {
           timeout: timeoutMs,
         },
         (res) => {
-          resolve(res.statusCode < 500);
+          res.resume();
+          resolve(res.statusCode >= 200 && res.statusCode < 400);
         }
       );
       req.on('error', () => resolve(false));
@@ -138,6 +230,16 @@ function checkServiceHealth(targetUrl, timeoutMs = 800) {
   });
 }
 
+async function checkApplicationHealth() {
+  const [daemonHealthy, cockpitHealthy] = await Promise.all([
+    checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`),
+    checkServiceHealth(COCKPIT_URL),
+  ]);
+  return daemonHealthy && cockpitHealthy;
+}
+
+const SPLASH_DATA_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML);
+
 // Ensure sidecar daemon is running
 async function ensureSidecarDaemon() {
   const isHealthy = await checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`);
@@ -147,29 +249,29 @@ async function ensureSidecarDaemon() {
   }
 
   const repoRoot = path.resolve(__dirname, '../../..');
+  const isWslUnc =
+    process.platform === 'win32' &&
+    (repoRoot.startsWith('\\\\wsl.localhost') ||
+      repoRoot.startsWith('\\\\wsl$') ||
+      repoRoot.startsWith('//wsl.localhost') ||
+      repoRoot.startsWith('//wsl$'));
+  const executableName = process.platform === 'win32' && !isWslUnc ? 'synevid-ui.exe' : 'synevid-ui';
+  const daemonBuild = fs.existsSync(path.join(repoRoot, 'target', 'release', executableName))
+    ? 'release'
+    : 'debug';
   console.log(`[SynEvid Desktop] Spawning synevid-ui sidecar for repo: ${repoRoot}`);
 
   try {
-    const isWslUnc =
-      process.platform === 'win32' &&
-      (repoRoot.startsWith('\\\\wsl.localhost') ||
-        repoRoot.startsWith('\\\\wsl$') ||
-        repoRoot.startsWith('//wsl.localhost') ||
-        repoRoot.startsWith('//wsl$'));
-
     if (isWslUnc) {
       const linuxRepoRoot = toLinuxPath(repoRoot);
       console.log(`[SynEvid Desktop] Spawning Linux daemon via WSL from ${linuxRepoRoot}`);
       daemonProcess = spawn(
         'wsl.exe',
-        ['-d', 'Ubuntu', 'bash', '-lc', `cd "${linuxRepoRoot}" && ./target/debug/synevid-ui --port ${DAEMON_PORT} > /tmp/synevid-ui.log 2>&1`],
-        { stdio: 'ignore', detached: true }
+        ['-d', 'Ubuntu', 'bash', '-lc', `cd "${linuxRepoRoot}" && ./target/${daemonBuild}/synevid-ui --port ${DAEMON_PORT} > /tmp/synevid-ui.log 2>&1`],
+        { stdio: 'ignore', detached: false, windowsHide: true }
       );
     } else {
-      const daemonBinary = path.join(
-        repoRoot,
-        'target/debug/synevid-ui' + (process.platform === 'win32' ? '.exe' : '')
-      );
+      const daemonBinary = path.join(repoRoot, 'target', daemonBuild, executableName);
       daemonProcess = spawn(daemonBinary, ['--port', String(DAEMON_PORT)], {
         cwd: repoRoot,
         stdio: 'ignore',
@@ -194,7 +296,10 @@ async function ensureWebCockpit() {
   }
 
   const repoRoot = path.resolve(__dirname, '../../..');
-  console.log(`[SynEvid Desktop] Spawning Next.js Cockpit server on port 3000...`);
+  const webDir = path.join(repoRoot, 'apps/web');
+  const productionBuildExists = fs.existsSync(path.join(webDir, '.next', 'BUILD_ID'));
+  const nextMode = productionBuildExists ? 'start' : 'dev';
+  console.log('[SynEvid Desktop] Spawning Next.js ' + nextMode + ' server on port 3000...');
 
   try {
     const isWslUnc =
@@ -207,15 +312,16 @@ async function ensureWebCockpit() {
     if (isWslUnc) {
       const linuxRepoRoot = toLinuxPath(repoRoot);
       console.log(`[SynEvid Desktop] Spawning Next.js via WSL at ${linuxRepoRoot}/apps/web`);
+      const startCommand =
+        'cd "' + linuxRepoRoot + '/apps/web" && npx next ' + nextMode + ' -p 3000 -H 0.0.0.0 > /tmp/next-' + nextMode + '.log 2>&1';
       webProcess = spawn(
         'wsl.exe',
-        ['-d', 'Ubuntu', 'bash', '-lc', `cd "${linuxRepoRoot}/apps/web" && npx next dev -p 3000 -H 0.0.0.0 > /tmp/next-dev.log 2>&1`],
-        { stdio: 'ignore', detached: true }
+        ['-d', 'Ubuntu', 'bash', '-lc', startCommand],
+        { stdio: 'ignore', detached: false, windowsHide: true }
       );
     } else {
-      const webDir = path.join(repoRoot, 'apps/web');
       const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-      webProcess = spawn(cmd, ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], {
+      webProcess = spawn(cmd, ['next', nextMode, '-p', '3000', '-H', '0.0.0.0'], {
         cwd: webDir,
         stdio: 'ignore',
         detached: false,
@@ -231,6 +337,17 @@ async function ensureWebCockpit() {
 }
 
 function createWindow() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' data: blob: http://localhost:3000 http://127.0.0.1:3000 http://127.0.0.1:3333; script-src 'self' 'unsafe-inline' http://localhost:3000 http://127.0.0.1:3000; style-src 'self' 'unsafe-inline' http://localhost:3000 http://127.0.0.1:3000; img-src 'self' data: blob: http://localhost:3000 http://127.0.0.1:3000; font-src 'self' data: http://localhost:3000 http://127.0.0.1:3000; connect-src 'self' http://localhost:3000 http://127.0.0.1:3000 http://127.0.0.1:3333 ws://localhost:3000 ws://127.0.0.1:3000 ws://127.0.0.1:3333;",
+        ],
+      },
+    });
+  });
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -239,59 +356,84 @@ function createWindow() {
     backgroundColor: '#090A0F',
     title: 'SynEvid — Code Autopsy Visual Cockpit',
     autoHideMenuBar: true,
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      devTools: true,
     },
   });
 
-  // Strict CSP: Allow strictly local loopback traffic (INV-SANDBOX-004)
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3000 http://127.0.0.1:3000 http://127.0.0.1:3333 ws://localhost:3000 ws://127.0.0.1:3000 ws://127.0.0.1:3333 data: blob:; connect-src 'self' http://localhost:3000 http://127.0.0.1:3000 http://127.0.0.1:3333 ws://localhost:3000 ws://127.0.0.1:3000 ws://127.0.0.1:3333;",
-        ],
-      },
-    });
-  });
-
-  // Show immediate splash screen while services connect
-  const splashDataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML);
-  mainWindow.loadURL(splashDataUrl);
-
-  // Catch any navigation failure and retry rather than leaving a blank screen
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    console.warn(`[SynEvid Desktop] Load failed: ${validatedURL} (${errorCode}: ${errorDescription})`);
-    setTimeout(async () => {
-      const ready = await checkServiceHealth(COCKPIT_URL);
-      if (ready && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(COCKPIT_URL).catch(() => {});
-      }
-    }, 1500);
-  });
-
-  // Poll for Cockpit readiness and transition cleanly
-  let attempts = 0;
-  const maxAttempts = 60; // 30s max
-  const interval = setInterval(async () => {
-    attempts++;
-    const ready = await checkServiceHealth(COCKPIT_URL);
-    if (ready) {
-      clearInterval(interval);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(COCKPIT_URL);
-      }
-    } else if (attempts >= maxAttempts) {
-      clearInterval(interval);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(COCKPIT_URL).catch(() => {});
-      }
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
     }
-  }, 500);
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log(`[SynEvid Desktop] Loaded URL: ${mainWindow.webContents.getURL()}`);
+  });
+
+  mainWindow.webContents.on('console-message', (event, level, message) => {
+    if (level >= 2) {
+      console.log(`[SynEvid Renderer] ${message}`);
+    }
+  });
+
+  const shellWindow = mainWindow;
+  const shellWebContents = shellWindow.webContents;
+  shellWebContents.on('before-input-event', (event, input) => {
+    const isToggleShortcut =
+      input.type === 'keyDown' &&
+      (input.key === 'F12' ||
+        ((input.control || input.meta) && input.shift && String(input.key).toLowerCase() === 'i'));
+    if (!isToggleShortcut) return;
+
+    event.preventDefault();
+    if (shellWebContents.isDevToolsOpened()) {
+      shellWebContents.closeDevTools();
+    } else {
+      shellWebContents.openDevTools({ mode: 'right' });
+    }
+  });
+
+  const startCockpit = async () => {
+    let attempts = 0;
+    let ready = await checkApplicationHealth();
+    if (!shellWindow || shellWindow.isDestroyed()) return;
+    if (!ready) {
+      await shellWindow.loadURL(SPLASH_DATA_URL).catch(() => {});
+    }
+
+    while (mainWindow === shellWindow && !shellWindow.isDestroyed()) {
+      if (ready) {
+        try {
+          await shellWindow.loadURL(COCKPIT_URL);
+          return;
+        } catch (err) {
+          console.warn('Cockpit load failed; returning to splash:', err.message);
+          ready = false;
+          await shellWindow.loadURL(SPLASH_DATA_URL).catch(() => {});
+        }
+      }
+
+      attempts += 1;
+      if (attempts === 60) {
+        shellWindow.webContents.executeJavaScript(
+          "document.querySelector('.highlight').textContent = 'Cockpit is still starting; retrying automatically'"
+        ).catch(() => {});
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempts < 60 ? 500 : 1500));
+      ready = await checkApplicationHealth();
+    }
+  };
+
+  startCockpit().catch((err) => {
+    console.warn('Cockpit startup failed:', err.message);
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -325,6 +467,14 @@ ipcMain.handle('daemon:status', async () => {
     cockpitOnline: webHealthy,
     cockpitUrl: COCKPIT_URL,
   };
+});
+
+ipcMain.handle('frame-meter:start', () => startFrameMeter());
+ipcMain.handle('frame-meter:stats', () => readFrameMeterStats());
+ipcMain.handle('frame-meter:stop', () => stopFrameMeter());
+ipcMain.handle('frame-meter:mark', () => markNextPresentedFrame());
+ipcMain.on('frame-meter:mark-sync', (event) => {
+  event.returnValue = markNextPresentedFrame();
 });
 
 ipcMain.on('window:minimize', () => {

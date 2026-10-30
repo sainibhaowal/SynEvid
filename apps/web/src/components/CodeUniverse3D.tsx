@@ -1,9 +1,13 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
-import { GraphUniverse, UniverseNode, UniverseEdge } from '@/lib/api';
-import { useTheme } from '@/context/ThemeContext';
+import { EgoNetwork, GraphUniverse, UniverseNode, UniverseEdge, SimulateEditResponse } from '@/lib/api';
+import {
+  DENSE_GRAPH_RENDER_THRESHOLD,
+  sampleDenseOverviewEdges,
+  setupDenseUniverseRenderer,
+} from './denseUniverseRenderer';
 import {
   Box,
   Orbit,
@@ -38,6 +42,10 @@ import {
 
 interface CodeUniverse3DProps {
   universe: GraphUniverse;
+  egoNetwork?: EgoNetwork | null;
+  focusNodeId?: string | null;
+  simulation?: SimulateEditResponse | null;
+  simulationFilePath?: string | null;
   onSelectNode?: (symbolId: string) => void;
   onOpenSimulator?: (symbolId: string) => void;
   onToggleDimensions: () => void;
@@ -54,6 +62,134 @@ export interface FolderTheme {
   name: string;
   color: string;
   hex: number;
+}
+
+const compactNodeTextureCache = new Map<string, THREE.CanvasTexture>();
+
+function getSimulationNodeState(
+  node: UniverseNode,
+  simulation: SimulateEditResponse | null | undefined,
+  simulationFilePath?: string | null
+): { damaged: boolean; dead: boolean } {
+  if (!simulation) return { damaged: false, dead: false };
+  const syntaxDamaged = simulation.syntax_errors.length > 0 && Boolean(
+    simulationFilePath && node.file_path === simulationFilePath
+  );
+  const damaged = syntaxDamaged || simulation.damaged_callers.some((caller) =>
+    caller.stable_id === node.id || (node.kind === 'file' && caller.file_path === node.file_path)
+  ) || simulation.broken_imports.some((diagnostic) =>
+    diagnostic.includes(node.id) || Boolean(node.file_path && diagnostic.includes(node.file_path))
+  );
+  const dead = simulation.newly_dead_symbols.some((symbol) =>
+    symbol.stable_id === node.id || (node.kind === 'file' && symbol.file_path === node.file_path)
+  );
+  return { damaged, dead };
+}
+
+function isSimulationEdgeBroken(
+  edge: UniverseEdge,
+  simulation: SimulateEditResponse | null | undefined
+): boolean {
+  if (!simulation) return false;
+  return simulation.damaged_callers.some((caller) =>
+    caller.stable_id === edge.source ||
+    (caller.file_path === edge.source_file && caller.calling_line === edge.source_line)
+  ) || simulation.broken_imports.some((diagnostic) =>
+    Boolean(edge.source_file && diagnostic.includes(edge.source_file)) ||
+    Boolean(edge.target_file && diagnostic.includes(edge.target_file))
+  );
+}
+
+type LayoutPoint = { x: number; y: number; z: number };
+
+function getUniverseNodeFilePath(node: UniverseNode): string | undefined {
+  if (node.file_path) return node.file_path;
+  if (node.id.startsWith('file::')) return node.id.slice('file::'.length);
+  return undefined;
+}
+
+function relaxPositionsWithSpatialHash(
+  points: LayoutPoint[],
+  minSeparation: number,
+  dimensions: 2 | 3,
+  iterations: number
+): void {
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const cells = new Map<string, number[]>();
+    points.forEach((point, index) => {
+      const cellX = Math.floor(point.x / minSeparation);
+      const cellY = Math.floor(point.y / minSeparation);
+      const cellZ = dimensions === 3 ? Math.floor(point.z / minSeparation) : 0;
+      const key = `${cellX}:${cellY}:${cellZ}`;
+      const members = cells.get(key);
+      if (members) members.push(index);
+      else cells.set(key, [index]);
+    });
+
+    const displacementX = new Float64Array(points.length);
+    const displacementY = new Float64Array(points.length);
+    const displacementZ = new Float64Array(points.length);
+    const collisionCounts = new Uint32Array(points.length);
+    let anyMoved = false;
+
+    points.forEach((first, firstIndex) => {
+      const cellX = Math.floor(first.x / minSeparation);
+      const cellY = Math.floor(first.y / minSeparation);
+      const cellZ = dimensions === 3 ? Math.floor(first.z / minSeparation) : 0;
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          for (let offsetZ = dimensions === 3 ? -1 : 0; offsetZ <= (dimensions === 3 ? 1 : 0); offsetZ += 1) {
+            const nearby = cells.get(`${cellX + offsetX}:${cellY + offsetY}:${cellZ + offsetZ}`);
+            if (!nearby) continue;
+            nearby.forEach((secondIndex) => {
+              if (secondIndex <= firstIndex) return;
+              const second = points[secondIndex];
+              let dx = second.x - first.x;
+              let dy = second.y - first.y;
+              let dz = dimensions === 3 ? second.z - first.z : 0;
+              let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (distance >= minSeparation) return;
+              anyMoved = true;
+              if (distance < 0.05) {
+                const theta = ((firstIndex * 37 + secondIndex * 19) % 360) * (Math.PI / 180);
+                if (dimensions === 3) {
+                  const phi = ((firstIndex * 53 + secondIndex * 31) % 180) * (Math.PI / 180);
+                  dx = Math.sin(phi) * Math.cos(theta);
+                  dy = Math.cos(phi);
+                  dz = Math.sin(phi) * Math.sin(theta);
+                } else {
+                  dx = Math.cos(theta);
+                  dy = Math.sin(theta);
+                }
+                distance = 1;
+              }
+              const push = (minSeparation - distance) * 0.5;
+              const moveX = (dx / distance) * push;
+              const moveY = (dy / distance) * push;
+              const moveZ = (dz / distance) * push;
+              displacementX[firstIndex] -= moveX;
+              displacementY[firstIndex] -= moveY;
+              displacementZ[firstIndex] -= moveZ;
+              displacementX[secondIndex] += moveX;
+              displacementY[secondIndex] += moveY;
+              displacementZ[secondIndex] += moveZ;
+              collisionCounts[firstIndex] += 1;
+              collisionCounts[secondIndex] += 1;
+            });
+          }
+        }
+      }
+    });
+
+    if (!anyMoved) break;
+    points.forEach((point, index) => {
+      const count = collisionCounts[index];
+      if (count === 0) return;
+      point.x += displacementX[index] / count;
+      point.y += displacementY[index] / count;
+      if (dimensions === 3) point.z += displacementZ[index] / count;
+    });
+  }
 }
 
 // Preset verified corporate engineering colors for common architectures
@@ -333,8 +469,37 @@ function generateFileHoloTexture(
   isSelected: boolean,
   isHovered: boolean,
   isDamaged: boolean,
-  isDark: boolean = true
+  isDead: boolean,
+  isDark: boolean = true,
+  compact: boolean = false
 ): THREE.CanvasTexture {
+  if (compact) {
+    const cacheKey = `${folderTheme.hex}:${isDamaged}:${isDead}:${isDark}`;
+    const cached = compactNodeTextureCache.get(cacheKey);
+    if (cached) return cached;
+    const compactCanvas = document.createElement('canvas');
+    compactCanvas.width = 128;
+    compactCanvas.height = 80;
+    const compactContext = compactCanvas.getContext('2d');
+    if (compactContext) {
+      compactContext.fillStyle = isDark ? 'rgba(9, 14, 25, 0.97)' : 'rgba(255, 255, 255, 0.97)';
+      compactContext.fillRect(1, 1, 126, 78);
+      compactContext.strokeStyle = isDamaged ? '#f43f5e' : isDead ? '#64748b' : folderTheme.color;
+      compactContext.lineWidth = 3;
+      compactContext.strokeRect(2.5, 2.5, 123, 75);
+      compactContext.fillStyle = folderTheme.color;
+      compactContext.fillRect(8, 8, 5, 64);
+      compactContext.fillStyle = isDark ? '#e2e8f0' : '#0f172a';
+      compactContext.font = 'bold 20px sans-serif';
+      compactContext.fillText(isDamaged ? 'IMPACT' : isDead ? 'DEAD' : 'NODE', 22, 46);
+    }
+    const compactTexture = new THREE.CanvasTexture(compactCanvas);
+    compactTexture.generateMipmaps = true;
+    compactTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    compactNodeTextureCache.set(cacheKey, compactTexture);
+    return compactTexture;
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 320;
@@ -367,55 +532,95 @@ function generateFileHoloTexture(
 
     const baseBorderColor = isDamaged
       ? isDark ? '#f43f5e' : '#e11d48'
+      : isDead
+      ? isDark ? '#64748b' : '#94a3b8'
       : isSelected
       ? isDark ? '#00f0ff' : '#0284c7'
       : isHovered
       ? isDark ? '#38bdf8' : '#0284c7'
       : folderTheme.color;
 
-    // Solid Opaque Card Background
+    // Deep Sci-Fi Glass / Obsidian Plate Background
     const bgGrad = ctx.createLinearGradient(0, 0, 512, 320);
     if (isDamaged) {
       if (isDark) {
-        bgGrad.addColorStop(0, '#2b0c16');
-        bgGrad.addColorStop(1, '#17060b');
+        bgGrad.addColorStop(0, 'rgba(45, 12, 24, 0.94)');
+        bgGrad.addColorStop(1, 'rgba(24, 6, 12, 0.98)');
       } else {
         bgGrad.addColorStop(0, '#fff1f2');
         bgGrad.addColorStop(1, '#ffe4e6');
       }
+    } else if (isDead) {
+      bgGrad.addColorStop(0, isDark ? 'rgba(30, 41, 59, 0.92)' : '#f1f5f9');
+      bgGrad.addColorStop(1, isDark ? 'rgba(15, 23, 42, 0.96)' : '#e2e8f0');
     } else if (isSelected) {
       if (isDark) {
-        bgGrad.addColorStop(0, '#0c223a');
-        bgGrad.addColorStop(1, '#061322');
+        bgGrad.addColorStop(0, 'rgba(12, 34, 58, 0.95)');
+        bgGrad.addColorStop(1, 'rgba(6, 19, 34, 0.98)');
       } else {
         bgGrad.addColorStop(0, '#f0f9ff');
         bgGrad.addColorStop(1, '#e0f2fe');
       }
     } else {
       if (isDark) {
-        bgGrad.addColorStop(0, '#0a1120');
-        bgGrad.addColorStop(1, '#060a14');
+        bgGrad.addColorStop(0, 'rgba(10, 18, 34, 0.94)');
+        bgGrad.addColorStop(0.5, 'rgba(7, 12, 24, 0.96)');
+        bgGrad.addColorStop(1, 'rgba(4, 7, 16, 0.98)');
       } else {
         bgGrad.addColorStop(0, '#ffffff');
-        bgGrad.addColorStop(1, '#ffffff');
+        bgGrad.addColorStop(1, '#f8fafc');
       }
     }
 
+    // Chamfered Sci-Fi Cut-Corner Geometry
+    const cardX = 10;
+    const cardY = 10;
+    const cardW = 492;
+    const cardH = 300;
+    const cut = 22;
+
     ctx.fillStyle = bgGrad;
     ctx.beginPath();
-    ctx.roundRect(10, 10, 492, 300, 18);
+    ctx.moveTo(cardX + cut, cardY);
+    ctx.lineTo(cardX + cardW - cut, cardY);
+    ctx.lineTo(cardX + cardW, cardY + cut);
+    ctx.lineTo(cardX + cardW, cardY + cardH - cut);
+    ctx.lineTo(cardX + cardW - cut, cardY + cardH);
+    ctx.lineTo(cardX + cut, cardY + cardH);
+    ctx.lineTo(cardX, cardY + cardH - cut);
+    ctx.lineTo(cardX, cardY + cut);
+    ctx.closePath();
     ctx.fill();
 
-    // Header Accent Band
-    ctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc';
-    ctx.beginPath();
-    ctx.roundRect(12, 12, 488, 53, [16, 16, 0, 0]);
-    ctx.fill();
-
-    // Crisp Outer Border
-    ctx.lineWidth = isSelected ? 7 : isHovered ? 5 : isDark ? 2 : 3.5;
+    // Laser Edge Border
+    ctx.lineWidth = isSelected ? 5 : isHovered ? 4 : isDark ? 2.5 : 3.5;
     ctx.strokeStyle = baseBorderColor;
     ctx.stroke();
+
+    // Sci-Fi Corner HUD Reticles
+    const bLen = 28;
+    ctx.strokeStyle = isDark ? '#ffffff' : '#0284c7';
+    ctx.lineWidth = 3.5;
+
+    ctx.beginPath();
+    ctx.moveTo(cardX, cardY + bLen);
+    ctx.lineTo(cardX, cardY + cut);
+    ctx.lineTo(cardX + cut, cardY);
+    ctx.lineTo(cardX + bLen, cardY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(cardX + cardW - bLen, cardY);
+    ctx.lineTo(cardX + cardW - cut, cardY);
+    ctx.lineTo(cardX + cardW, cardY + cut);
+    ctx.lineTo(cardX + cardW, cardY + bLen);
+    ctx.stroke();
+
+    // Header Accent Band
+    ctx.fillStyle = isDark ? 'rgba(0, 240, 255, 0.05)' : '#f8fafc';
+    ctx.beginPath();
+    ctx.roundRect(14, 14, 484, 50, [10, 10, 0, 0]);
+    ctx.fill();
 
     // Header Bar: Language Icon Badge + Folder Tag Badge
     ctx.fillStyle = langColor;
@@ -602,13 +807,16 @@ function generateClusterBadgeTexture(
 
 export default function CodeUniverse3D({
   universe,
+  egoNetwork,
+  focusNodeId,
+  simulation,
+  simulationFilePath,
   onSelectNode,
   onOpenSimulator,
   onToggleDimensions,
 }: CodeUniverse3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { theme } = useTheme();
-  const isDark = theme === 'dark';
+  const isDark = typeof document === 'undefined' || document.documentElement.getAttribute('data-theme') !== 'light';
 
   // Direct DOM Refs for Instant 120 FPS Hover Glance Pill (0 React Component Re-renders)
   const hoverPillRef = useRef<HTMLDivElement>(null);
@@ -622,11 +830,31 @@ export default function CodeUniverse3D({
 
   // Dynamic In-Place Update Handler Refs (Zero WebGL Scene Teardown)
   const isDarkRef = useRef<boolean>(isDark);
-  isDarkRef.current = isDark;
 
   const onThemeChangeRef = useRef<((dark: boolean) => void) | null>(null);
   const onDamageOverlayChangeRef = useRef<((damage: boolean) => void) | null>(null);
+  const onSimulationOverlayChangeRef = useRef<(() => void) | null>(null);
   const onEdgeFilterChangeRef = useRef<((filter: 'all' | 'calls' | 'imports') => void) | null>(null);
+  const simulationRef = useRef<SimulateEditResponse | null | undefined>(simulation);
+  const simulationFilePathRef = useRef<string | null | undefined>(simulationFilePath);
+  const [themeMutationMs, setThemeMutationMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    const syncTheme = (event?: Event) => {
+      const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+      isDarkRef.current = dark;
+      if (event instanceof CustomEvent && typeof event.detail?.mutationMs === 'number') {
+        setThemeMutationMs(event.detail.mutationMs);
+      }
+      onThemeChangeRef.current?.(dark);
+    };
+    window.addEventListener('synevid-theme-change', syncTheme);
+    window.addEventListener('storage', syncTheme);
+    return () => {
+      window.removeEventListener('synevid-theme-change', syncTheme);
+      window.removeEventListener('storage', syncTheme);
+    };
+  }, []);
 
   // Previous Node Positions Ref for Smooth Dimensional Morphing (2D <-> 3D)
   const prevPositionsRef = useRef<Map<string, THREE.Vector3>>(new Map());
@@ -634,22 +862,63 @@ export default function CodeUniverse3D({
   // HUD & Navigation State
   const [granularity, setGranularity] = useState<'pkg' | 'file' | 'symbol' | 'lines'>('file');
   const [edgeFilter, setEdgeFilter] = useState<'all' | 'calls' | 'imports'>('all');
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [damageOverlay, setDamageOverlay] = useState<boolean>(false);
+  const selectedNodeId = focusNodeId ?? null;
+  const damageOverlay = Boolean(simulation);
+  const dataPulsesAvailable = universe.node_count < DENSE_GRAPH_RENDER_THRESHOLD;
+  const [fps, setFps] = useState<number | null>(null);
+  const [presentedFps, setPresentedFps] = useState<number | null>(null);
+  const [hasPresentedFps, setHasPresentedFps] = useState(false);
+  const [presentationLatencyMs, setPresentationLatencyMs] = useState<number | null>(null);
+  const fpsFrameCountRef = useRef(0);
+  const fpsWindowStartRef = useRef(0);
+  useEffect(() => {
+    const resetFpsWindow = () => {
+      fpsFrameCountRef.current = 0;
+      fpsWindowStartRef.current = performance.now();
+      setFps(document.hidden ? 0 : null);
+    };
+    document.addEventListener('visibilitychange', resetFpsWindow);
+    return () => document.removeEventListener('visibilitychange', resetFpsWindow);
+  }, []);
+  useEffect(() => {
+    const desktopBridge = typeof window !== 'undefined' ? (window as any).synevidDesktop : null;
+    if (!desktopBridge?.startFrameMeter || !desktopBridge?.getFrameMeterStats) return;
+
+    let cancelled = false;
+    setHasPresentedFps(true);
+    void desktopBridge.startFrameMeter();
+    const sampleTimer = window.setInterval(async () => {
+      try {
+        const stats = await desktopBridge.getFrameMeterStats();
+        if (!cancelled && typeof stats?.fps === 'number') {
+          setPresentedFps(stats.fps);
+        }
+        if (!cancelled && typeof stats?.presentationLatencyMs === 'number') {
+          setPresentationLatencyMs(stats.presentationLatencyMs);
+        }
+      } catch {
+        if (!cancelled) setPresentedFps(null);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(sampleTimer);
+      if (desktopBridge.stopFrameMeter) void desktopBridge.stopFrameMeter();
+    };
+  }, []);
   const [isPhysicsPaused, setIsPhysicsPaused] = useState<boolean>(false);
   const [controlMode, setControlMode] = useState<'orbit' | 'pan'>('orbit');
   const [showLegends, setShowLegends] = useState<boolean>(false);
   const [selectedFolderFilter, setSelectedFolderFilter] = useState<string | null>(null);
   const [legendSearch, setLegendSearch] = useState<string>('');
+  const displayedFps = hasPresentedFps ? presentedFps : fps;
 
   const damageOverlayRef = useRef<boolean>(damageOverlay);
-  damageOverlayRef.current = damageOverlay;
 
   const edgeFilterRef = useRef<'all' | 'calls' | 'imports'>(edgeFilter);
-  edgeFilterRef.current = edgeFilter;
 
   const selectedFolderFilterRef = useRef<string | null>(selectedFolderFilter);
-  selectedFolderFilterRef.current = selectedFolderFilter;
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -659,10 +928,19 @@ export default function CodeUniverse3D({
   const hoveredNodeIdRef = useRef<string | null>(null);
   const activeNeighborsRef = useRef<Set<string>>(new Set());
   const controlModeRef = useRef<'orbit' | 'pan'>('orbit');
-  controlModeRef.current = controlMode;
 
   const isPhysicsPausedRef = useRef<boolean>(false);
-  isPhysicsPausedRef.current = isPhysicsPaused;
+
+  useLayoutEffect(() => {
+    isDarkRef.current = isDark;
+    simulationRef.current = simulation;
+    simulationFilePathRef.current = simulationFilePath;
+    damageOverlayRef.current = damageOverlay;
+    edgeFilterRef.current = edgeFilter;
+    selectedFolderFilterRef.current = selectedFolderFilter;
+    controlModeRef.current = controlMode;
+    isPhysicsPausedRef.current = isPhysicsPaused;
+  }, [isDark, simulation, simulationFilePath, damageOverlay, edgeFilter, selectedFolderFilter, controlMode, isPhysicsPaused]);
 
   const activeDimRef = useRef<'2D' | '3D'>(universe.dimensions || '3D');
   const morphToDimensionRef = useRef<((nextDim: '2D' | '3D') => void) | null>(null);
@@ -675,6 +953,19 @@ export default function CodeUniverse3D({
   const recenterRef = useRef<(() => void) | null>(null);
   const panUniverseRef = useRef<((dx: number, dy: number) => void) | null>(null);
   const zoomUniverseRef = useRef<((delta: number) => void) | null>(null);
+
+  useEffect(() => {
+    if (!focusNodeId) {
+      selectedNodeIdRef.current = null;
+      return;
+    }
+    selectedNodeIdRef.current = focusNodeId;
+    flyToNodeByIdRef.current?.(focusNodeId);
+  }, [focusNodeId]);
+
+  useEffect(() => {
+    onSimulationOverlayChangeRef.current?.();
+  }, [simulation]);
 
   useEffect(() => {
     if (universe?.dimensions && universe.dimensions !== activeDimRef.current) {
@@ -697,10 +988,11 @@ export default function CodeUniverse3D({
 
   // All parsed nodes as an array
   const allNodesList: UniverseNode[] = useMemo(() => {
-    if (!universe?.nodes) return [];
-    if (Array.isArray(universe.nodes)) return universe.nodes;
-    if (typeof universe.nodes === 'object') {
-      return Object.entries(universe.nodes).map(([id, val]: [string, any]) => ({
+    const nodeData: unknown = universe.nodes;
+    if (Array.isArray(nodeData)) return nodeData as UniverseNode[];
+    if (nodeData && typeof nodeData === 'object') {
+      return Object.entries(nodeData as Record<string, Partial<UniverseNode>>).map(([id, val]) => ({
+        ...val,
         id,
         x: Number(val.x) || 0,
         y: Number(val.y) || 0,
@@ -709,7 +1001,7 @@ export default function CodeUniverse3D({
       }));
     }
     return [];
-  }, [universe]);
+  }, [universe.nodes]);
 
   // Pre-indexed caller & callee counts for O(1) hover lookups (0 allocation during interaction)
   const { callerCounts, calleeCounts } = useMemo(() => {
@@ -721,13 +1013,25 @@ export default function CodeUniverse3D({
         callers.set(e.target, (callers.get(e.target) || 0) + 1);
       }
     }
+    for (const node of allNodesList) {
+      if (typeof node.caller_count === 'number') callers.set(node.id, node.caller_count);
+      if (typeof node.callee_count === 'number') callees.set(node.id, node.callee_count);
+    }
     return { callerCounts: callers, calleeCounts: callees };
-  }, [universe?.edges]);
+  }, [allNodesList, universe.edges]);
 
   // Execute Adaptive Namespace & Cluster Engine (Stable reference across theme toggles)
   const { nodeClusterMap, clusters: adaptiveClusters } = useMemo(() => {
-    const paths = allNodesList.map((n) => n.id);
-    return buildAdaptiveClusters(paths, false);
+    const pathByNodeId = new Map(allNodesList.map((node) => [
+      node.id,
+      node.file_path || (node.id.startsWith('file::') ? node.id.slice('file::'.length) : node.id),
+    ]));
+    const { nodeClusterMap: pathClusterMap, clusters } = buildAdaptiveClusters([...pathByNodeId.values()], false);
+    const nodeClusters = new Map<string, string>();
+    for (const [nodeId, path] of pathByNodeId) {
+      nodeClusters.set(nodeId, pathClusterMap.get(path) || 'root');
+    }
+    return { nodeClusterMap: nodeClusters, clusters };
   }, [allNodesList]);
 
   // Filtered legend items for search
@@ -761,9 +1065,9 @@ export default function CodeUniverse3D({
 
   const handleRecenter = () => {
     selectedNodeIdRef.current = null;
-    setSelectedNodeId(null);
     setSelectedFolderFilter(null);
     activeNeighborsRef.current.clear();
+    onSelectNode?.('');
     recenterRef.current?.();
   };
 
@@ -774,7 +1078,7 @@ export default function CodeUniverse3D({
     } else {
       setSelectedFolderFilter(folderName);
       selectedNodeIdRef.current = null;
-      setSelectedNodeId(null);
+      onSelectNode?.('');
       flyToClusterRef.current?.(folderName);
     }
   };
@@ -782,23 +1086,84 @@ export default function CodeUniverse3D({
   // Selected node details
   const selectedNode = useMemo(() => {
     if (!selectedNodeId || !universe?.nodes) return null;
-    return allNodesList.find((n) => n.id === selectedNodeId) || null;
-  }, [selectedNodeId, universe, allNodesList]);
+    const visibleNode = allNodesList.find((node) => node.id === selectedNodeId);
+    if (visibleNode) return visibleNode;
+    if (selectedNodeId.startsWith('file:')) {
+      const filePath = selectedNodeId.slice('file:'.length);
+      const fileSymbols = allNodesList.filter((node) => getUniverseNodeFilePath(node) === filePath);
+      return {
+        id: selectedNodeId,
+        label: filePath,
+        kind: 'file',
+        file_path: filePath,
+        status: fileSymbols.some((node) => node.status?.toLowerCase() === 'unknown') ? 'unknown' : fileSymbols[0]?.status,
+        caller_count: fileSymbols.reduce((total, node) => total + (node.caller_count || 0), 0),
+        callee_count: fileSymbols.reduce((total, node) => total + (node.callee_count || 0), 0),
+        x: 0,
+        y: 0,
+        z: 0,
+      } satisfies UniverseNode;
+    }
+    const target = egoNetwork?.target_node;
+    if (!target || target.stable_id !== selectedNodeId) return null;
+    return {
+      id: target.stable_id,
+      label: target.qualified_name,
+      kind: target.node_kind,
+      file_path: target.file_path,
+      start_line: target.start_line,
+      end_line: target.end_line,
+      status: target.coverage_state,
+      x: 0,
+      y: 0,
+      z: 0,
+    } satisfies UniverseNode;
+  }, [selectedNodeId, universe, allNodesList, egoNetwork]);
 
   // Connected edges for the selected node
   const connectedEdges = useMemo(() => {
     if (!selectedNodeId || !universe?.edges) return { inbound: [], outbound: [] };
+    if (egoNetwork?.target_node?.stable_id === selectedNodeId) {
+      const toUniverseEdge = (edge: EgoNetwork['incoming_callers'][number]): UniverseEdge => ({
+        id: edge.edge_id,
+        source: edge.source_stable_id,
+        target: edge.target_stable_id,
+        kind: edge.edge_kind,
+        source_file: edge.source_file,
+        source_line: edge.source_line,
+        source_col: edge.source_col,
+        target_file: edge.target_file,
+        target_line: edge.target_line,
+        confidence: edge.confidence,
+      });
+      return {
+        inbound: egoNetwork.incoming_callers.map(toUniverseEdge),
+        outbound: egoNetwork.outgoing_callees.map(toUniverseEdge),
+      };
+    }
+    if (selectedNodeId.startsWith('file:')) {
+      const filePath = selectedNodeId.slice('file:'.length);
+      const fileNodeIds = new Set(
+        allNodesList
+          .filter((node) => getUniverseNodeFilePath(node) === filePath)
+          .map((node) => node.id),
+      );
+      return {
+        inbound: universe.edges.filter((edge) => fileNodeIds.has(edge.target) || edge.target_file === filePath),
+        outbound: universe.edges.filter((edge) => fileNodeIds.has(edge.source) || edge.source_file === filePath),
+      };
+    }
     const inbound = universe.edges.filter((e) => e.target === selectedNodeId);
     const outbound = universe.edges.filter((e) => e.source === selectedNodeId);
     return { inbound, outbound };
-  }, [selectedNodeId, universe]);
+  }, [selectedNodeId, universe, allNodesList, egoNetwork]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    let width = container.clientWidth || 1000;
-    let height = container.clientHeight || 700;
+    const width = container.clientWidth || 1000;
+    const height = container.clientHeight || 700;
 
     // 1. Scene & Setup
     const scene = new THREE.Scene();
@@ -810,13 +1175,14 @@ export default function CodeUniverse3D({
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 4500);
     cameraRef.current = camera;
 
-    const orbitTarget = new THREE.Vector3(0, 0, 0);
-    const targetLookAt = new THREE.Vector3(0, 0, 0);
+    const denseTargetZ = universe.node_count >= DENSE_GRAPH_RENDER_THRESHOLD ? 560 : 0;
+    const orbitTarget = new THREE.Vector3(0, 0, denseTargetZ);
+    const targetLookAt = new THREE.Vector3(0, 0, denseTargetZ);
 
     // In 3D mode, start with elevated cinematic isometric perspective (60 deg elevation, 45 deg azimuth)
     // In 2.5D mode, start with rich isometric tabletop drafting angle (beta = 0.42, ~24 deg tilt)
     // Compacted initial camera radius brings all modules into a crisp, readable archipelago
-    let radius = isInitial3D ? 420 : 560;
+    let radius = universe.node_count >= DENSE_GRAPH_RENDER_THRESHOLD ? 1500 : isInitial3D ? 420 : 560;
     let targetRadius = radius;
     let theta = isInitial3D ? Math.PI / 4 : 0;
     let targetTheta = theta;
@@ -857,12 +1223,98 @@ export default function CodeUniverse3D({
       powerPreference: 'high-performance',
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(isDark ? 0x0a0e17 : 0xf1f5f9, 1);
     renderer.toneMapping = isDark ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
     renderer.toneMappingExposure = isDark ? 1.15 : 1.0;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
+
+    if (universe.node_count >= DENSE_GRAPH_RENDER_THRESHOLD) {
+      const denseRenderer = setupDenseUniverseRenderer({
+        container,
+        scene,
+        camera,
+        renderer,
+        universe,
+        nodes: allNodesList,
+        edges: sampleDenseOverviewEdges(universe.edges),
+        nodeClusterMap,
+        darkClusterColors: new Map(adaptiveClusters.map((cluster) => [cluster.name, cluster.darkTheme.hex])),
+        lightClusterColors: new Map(adaptiveClusters.map((cluster) => [cluster.name, cluster.lightTheme.hex])),
+        isDark,
+        refs: {
+          activeDimension: activeDimRef,
+          selectedNodeId: selectedNodeIdRef,
+          hoveredNodeId: hoveredNodeIdRef,
+          activeNeighbors: activeNeighborsRef,
+          controlMode: controlModeRef,
+          edgeFilter: edgeFilterRef,
+          simulation: simulationRef,
+          simulationFilePath: simulationFilePathRef,
+          damageOverlay: damageOverlayRef,
+        },
+        onSelectNode,
+        onFps: setFps,
+        getNodeState: getSimulationNodeState,
+        isEdgeBroken: isSimulationEdgeBroken,
+        onHoverNode: (node, clientX, clientY) => {
+          const pill = hoverPillRef.current;
+          if (!pill || !node) {
+            if (pill) pill.style.display = 'none';
+            return;
+          }
+          const rect = container.getBoundingClientRect();
+          const left = Math.max(8, Math.min(clientX - rect.left + 14, rect.width - 230));
+          const top = Math.max(8, Math.min(clientY - rect.top + 14, rect.height - 88));
+          pill.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+          pill.style.display = selectedNodeIdRef.current ? 'none' : 'block';
+          const extension = node.id.split('.').pop() || 'node';
+          const cluster = nodeClusterMap.get(node.id) || 'root';
+          if (hoverExtRef.current) {
+            hoverExtRef.current.textContent = extension.toUpperCase();
+            hoverExtRef.current.style.backgroundColor = isDarkRef.current ? '#0e7490' : '#0369a1';
+          }
+          if (hoverNameRef.current) hoverNameRef.current.textContent = node.label || node.id.split('/').pop() || node.id;
+          if (hoverFolderRef.current) hoverFolderRef.current.textContent = cluster;
+          if (hoverCallersRef.current) {
+            hoverCallersRef.current.textContent = `← ${callerCounts.get(node.id) ?? 0} callers`;
+          }
+          if (hoverCalleesRef.current) {
+            hoverCalleesRef.current.textContent = `→ ${calleeCounts.get(node.id) ?? 0} callees`;
+          }
+          if (hoverBrokenRef.current) {
+            hoverBrokenRef.current.textContent = node.status?.toUpperCase() || 'UNKNOWN';
+            hoverBrokenRef.current.className = node.status?.toLowerCase() === 'verified'
+              ? 'font-bold text-emerald-600 dark:text-emerald-400'
+              : 'font-bold text-amber-600 dark:text-amber-400';
+          }
+        },
+      });
+
+      morphToDimensionRef.current = denseRenderer.setDimension;
+      flyToNodeByIdRef.current = denseRenderer.flyToNode;
+      flyToClusterRef.current = denseRenderer.flyToCluster;
+      recenterRef.current = denseRenderer.recenter;
+      panUniverseRef.current = denseRenderer.pan;
+      zoomUniverseRef.current = denseRenderer.zoom;
+      onThemeChangeRef.current = denseRenderer.setTheme;
+      onDamageOverlayChangeRef.current = denseRenderer.updateOverlay;
+      onSimulationOverlayChangeRef.current = denseRenderer.updateOverlay;
+      onEdgeFilterChangeRef.current = denseRenderer.setEdgeFilter;
+      if (focusNodeId) denseRenderer.flyToNode(focusNodeId);
+
+      return () => {
+        onThemeChangeRef.current = null;
+        onDamageOverlayChangeRef.current = null;
+        onSimulationOverlayChangeRef.current = null;
+        onEdgeFilterChangeRef.current = null;
+        denseRenderer.dispose();
+        renderer.dispose();
+        if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+      };
+    }
 
     // 4. Lighting Suite
     const ambientLight = new THREE.AmbientLight(0xffffff, isDark ? 1.6 : 1.25);
@@ -1028,69 +1480,8 @@ export default function CodeUniverse3D({
       });
     });
 
-    // Anti-collision relaxation with 3D Spherical Repulsion (Fast 18-iteration convergence)
-    const MIN_SEPARATION_3D = 28;
-    for (let iter = 0; iter < 18; iter++) {
-      let anyMoved = false;
-      for (let i = 0; i < nodesList3D.length; i++) {
-        const a = nodesList3D[i];
-        for (let j = i + 1; j < nodesList3D.length; j++) {
-          const b = nodesList3D[j];
-          let dx = b.x - a.x;
-          let dy = b.y - a.y;
-          let dz = b.z - a.z;
-          let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (dist < MIN_SEPARATION_3D) {
-            anyMoved = true;
-            if (dist < 0.05) {
-              const pTheta = ((i * 37 + j * 19) % 360) * (Math.PI / 180);
-              const pPhi = ((i * 53 + j * 31) % 180) * (Math.PI / 180);
-              dx = Math.sin(pPhi) * Math.cos(pTheta);
-              dy = Math.cos(pPhi);
-              dz = Math.sin(pPhi) * Math.sin(pTheta);
-              dist = 1.0;
-            }
-            const push = (MIN_SEPARATION_3D - dist) * 0.5;
-            const px = (dx / dist) * push;
-            const py = (dy / dist) * push;
-            const pz = (dz / dist) * push;
-            a.x -= px; a.y -= py; a.z -= pz;
-            b.x += px; b.y += py; b.z += pz;
-          }
-        }
-      }
-      if (!anyMoved) break;
-    }
-
-    // Anti-collision relaxation with 2D Planar Repulsion (Fast 18-iteration convergence)
-    const MIN_SEPARATION_2D = 28;
-    for (let iter = 0; iter < 18; iter++) {
-      let anyMoved = false;
-      for (let i = 0; i < nodesList2D.length; i++) {
-        const a = nodesList2D[i];
-        for (let j = i + 1; j < nodesList2D.length; j++) {
-          const b = nodesList2D[j];
-          let dx = b.x - a.x;
-          let dy = b.y - a.y;
-          let dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < MIN_SEPARATION_2D) {
-            anyMoved = true;
-            if (dist < 0.05) {
-              const pTheta = ((i * 37 + j * 19) % 360) * (Math.PI / 180);
-              dx = Math.cos(pTheta);
-              dy = Math.sin(pTheta);
-              dist = 1.0;
-            }
-            const push = (MIN_SEPARATION_2D - dist) * 0.5;
-            const px = (dx / dist) * push;
-            const py = (dy / dist) * push;
-            a.x -= px; a.y -= py;
-            b.x += px; b.y += py;
-          }
-        }
-      }
-      if (!anyMoved) break;
-    }
+    relaxPositionsWithSpatialHash(nodesList3D, 28, 3, 18);
+    relaxPositionsWithSpatialHash(nodesList2D, 28, 2, 18);
 
     const pos3DMap = new Map<string, THREE.Vector3>();
     nodesList3D.forEach((n) => pos3DMap.set(n.id, new THREE.Vector3(n.x, n.y, n.z)));
@@ -1280,11 +1671,13 @@ export default function CodeUniverse3D({
         hex: 0x0284c7,
       };
 
-      const isDamaged = damageOverlayRef.current && node.id.includes('PaymentService');
+      const nodeState = getSimulationNodeState(node, simulationRef.current, simulationFilePathRef.current);
+      const isDamaged = damageOverlayRef.current && nodeState.damaged;
+      const isDead = damageOverlayRef.current && nodeState.dead;
       const isSelected = selectedNodeIdRef.current === node.id;
       const isHovered = hoveredNodeIdRef.current === node.id;
 
-      const texture = generateFileHoloTexture(node, cTheme, isSelected, isHovered, isDamaged, isDark);
+      const texture = generateFileHoloTexture(node, cTheme, isSelected, isHovered, isDamaged, isDead, isDark, universe.node_count >= 1000);
 
       const slateMat = new THREE.MeshBasicMaterial({
         map: texture,
@@ -1305,6 +1698,8 @@ export default function CodeUniverse3D({
       // Orbital Ring uses the cluster's signature color
       const ringColor = isDamaged
         ? isDark ? 0xf43f5e : 0xe11d48
+        : isDead
+        ? isDark ? 0x64748b : 0x94a3b8
         : isSelected
         ? isDark ? 0x00f0ff : 0x0284c7
         : cTheme.hex;
@@ -1317,6 +1712,7 @@ export default function CodeUniverse3D({
       const ringMesh = new THREE.Mesh(ringGeo, ringMat);
       ringMesh.position.copy(mesh.position);
       ringMesh.rotation.x = Math.PI / 2;
+      ringMesh.visible = universe.node_count < 1000;
 
       universeGroup.add(mesh);
       universeGroup.add(ringMesh);
@@ -1408,11 +1804,14 @@ export default function CodeUniverse3D({
     const pulsePackets: PulsePacket[] = [];
     const edgeObjects: {
       line: THREE.Line;
+      data: UniverseEdge;
       source: string;
       target: string;
       kind: string;
       isBroken: boolean;
       isIntraFolder: boolean;
+      baseColors: number[];
+      baseSocketColor: number;
       socket1: THREE.Mesh;
       socket2: THREE.Mesh;
       pulseIndex: number;
@@ -1434,8 +1833,8 @@ export default function CodeUniverse3D({
         const totalDist = delta.length();
         const ringRadius = 13.6;
 
-        let p1 = p1_center.clone();
-        let p2 = p2_center.clone();
+        const p1 = p1_center.clone();
+        const p2 = p2_center.clone();
 
         if (totalDist > ringRadius * 2 + 2) {
           const unitDir = delta.clone().normalize();
@@ -1463,9 +1862,7 @@ export default function CodeUniverse3D({
         const curve = new THREE.QuadraticBezierCurve3(p1, ctrl, p2);
         const points = curve.getPoints(45);
 
-        const isBroken =
-          damageOverlayRef.current &&
-          (edge.source.includes('PaymentService') || edge.target.includes('PaymentService'));
+        const isBroken = damageOverlayRef.current && isSimulationEdgeBroken(edge, simulationRef.current);
 
         const srcCluster = nodeClusterMap.get(edge.source) || 'root';
         const dstCluster = nodeClusterMap.get(edge.target) || 'root';
@@ -1478,33 +1875,44 @@ export default function CodeUniverse3D({
         };
         const positions: number[] = [];
         const colors: number[] = [];
+        const baseColors: number[] = [];
 
         points.forEach((pt, pIdx) => {
           positions.push(pt.x, pt.y, pt.z);
           const t = pIdx / points.length;
+          let red: number;
+          let green: number;
+          let blue: number;
 
-          if (isBroken) {
-            colors.push(1.0, 0.15, 0.35);
-          } else if (isIntraFolder) {
+          if (isIntraFolder) {
             const c = new THREE.Color(srcTheme.hex);
-            colors.push(c.r, c.g, c.b);
+            red = c.r;
+            green = c.g;
+            blue = c.b;
           } else if (edge.kind === 'imports') {
             if (isDarkRef.current) {
-              colors.push(
-                THREE.MathUtils.lerp(0.58, 0.0, t),
-                THREE.MathUtils.lerp(0.2, 0.94, t),
-                1.0
-              );
+              red = THREE.MathUtils.lerp(0.58, 0.0, t);
+              green = THREE.MathUtils.lerp(0.2, 0.94, t);
+              blue = 1.0;
             } else {
-              colors.push(0.35, 0.15, 0.85);
+              red = 0.35;
+              green = 0.15;
+              blue = 0.85;
             }
           } else {
             if (isDarkRef.current) {
-              colors.push(0.0, THREE.MathUtils.lerp(0.7, 0.94, t), 1.0);
+              red = 0.0;
+              green = THREE.MathUtils.lerp(0.7, 0.94, t);
+              blue = 1.0;
             } else {
-              colors.push(0.02, 0.45, 0.75);
+              red = 0.02;
+              green = 0.45;
+              blue = 0.75;
             }
           }
+          baseColors.push(red, green, blue);
+          if (isBroken) colors.push(1.0, 0.15, 0.35);
+          else colors.push(red, green, blue);
         });
 
         const lineGeo = new THREE.BufferGeometry();
@@ -1531,16 +1939,19 @@ export default function CodeUniverse3D({
 
         const socket1 = new THREE.Mesh(socketGeo, socketMat);
         socket1.position.copy(p1);
+        socket1.visible = universe.node_count < 1000;
         universeGroup.add(socket1);
 
         const socket2 = new THREE.Mesh(socketGeo, socketMat);
         socket2.position.copy(p2);
+        socket2.visible = universe.node_count < 1000;
         universeGroup.add(socket2);
 
         // Electric Data Pulse Packet
         const packetMat = new THREE.MeshBasicMaterial({ color: socketColor });
         const packetMesh = new THREE.Mesh(packetGeo, packetMat);
         packetMesh.position.copy(p1);
+        packetMesh.visible = universe.node_count < 1000;
         universeGroup.add(packetMesh);
 
         const pulseIdx = pulsePackets.length;
@@ -1553,11 +1964,14 @@ export default function CodeUniverse3D({
 
         edgeObjects.push({
           line: curveLine,
+          data: edge,
           source: edge.source,
           target: edge.target,
           kind: edge.kind || 'calls',
           isBroken,
           isIntraFolder,
+          baseColors,
+          baseSocketColor: srcTheme.hex,
           socket1,
           socket2,
           pulseIndex: pulseIdx,
@@ -1579,8 +1993,8 @@ export default function CodeUniverse3D({
         const totalDist = delta.length();
         const ringRadius = 13.6;
 
-        let p1 = p1_center.clone();
-        let p2 = p2_center.clone();
+        const p1 = p1_center.clone();
+        const p2 = p2_center.clone();
 
         if (totalDist > ringRadius * 2 + 2) {
           const unitDir = delta.clone().normalize();
@@ -1913,12 +2327,12 @@ export default function CodeUniverse3D({
         } else {
           // Orbit Mode works in both 3D Universe and 2.5D Mind Map!
           if (activeDimRef.current === '3D') {
-            targetTheta -= deltaX * 0.005;
-            targetPhi = Math.max(0.08, Math.min(Math.PI - 0.08, targetPhi + deltaY * 0.005));
+            targetTheta += deltaX * 0.005;
+            targetPhi = Math.max(0.08, Math.min(Math.PI - 0.08, targetPhi - deltaY * 0.005));
           } else {
             // In 2.5D: deltaX spins the mind map turntable, deltaY tilts isometric perspective
-            targetAlpha -= deltaX * 0.004;
-            targetBeta = Math.max(0, Math.min(1.05, targetBeta + deltaY * 0.004));
+            targetAlpha += deltaX * 0.004;
+            targetBeta = Math.max(0, Math.min(1.05, targetBeta - deltaY * 0.004));
           }
         }
       } else {
@@ -1958,7 +2372,10 @@ export default function CodeUniverse3D({
           if (hit) {
             const inCount = callerCounts.get(hit.data.id) || 0;
             const outCount = calleeCounts.get(hit.data.id) || 0;
-            const isDamaged = damageOverlayRef.current && hit.data.id.includes('PaymentService');
+            const nodeState = getSimulationNodeState(hit.data, simulationRef.current, simulationFilePathRef.current);
+            const isDamaged = damageOverlayRef.current && nodeState.damaged;
+            const isDead = damageOverlayRef.current && nodeState.dead;
+            const statusLabel = isDamaged ? 'DAMAGED' : isDead ? 'DEAD CODE' : (hit.data.status || 'unknown').toUpperCase();
             const ext = hit.data.id.split('.').pop()?.toLowerCase() || 'file';
             const fileName = hit.data.id.split('/').pop() || hit.data.id;
 
@@ -1979,14 +2396,14 @@ export default function CodeUniverse3D({
               if (hoverCallersRef.current) hoverCallersRef.current.textContent = `← ${inCount} callers`;
               if (hoverCalleesRef.current) hoverCalleesRef.current.textContent = `→ ${outCount} callees`;
               if (hoverBrokenRef.current) {
-                hoverBrokenRef.current.textContent = isDamaged ? 'BROKEN' : 'VERIFIED';
+                hoverBrokenRef.current.textContent = statusLabel;
                 hoverBrokenRef.current.className = `font-bold ${
-                  isDamaged ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'
+                  isDamaged ? 'text-rose-500' : isDead ? 'text-slate-500' : 'text-emerald-600 dark:text-emerald-400'
                 }`;
               }
               if (hoverStatusDotRef.current) {
                 hoverStatusDotRef.current.className = `w-2 h-2 rounded-full shrink-0 ${
-                  isDamaged ? 'bg-rose-500 animate-ping' : 'bg-emerald-500'
+                  isDamaged ? 'bg-rose-500 animate-ping' : isDead ? 'bg-slate-500' : 'bg-emerald-500'
                 }`;
               }
             }
@@ -2040,7 +2457,6 @@ export default function CodeUniverse3D({
         // 3. Clicked empty space: clear spotlight isolation and restore all files
         if (selectedNodeIdRef.current !== null) {
           selectedNodeIdRef.current = null;
-          setSelectedNodeId(null);
           activeNeighborsRef.current.clear();
           if (onSelectNode) {
             onSelectNode('');
@@ -2058,7 +2474,6 @@ export default function CodeUniverse3D({
     // Fly-to node and calculate active neighbors for spotlight dimming
     const flyToNode = (node: UniverseNode) => {
       selectedNodeIdRef.current = node.id;
-      setSelectedNodeId(node.id);
 
       const set = new Set<string>();
       set.add(node.id);
@@ -2111,7 +2526,6 @@ export default function CodeUniverse3D({
 
     recenterRef.current = () => {
       selectedNodeIdRef.current = null;
-      setSelectedNodeId(null);
       setSelectedFolderFilter(null);
       activeNeighborsRef.current.clear();
       targetLookAt.set(0, 0, 0);
@@ -2135,7 +2549,6 @@ export default function CodeUniverse3D({
       if (e.key === 'Escape') {
         if (selectedNodeIdRef.current !== null || selectedFolderFilterRef.current !== null) {
           selectedNodeIdRef.current = null;
-          setSelectedNodeId(null);
           activeNeighborsRef.current.clear();
           setSelectedFolderFilter(null);
           if (onSelectNode) {
@@ -2291,6 +2704,7 @@ export default function CodeUniverse3D({
 
         no.mesh.quaternion.copy(camera.quaternion);
         no.ringMesh.quaternion.copy(camera.quaternion);
+        no.ringMesh.visible = universe.node_count < 1000 || isSelected || isHovered;
 
         const slateMat = no.mesh.material as THREE.MeshBasicMaterial;
         const ringMat = no.ringMesh.material as THREE.MeshBasicMaterial;
@@ -2314,7 +2728,7 @@ export default function CodeUniverse3D({
 
         slateMat.opacity = THREE.MathUtils.lerp(slateMat.opacity, targetOpacity, 0.15);
         ringMat.opacity = THREE.MathUtils.lerp(ringMat.opacity, targetRingOpacity, 0.15);
-        no.mesh.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.15);
+        no.mesh.scale.setScalar(THREE.MathUtils.lerp(no.mesh.scale.x, targetScale, 0.15));
         no.ringMesh.scale.copy(no.mesh.scale);
 
         if (!isPhysicsPausedRef.current) {
@@ -2339,12 +2753,13 @@ export default function CodeUniverse3D({
         } else {
           targetOpacity = eo.isIntraFolder ? 0.2 : 0.08;
         }
+        if (eo.isBroken) targetOpacity = Math.max(targetOpacity, 0.85);
 
         lineMat.opacity = THREE.MathUtils.lerp(lineMat.opacity, targetOpacity, 0.15);
       });
 
       // Animate flowing pulse packets along curves
-      if (!isPhysicsPausedRef.current) {
+      if (!isPhysicsPausedRef.current && universe.node_count < 1000) {
         pulsePackets.forEach((packet) => {
           packet.progress += packet.speed;
           if (packet.progress > 1.0) packet.progress = 0.0;
@@ -2354,8 +2769,18 @@ export default function CodeUniverse3D({
       }
 
       renderer.render(scene, camera);
+      fpsFrameCountRef.current += 1;
+      const renderedAt = performance.now();
+      const elapsed = renderedAt - fpsWindowStartRef.current;
+      if (elapsed >= 1000) {
+        setFps((fpsFrameCountRef.current * 1000) / elapsed);
+        fpsFrameCountRef.current = 0;
+        fpsWindowStartRef.current = renderedAt;
+      }
     };
 
+    fpsFrameCountRef.current = 0;
+    fpsWindowStartRef.current = performance.now();
     animate();
 
     const onResize = () => {
@@ -2387,15 +2812,20 @@ export default function CodeUniverse3D({
       nodeObjects.forEach((no) => {
         const isSelected = selectedNodeIdRef.current === no.data.id;
         const isHovered = hoveredNodeIdRef.current === no.data.id;
-        const isDamaged = damageOverlayRef.current && no.data.id.includes('PaymentService');
+        const nodeState = getSimulationNodeState(no.data, simulationRef.current, simulationFilePathRef.current);
+        const isDamaged = damageOverlayRef.current && nodeState.damaged;
+        const isDead = damageOverlayRef.current && nodeState.dead;
         const cTheme = (dark ? clusterMapThemeDark.get(no.clusterKey) : clusterMapThemeLight.get(no.clusterKey)) || no.theme;
 
-        const newTex = generateFileHoloTexture(no.data, cTheme, isSelected, isHovered, isDamaged, dark);
+        const newTex = generateFileHoloTexture(no.data, cTheme, isSelected, isHovered, isDamaged, isDead, dark, universe.node_count >= 1000);
         const oldMat = no.mesh.material as THREE.MeshBasicMaterial;
         const oldTex = oldMat.map;
         oldMat.map = newTex;
         oldMat.needsUpdate = true;
-        oldTex?.dispose();
+        if (universe.node_count < 1000) oldTex?.dispose();
+        (no.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(isDamaged
+          ? dark ? 0xf43f5e : 0xe11d48
+          : isDead ? dark ? 0x64748b : 0x94a3b8 : cTheme.hex);
       });
 
       clusterBadgeObjects.forEach((b) => {
@@ -2414,28 +2844,58 @@ export default function CodeUniverse3D({
         const oldTex = (b.mesh.material as THREE.MeshBasicMaterial).map;
         (b.mesh.material as THREE.MeshBasicMaterial).map = newBadgeTex;
         (b.mesh.material as THREE.MeshBasicMaterial).needsUpdate = true;
-        oldTex?.dispose();
+        if (universe.node_count < 1000) oldTex?.dispose();
       });
     };
 
-    onDamageOverlayChangeRef.current = (damaged: boolean) => {
+    const updateSimulationOverlay = (damaged: boolean) => {
       damageOverlayRef.current = damaged;
       nodeObjects.forEach((no) => {
-        if (no.data.id.includes('PaymentService')) {
-          const isSelected = selectedNodeIdRef.current === no.data.id;
-          const isHovered = hoveredNodeIdRef.current === no.data.id;
-          const cTheme = (isDarkRef.current
-            ? clusterMapThemeDark.get(no.clusterKey)
-            : clusterMapThemeLight.get(no.clusterKey)) || no.theme;
-          const newTex = generateFileHoloTexture(no.data, cTheme, isSelected, isHovered, damaged, isDarkRef.current);
-          const oldMat = no.mesh.material as THREE.MeshBasicMaterial;
-          const oldTex = oldMat.map;
-          oldMat.map = newTex;
-          oldMat.needsUpdate = true;
-          oldTex?.dispose();
+        const isSelected = selectedNodeIdRef.current === no.data.id;
+        const isHovered = hoveredNodeIdRef.current === no.data.id;
+        const nodeState = getSimulationNodeState(no.data, simulationRef.current, simulationFilePathRef.current);
+        const isDamaged = damaged && nodeState.damaged;
+        const isDead = damaged && nodeState.dead;
+        const cTheme = (isDarkRef.current
+          ? clusterMapThemeDark.get(no.clusterKey)
+          : clusterMapThemeLight.get(no.clusterKey)) || no.theme;
+        const newTex = generateFileHoloTexture(no.data, cTheme, isSelected, isHovered, isDamaged, isDead, isDarkRef.current, universe.node_count >= 1000);
+        const oldMat = no.mesh.material as THREE.MeshBasicMaterial;
+        const oldTex = oldMat.map;
+        oldMat.map = newTex;
+        oldMat.needsUpdate = true;
+        if (universe.node_count < 1000) oldTex?.dispose();
+        (no.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(isDamaged
+          ? isDarkRef.current ? 0xf43f5e : 0xe11d48
+          : isDead
+          ? isDarkRef.current ? 0x64748b : 0x94a3b8
+          : isSelected
+          ? isDarkRef.current ? 0x00f0ff : 0x0284c7
+          : cTheme.hex);
+      });
+      edgeObjects.forEach((eo) => {
+        const broken = damaged && isSimulationEdgeBroken(eo.data, simulationRef.current);
+        eo.isBroken = broken;
+        const colors = eo.line.geometry.getAttribute('color') as THREE.BufferAttribute;
+        for (let offset = 0; offset < eo.baseColors.length; offset += 3) {
+          colors.setXYZ(
+            offset / 3,
+            broken ? 1 : eo.baseColors[offset],
+            broken ? 0.15 : eo.baseColors[offset + 1],
+            broken ? 0.35 : eo.baseColors[offset + 2]
+          );
         }
+        colors.needsUpdate = true;
+        const socketColor = broken ? 0xf43f5e : eo.baseSocketColor;
+        (eo.socket1.material as THREE.MeshBasicMaterial).color.setHex(socketColor);
+        (eo.socket2.material as THREE.MeshBasicMaterial).color.setHex(socketColor);
+        const packet = pulsePackets[eo.pulseIndex];
+        if (packet) (packet.mesh.material as THREE.MeshBasicMaterial).color.setHex(socketColor);
       });
     };
+    onDamageOverlayChangeRef.current = updateSimulationOverlay;
+    onSimulationOverlayChangeRef.current = () => updateSimulationOverlay(damageOverlayRef.current);
+    updateSimulationOverlay(damageOverlayRef.current);
 
     onEdgeFilterChangeRef.current = (filter: 'all' | 'calls' | 'imports') => {
       edgeFilterRef.current = filter;
@@ -2447,6 +2907,7 @@ export default function CodeUniverse3D({
     return () => {
       onThemeChangeRef.current = null;
       onDamageOverlayChangeRef.current = null;
+      onSimulationOverlayChangeRef.current = null;
       onEdgeFilterChangeRef.current = null;
       cancelAnimationFrame(animId);
       nodeObjects.forEach((no) => {
@@ -2465,6 +2926,7 @@ export default function CodeUniverse3D({
     };
   }, [
     universe?.repo_id,
+    universe?.snapshot_id,
     universe?.node_count,
     universe?.edge_count,
     nodeClusterMap,
@@ -2542,6 +3004,52 @@ export default function CodeUniverse3D({
             </span>
           </div>
         </div>
+        <div
+          data-testid="canvas-fps-meter"
+          aria-label={hasPresentedFps
+            ? (displayedFps === null ? 'Measuring compositor-presented frames per second' : `Canvas presented FPS ${displayedFps.toFixed(1)} frames per second`)
+            : (displayedFps === null ? 'Measuring canvas render calls per second' : `Canvas render-call rate ${displayedFps.toFixed(1)} render calls per second`)}
+          title={hasPresentedFps
+            ? 'Frames reported by Electron webContents presentation events, averaged over the latest one-second sample'
+            : 'Successful canvas render calls per second, averaged over the latest one-second sample'}
+          className={`w-fit rounded-md border bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold shadow-sm backdrop-blur ${
+            displayedFps === null ? 'border-[var(--border-subtle)] text-[var(--text-secondary)]' :
+              displayedFps >= 60 ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' :
+                displayedFps >= 45 ? 'border-amber-500/40 text-amber-600 dark:text-amber-400' :
+                  'border-rose-500/40 text-rose-600 dark:text-rose-400'
+          }`}
+        >
+          {displayedFps === null ? (hasPresentedFps ? 'FPS --' : 'draws/s --') : `${displayedFps.toFixed(1)} ${hasPresentedFps ? 'FPS' : 'draws/s'}`}
+        </div>
+        {presentationLatencyMs !== null && (
+          <div
+            data-testid="theme-presentation-latency"
+            aria-label={`Theme swap presented in ${presentationLatencyMs.toFixed(1)} milliseconds`}
+            title="Measured from the theme toggle mark to the next Electron presentation event"
+            className="w-fit rounded-md border border-[var(--border-subtle)] bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)] shadow-sm backdrop-blur"
+          >
+            Theme → present {presentationLatencyMs.toFixed(1)} ms
+          </div>
+        )}
+        {themeMutationMs !== null && (
+          <div
+            data-testid="theme-mutation-latency"
+            aria-label={`Theme DOM mutation completed in ${themeMutationMs.toFixed(3)} milliseconds`}
+            title="Measured synchronously around the root theme class, color-scheme, and token mutation"
+            className="w-fit rounded-md border border-[var(--border-subtle)] bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)] shadow-sm backdrop-blur"
+          >
+            Theme mutation {themeMutationMs.toFixed(3)} ms
+          </div>
+        )}
+        {universe.is_truncated && (
+          <div
+            data-testid="canvas-lod-status"
+            role="status"
+            className="max-w-80 rounded-lg border border-amber-400/40 bg-amber-50/95 px-3 py-2 text-[10px] font-mono text-amber-900 shadow-lg dark:bg-amber-950/80 dark:text-amber-100"
+          >
+            Dense overview renders document cards only; semantic edges connect file cards. Select a card for its persisted symbols, callers, callees, and exact source lines.
+          </div>
+        )}
 
         {selectedFolderFilter && (
           <div className="flex items-center space-x-2 bg-[var(--card)]/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-sky-500/40 dark:border-cyan-500/40 shadow-xl font-mono text-xs animate-fadeIn">
@@ -2560,6 +3068,7 @@ export default function CodeUniverse3D({
             </span>
             <button
               onClick={() => handleFilterFolder(selectedFolderFilter)}
+              aria-label={`Reset folder filter for ${selectedFolderFilter}`}
               className="text-[10px] px-1.5 py-0.5 rounded bg-sky-100 dark:bg-cyan-500/20 text-sky-700 dark:text-cyan-300 hover:bg-sky-200 cursor-pointer font-bold"
             >
               Reset
@@ -2683,6 +3192,7 @@ export default function CodeUniverse3D({
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
+                aria-label="Clear file search"
                 className="text-slate-500 dark:text-[var(--text-muted)] hover:text-slate-900 dark:hover:text-[var(--text-primary)] cursor-pointer"
               >
                 <X className="w-3 h-3" />
@@ -2699,6 +3209,7 @@ export default function CodeUniverse3D({
                     flyToNodeByIdRef.current?.(fn.id);
                     setSearchQuery('');
                   }}
+                  aria-label={`Focus graph node ${fn.id}`}
                   className="w-full text-left p-2 rounded-xl hover:bg-sky-50 dark:hover:bg-cyan-500/10 hover:text-sky-600 dark:hover:text-cyan-400 flex items-center justify-between transition-colors cursor-pointer"
                 >
                   <span className="truncate text-[11px] text-slate-800 dark:text-[var(--text-primary)] font-medium">
@@ -2724,9 +3235,17 @@ export default function CodeUniverse3D({
 
         {/* Pulse Pause */}
         <button
-          onClick={() => setIsPhysicsPaused(!isPhysicsPaused)}
-          className="p-2 rounded-xl bg-[var(--card-elevated)] hover:bg-sky-50 dark:hover:bg-cyan-500/10 text-slate-700 dark:text-[var(--text-secondary)] hover:text-sky-600 dark:hover:text-cyan-400 border border-[var(--border-subtle)] transition-colors cursor-pointer"
-          title={isPhysicsPaused ? 'Play data pulses' : 'Pause data pulses'}
+          disabled={!dataPulsesAvailable}
+          onClick={() => dataPulsesAvailable && setIsPhysicsPaused(!isPhysicsPaused)}
+          className={`p-2 rounded-xl bg-[var(--card-elevated)] text-slate-700 dark:text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-colors ${dataPulsesAvailable
+            ? 'hover:bg-sky-50 dark:hover:bg-cyan-500/10 hover:text-sky-600 dark:hover:text-cyan-400 cursor-pointer'
+            : 'cursor-not-allowed opacity-50'}`}
+          title={dataPulsesAvailable
+            ? isPhysicsPaused ? 'Play data pulses' : 'Pause data pulses'
+            : 'Data pulses are disabled for dense graphs'}
+          aria-label={dataPulsesAvailable
+            ? isPhysicsPaused ? 'Play data pulses' : 'Pause data pulses'
+            : 'Data pulses disabled for dense graph'}
         >
           {isPhysicsPaused ? (
             <Play className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
@@ -2769,6 +3288,7 @@ export default function CodeUniverse3D({
             {legendSearch && (
               <button
                 onClick={() => setLegendSearch('')}
+                aria-label="Clear module filter"
                 className="absolute right-1 text-slate-400 hover:text-slate-600 text-[10px] cursor-pointer"
               >
                 &times;
@@ -2783,6 +3303,7 @@ export default function CodeUniverse3D({
             <button
               key={fc.name}
               onClick={() => handleFilterFolder(fc.name)}
+              aria-label={`Filter graph by folder ${fc.name}`}
               className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs font-mono transition-all shrink-0 cursor-pointer border ${
                 isActive
                   ? 'bg-sky-50 dark:bg-cyan-500/20 border-sky-400 dark:border-cyan-400 shadow-sm scale-105'
@@ -2807,6 +3328,7 @@ export default function CodeUniverse3D({
         {selectedFolderFilter && (
           <button
             onClick={() => handleFilterFolder(selectedFolderFilter)}
+            aria-label="Show all folders in graph"
             className="ml-auto text-[11px] font-mono font-bold text-sky-600 dark:text-cyan-400 hover:underline cursor-pointer shrink-0"
           >
             Show All &rarr;
@@ -2893,6 +3415,7 @@ export default function CodeUniverse3D({
             </div>
             <button
               onClick={() => setShowLegends(false)}
+              aria-label="Close architecture legend"
               className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
@@ -2917,6 +3440,22 @@ export default function CodeUniverse3D({
                   <span className="truncate">{fc.name}</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Circuit Lines Guide */}
+          <div className="space-y-1.5 pt-2 border-t border-[var(--border-subtle)]">
+            <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-bold">
+              File Space
+            </div>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="inline-flex h-5 w-7 items-center justify-center rounded-md border-2 border-cyan-400 bg-slate-900 text-[8px] font-bold text-cyan-200">
+                FILE
+              </span>
+              <span>Document card: colored by module, hover for path, click to travel and inspect</span>
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)]">
+              Colored cards are modules; lines connect real file-to-file dependencies. Drag to orbit through the file network; use Space Nav to move in any direction.
             </div>
           </div>
 
@@ -2969,6 +3508,7 @@ export default function CodeUniverse3D({
             </div>
             <button
               onClick={handleRecenter}
+              aria-label="Clear selected file and recenter universe"
               className="p-1 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--card-elevated)] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -2983,6 +3523,10 @@ export default function CodeUniverse3D({
             <div className="p-3.5 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] space-y-2">
               <div className="font-bold text-sm text-[var(--text-primary)] break-all font-mono">
                 {selectedNode.id}
+              </div>
+              <div className="text-[10px] font-mono text-[var(--text-muted)] break-all">
+                {selectedNode.file_path || 'Source location unknown'}
+                {selectedNode.start_line ? `:${selectedNode.start_line}${selectedNode.end_line && selectedNode.end_line !== selectedNode.start_line ? `-${selectedNode.end_line}` : ''}` : ''}
               </div>
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
                 <span
@@ -3000,8 +3544,10 @@ export default function CodeUniverse3D({
                 >
                   {(nodeClusterMap.get(selectedNode.id) || 'root').toUpperCase()}
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-transparent font-bold">
-                  BLAKE3 VERIFIED
+                <span className={`text-[10px] px-2 py-0.5 rounded-lg border font-bold ${selectedNode.status?.toLowerCase() === 'verified'
+                  ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-transparent'
+                  : 'bg-amber-50 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-transparent'}`}>
+                  {selectedNode.status?.toUpperCase() || 'UNKNOWN'} COVERAGE
                 </span>
               </div>
             </div>
@@ -3011,7 +3557,7 @@ export default function CodeUniverse3D({
           <div className="space-y-2 flex-1 overflow-y-auto pr-1">
             <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-bold">
               <span>
-                Verified Call Connections ({connectedEdges.inbound.length + connectedEdges.outbound.length})
+                Analyzed Connections ({connectedEdges.inbound.length + connectedEdges.outbound.length})
               </span>
               <span className="text-sky-600 dark:text-cyan-400 lowercase font-normal">click to trace</span>
             </div>
@@ -3027,6 +3573,9 @@ export default function CodeUniverse3D({
                     <span className="w-2 h-2 rounded-full bg-sky-600 dark:bg-cyan-400 shrink-0" />
                     <span className="truncate text-[11px] text-[var(--text-primary)] group-hover:text-sky-600 dark:group-hover:text-cyan-400 font-medium">
                       &larr; {edge.source.split('/').pop()}
+                    </span>
+                    <span className="truncate text-[9px] font-mono text-[var(--text-muted)]">
+                      {edge.source_file || 'source ?'}:{edge.source_line ?? '?'} → {edge.target_file || 'target ?'}:{edge.target_line ?? '?'}
                     </span>
                   </div>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-transparent font-bold shrink-0">
@@ -3045,6 +3594,9 @@ export default function CodeUniverse3D({
                     <span className="w-2 h-2 rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
                     <span className="truncate text-[11px] text-[var(--text-primary)] group-hover:text-emerald-700 dark:group-hover:text-emerald-400 font-medium">
                       &rarr; {edge.target.split('/').pop()}
+                    </span>
+                    <span className="truncate text-[9px] font-mono text-[var(--text-muted)]">
+                      {edge.source_file || 'source ?'}:{edge.source_line ?? '?'} → {edge.target_file || 'target ?'}:{edge.target_line ?? '?'}
                     </span>
                   </div>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-transparent font-bold shrink-0">
@@ -3071,6 +3623,7 @@ export default function CodeUniverse3D({
                   onSelectNode(selectedNode.id);
                 }
               }}
+              aria-label={`Simulate edits for ${selectedNode.label}`}
               className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 dark:from-cyan-600 dark:to-indigo-600 text-white font-semibold text-xs transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer"
             >
               <Zap className="w-4 h-4 text-cyan-200" />
@@ -3078,6 +3631,7 @@ export default function CodeUniverse3D({
             </button>
             <button
               onClick={handleRecenter}
+              aria-label="Zoom out to graph overview"
               className="w-full py-2 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs transition-colors cursor-pointer"
             >
               Zoom Out to Overview
