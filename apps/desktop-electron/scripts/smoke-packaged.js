@@ -29,9 +29,12 @@ const smokeUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-packaged-sm
 // creating its BrowserWindow and can make the smoke result misleading.
 const cleanEnvironment = { ...process.env };
 delete cleanEnvironment.ELECTRON_RUN_AS_NODE;
-const child = spawn(executable, [
-  `--user-data-dir=${smokeUserData}`,
-], {
+const launchArgs = [`--user-data-dir=${smokeUserData}`];
+// Linux CI smoke runs inside a virtual display and can be sandbox-restricted
+// by the hosted runner. These flags apply only to the disposable smoke child;
+// the packaged production launcher and its GPU/canvas defaults are unchanged.
+if (process.platform === 'linux') launchArgs.push('--no-sandbox', '--disable-gpu');
+const child = spawn(executable, launchArgs, {
   cwd: path.dirname(executable),
   env: {
     ...cleanEnvironment,

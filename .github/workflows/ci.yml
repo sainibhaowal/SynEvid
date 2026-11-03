@@ -93,10 +93,11 @@ jobs:
           key: ${{ matrix.os.name }}-${{ matrix.arch }}
 
       - name: Run Workspace Unit & Integration Tests
-        # Phase 1 latency assertions measure wake-up and filesystem service
-        # time. Serializing the harness prevents unrelated test binaries from
-        # turning those measurements into scheduler-contention failures.
-        run: cargo test --workspace --all-targets -- --nocapture --test-threads=1
+        # Phase 1 and Phase 3 latency assertions measure service behavior. The
+        # optimized profile is the production execution profile and avoids
+        # hosted-runner debug instrumentation turning valid latency tests into
+        # cross-platform scheduler-contention failures.
+        run: cargo test --workspace --all-targets --release -- --nocapture --test-threads=1
 
       - name: Run Documentation Tests
         run: cargo test --workspace --doc
