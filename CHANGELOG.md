@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Phase 1 literal PRD closure
 
+- Release-gate follow-up: upgraded the workspace TUI dependency to `ratatui 0.30.2`, removing the unmaintained `paste` advisory rejected by Cargo Deny. POSIX Electron sidecar packaging now restores executable mode (`0755`) so Linux and macOS packaged smoke tests can start the Rust daemon.
 - Added deterministic, no-host-capability WASM policy loading from `.autopsy/plugins/` with fixed fuel/memory limits and explicit ABI validation.
 - Added `ERR-STORAGE-102` recovery notices with preserved backup paths, HTTP-level randomized edit/revert determinism coverage, and the `/api/v1/graph/ego/:id` route while retaining `?id=` compatibility.
 - Added a real WebSocket upgrade on `/api/v1/live` with ordered sequence IDs and bidirectional event commands; SSE, replay polling, and same-path POST compatibility remain available.

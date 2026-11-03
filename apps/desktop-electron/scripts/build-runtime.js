@@ -91,7 +91,12 @@ if (fs.existsSync(publicDir)) fs.cpSync(publicDir, path.join(cockpitDir, 'public
 const daemonName = process.platform === 'win32' ? 'synevid-ui.exe' : 'synevid-ui';
 const daemonPath = path.join(repoRoot, 'target', 'release', daemonName);
 if (!fs.existsSync(daemonPath)) fail(`Release daemon was not produced: ${daemonPath}`);
-fs.copyFileSync(daemonPath, path.join(sidecarsDir, daemonName));
+const packagedDaemonPath = path.join(sidecarsDir, daemonName);
+fs.copyFileSync(daemonPath, packagedDaemonPath);
+// copyFileSync does not preserve the executable mode on POSIX hosts. Without
+// this bit, the packaged Linux/macOS shell can launch but cannot start the
+// Rust daemon sidecar, so the health-gated smoke test correctly fails.
+if (process.platform !== 'win32') fs.chmodSync(packagedDaemonPath, 0o755);
 const mcpBundle = path.join(mcpDirSource, 'dist', 'index.bundle.js');
 if (!fs.existsSync(mcpBundle)) fail(`MCP bundle was not produced: ${mcpBundle}`);
 fs.copyFileSync(mcpBundle, path.join(mcpDir, 'index.bundle.js'));
