@@ -1,14 +1,97 @@
 {
   "name": "@code-autopsy/desktop",
-  "version": "0.4.0",
+  "version": "0.6.0",
+  "desktopName": "SynEvid",
+  "homepage": "https://github.com/sainibhaowal/SynEvid",
   "description": "SynEvid Native Desktop Application (Electron Shell)",
+  "author": {
+    "name": "SynEvid Team",
+    "email": "rav.singh039@gmail.com"
+  },
   "main": "src/main.js",
   "scripts": {
-    "start": "electron src/main.js",
-    "test": "node --test test/desktop.test.js"
+    "dev": "node scripts/dev.js",
+    "start": "node scripts/dev.js",
+    "start:electron": "node scripts/start.js",
+    "test": "node --test test/*.test.js",
+    "build:runtime": "node scripts/build-runtime.js",
+    "dist": "npm run dist:dir",
+    "dist:dir": "npm run build:runtime && electron-builder --dir",
+    "dist:win": "npm run build:runtime && electron-builder --win nsis portable msi",
+    "dist:mac": "npm run build:runtime && electron-builder --mac dmg zip",
+    "dist:linux": "npm run build:runtime && electron-builder --linux AppImage deb rpm",
+    "verify:artifacts": "node scripts/verify-artifacts.js",
+    "smoke:packaged": "node scripts/smoke-packaged.js"
+  },
+  "engines": {
+    "node": ">=20.9.0",
+    "npm": ">=10.0.0"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.18.0"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "build": {
+    "appId": "dev.synevid.desktop",
+    "productName": "SynEvid",
+    "icon": "../web/public/assets/logo_icon.png",
+    "artifactName": "SynEvid-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "scripts/**",
+      "package.json",
+      "!src/.autopsy{,/**/*}"
+    ],
+    "win": {
+      "target": ["nsis", "portable", "msi"]
+    },
+    "nsis": {
+      "artifactName": "SynEvid-${version}-${os}-${arch}-setup.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SynEvid"
+    },
+    "portable": {
+      "artifactName": "SynEvid-${version}-${os}-${arch}-portable.${ext}"
+    },
+    "msi": {
+      "artifactName": "SynEvid-${version}-${os}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": ["AppImage", "deb", "rpm"],
+      "category": "Development",
+      "executableName": "synevid",
+      "syncDesktopName": true
+    },
+    "extraResources": [
+      {
+        "from": "build/runtime/cockpit",
+        "to": "cockpit"
+      },
+      {
+        "from": "build/runtime/deps",
+        "to": "deps"
+      },
+      {
+        "from": "build/runtime/sidecars",
+        "to": "sidecars"
+      },
+      {
+        "from": "build/runtime/mcp-server",
+        "to": "mcp-server"
+      }
+    ],
+    "npmRebuild": false
+  }
 }

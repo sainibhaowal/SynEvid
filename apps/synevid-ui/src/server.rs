@@ -6,9 +6,11 @@
 //! - `GET /api/v1/repos/list`: List all registered repositories
 //! - `POST /api/v1/repos/switch`: Switch active repository
 //! - `GET /api/v1/graph/universe`: 2D/3D visual universe with seeded deterministic coordinates
-//! - `GET /api/v1/graph/ego`: Sub-5ms single-file or symbol ego-network lookup
+//! - `GET /api/v1/graph/ego/:id`: Sub-5ms single-file or symbol ego-network lookup
+//!   (the legacy `?id=` form remains supported)
 //! - `POST /api/v1/simulate/edit`: Sub-50ms in-memory edit simulation & blast-damage evaluator
-//! - `GET /api/v1/live`: Live SSE event stream pushing sequence-tracked updates
+//! - `GET /api/v1/live`: Live SSE stream or bidirectional WebSocket pushing
+//!   sequence-tracked updates; `POST` on the same path is a compatibility command surface
 
 #![allow(clippy::collapsible_if)]
 
@@ -27,9 +29,9 @@ use autopsy_cli::{
 use autopsy_diff::{ContractDelta, DiffEngine, DiffInput, SymbolDelta};
 use autopsy_domain::{CoverageState, EdgeKind, RepoSnapshot, SymbolId, Visibility};
 use autopsy_git_engine::{
-    BisectRequest, BranchRequest, CheckoutRequest, CommitRequest, GitDiffEngine, GitGalaxy,
-    GitMutationManager, GitReader, GitStatusScanner, MergeRequest, RevertRequest, StageRequest,
-    TagRequest, TerminalExecRequest, VirtualTreeBuilder,
+    BisectRequest, BranchRequest, CheckoutRequest, CommitRequest, GitBlameEngine, GitDiffEngine,
+    GitGalaxy, GitMutationManager, GitReader, GitStatusScanner, MergeRequest, RevertRequest,
+    StageRequest, TagRequest, TerminalExecRequest, VirtualTreeBuilder,
 };
 use autopsy_graph::DependencyGraph;
 use autopsy_graph_layout::DeterministicForceLayout;
@@ -40,13 +42,14 @@ use autopsy_plugin_api::{
 };
 use autopsy_storage::{
     AiSessionLedgerRecord, AiWorkingCacheEntry, ForensicSessionRecord, ForensicWorkflowRecord,
-    GraphNodeRow, RepoRecord, StorageEngine, TrajectoryEventRecord,
+    GraphNodeRow, LiveEventRecord, RepoRecord, StorageEngine, TrajectoryEventRecord,
 };
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -58,6 +61,43 @@ static GLOBAL_SEQ_ID: AtomicI64 = AtomicI64::new(100);
 const MAX_UNIVERSE_NODE_LIMIT: usize = 5_000;
 const MAX_UNIVERSE_EDGE_LIMIT: usize = 12_000;
 const MAX_UNIVERSE_CACHE_ENTRIES: usize = 4;
+
+fn count_cyclic_nodes(nodes: &[GraphNodeRow], edges: &[autopsy_storage::GraphEdgeRow]) -> usize {
+    let mut adjacency: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for edge in edges {
+        adjacency
+            .entry(edge.source_stable_id.clone())
+            .or_default()
+            .push(edge.target_stable_id.clone());
+    }
+    let mut cyclic = BTreeSet::new();
+    for node in nodes {
+        let mut stack = vec![node.stable_id.clone()];
+        let mut seen = BTreeSet::new();
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            if current != node.stable_id
+                && adjacency
+                    .get(&current)
+                    .is_some_and(|targets| targets.iter().any(|target| target == &node.stable_id))
+            {
+                cyclic.insert(node.stable_id.clone());
+                break;
+            }
+            if let Some(targets) = adjacency.get(&current) {
+                stack.extend(
+                    targets
+                        .iter()
+                        .filter(|target| !seen.contains(*target))
+                        .cloned(),
+                );
+            }
+        }
+    }
+    cyclic.len()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectRepoRequest {
@@ -79,9 +119,11 @@ pub struct RemoveRepoRequest {
 #[allow(dead_code)]
 pub struct SimulateEditRequest {
     pub repo_id: Option<String>,
+    pub repo_root: Option<String>,
     pub file_path: String,
     pub unsaved_buffer: String,
     pub baseline_snapshot_id: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +147,26 @@ pub struct AiCacheQueryRequest {
     pub symbol: String,
     pub query_kind: String,
     pub snapshot_id: Option<String>,
+    pub cache_mode: Option<String>,
+    pub repo_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordForensicEventRequest {
+    pub session_id: Option<String>,
+    pub repo_root: Option<String>,
+    pub job_id: Option<String>,
+    pub workflow_id: Option<String>,
+    pub event_type: String,
+    pub target_symbol: Option<String>,
+    pub target_file: Option<String>,
+    pub before_snap_id: Option<String>,
+    pub after_snap_id: Option<String>,
+    pub verdict: Option<String>,
+    pub summary: String,
+    pub evidence: serde_json::Value,
+    pub tokens_spent: Option<i64>,
+    pub tokens_saved: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +226,12 @@ pub struct SimulateEditResponse {
 }
 
 #[derive(Clone)]
+struct FsBrowseCacheEntry {
+    directory_modified: Option<std::time::SystemTime>,
+    response: String,
+}
+
+#[derive(Clone)]
 pub struct DashboardServer {
     pub repo_root: PathBuf,
     pub host: String,
@@ -173,22 +241,52 @@ pub struct DashboardServer {
     pub active_repo_id: Arc<Mutex<String>>,
     pub active_repo_path: Arc<Mutex<PathBuf>>,
     pub connected_repos: Arc<Mutex<std::collections::HashMap<String, RepoRecord>>>,
+    #[allow(clippy::type_complexity)]
     pub analysis_artifact_cache: Arc<Mutex<Option<(String, String, Arc<AnalysisArtifacts>)>>>,
     pub repository_storage_cache: Arc<Mutex<BTreeMap<PathBuf, StorageEngine>>>,
     watcher_stop: Arc<AtomicBool>,
     pub universe_cache: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pub git_frame_cache: Arc<Mutex<BTreeMap<String, String>>>,
+    fs_browse_cache: Arc<Mutex<BTreeMap<PathBuf, FsBrowseCacheEntry>>>,
     pub live_events: Arc<Mutex<Vec<serde_json::Value>>>,
     live_event_signal: Arc<(Mutex<u64>, Condvar)>,
     pub active_ai_session_id: Arc<Mutex<String>>,
+    /// Ephemeral token supplied by the native Electron shell. Browser/CLI
+    /// development remains compatible when the environment variable is absent.
+    loopback_token: Option<String>,
 }
 
 impl DashboardServer {
+    fn normalize_existing_repository_record(record: RepoRecord) -> Option<RepoRecord> {
+        let normalized_path = Self::normalize_cross_platform_path(&record.root_path);
+        if !normalized_path.is_dir() {
+            return None;
+        }
+
+        let canonical_path = normalized_path
+            .canonicalize()
+            .unwrap_or(normalized_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let canonical_path = canonical_path
+            .strip_prefix("//?/")
+            .unwrap_or(&canonical_path)
+            .to_string();
+        Some(RepoRecord {
+            root_path: canonical_path,
+            ..record
+        })
+    }
+
     pub fn new(repo_root: PathBuf, host: String, port: u16) -> Self {
         let registry = Arc::new(PluginRegistry::new());
         autopsy_cli::register_builtin_language_plugins(&registry, &repo_root);
         autopsy_cli::register_builtin_storage_plugins(&registry);
         register_workspace_resolvers(&registry);
         register_verification_gates(&registry);
+        // Optional policies are discovered only from the selected repository's
+        // `.autopsy/plugins` directory and run with no host capabilities.
+        let _ = autopsy_wasm_plugin::register_wasm_policy_plugins(&registry, &repo_root);
         // Register default layout plugin
         registry.register_layout(Arc::new(DeterministicForceLayout));
 
@@ -203,6 +301,11 @@ impl DashboardServer {
             },
         )
         .ok();
+        if let Some(storage) = storage.as_ref()
+            && let Ok(latest) = storage.latest_live_event_seq()
+        {
+            GLOBAL_SEQ_ID.fetch_max(latest.saturating_add(1), Ordering::SeqCst);
+        }
 
         let root_canon = repo_root
             .canonicalize()
@@ -220,6 +323,9 @@ impl DashboardServer {
                     if !r.root_path.ends_with("SynEvid")
                         && !r.display_name.to_lowercase().contains("synevid")
                     {
+                        let Some(r) = Self::normalize_existing_repository_record(r) else {
+                            continue;
+                        };
                         let is_native_linux = !r.root_path.starts_with("/mnt/");
                         let current_is_mnt =
                             initial_active_path.to_string_lossy().starts_with("/mnt/");
@@ -353,9 +459,14 @@ impl DashboardServer {
             repository_storage_cache: Arc::new(Mutex::new(BTreeMap::new())),
             watcher_stop: Arc::new(AtomicBool::new(false)),
             universe_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            git_frame_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            fs_browse_cache: Arc::new(Mutex::new(BTreeMap::new())),
             live_events: Arc::new(Mutex::new(Vec::new())),
             live_event_signal: Arc::new((Mutex::new(0), Condvar::new())),
             active_ai_session_id: Arc::new(Mutex::new("sess_active_01".to_string())),
+            loopback_token: std::env::var("SYNEVID_LOOPBACK_TOKEN")
+                .ok()
+                .filter(|token| !token.trim().is_empty()),
         }
     }
 
@@ -404,19 +515,50 @@ impl DashboardServer {
             .clone())
     }
 
-    pub fn broadcast_event(&self, event_name: &str, data: serde_json::Value) {
-        let data_json = data.to_string();
-        let seq = self
-            .storage
-            .lock()
-            .ok()
-            .and_then(|storage| {
-                storage
-                    .as_ref()?
-                    .record_live_event(event_name, &data_json)
-                    .ok()
+    fn storage_for_request_root(
+        &self,
+        requested_root: Option<&str>,
+    ) -> Result<(StorageEngine, String), String> {
+        let explicit_root = requested_root
+            .filter(|root| !root.trim().is_empty() && root.trim() != ".")
+            .map(Self::normalize_cross_platform_path)
+            .map(|root| {
+                root.canonicalize()
+                    .map_err(|error| format!("repository root is unavailable: {error}"))
             })
-            .unwrap_or_else(|| GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst));
+            .transpose()?;
+        if let Some(root) = explicit_root {
+            let matching_repo = self
+                .connected_repos
+                .lock()
+                .map_err(|_| "repository registry is unavailable".to_string())?
+                .values()
+                .find(|repo| {
+                    PathBuf::from(&repo.root_path)
+                        .canonicalize()
+                        .ok()
+                        .is_some_and(|candidate| candidate == root)
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    format!("repository is not connected: {}", root.to_string_lossy())
+                })?;
+            return Ok((self.repository_storage(&root)?, matching_repo.repo_id));
+        }
+        let repo_id = self.active_repo_id.lock().unwrap().clone();
+        let storage = self
+            .get_storage_for_active_repo()
+            .ok_or_else(|| "Storage unavailable".to_string())?;
+        Ok((storage, repo_id))
+    }
+
+    fn publish_live_event(&self, event_name: &str, data: serde_json::Value) -> (i64, String) {
+        let data_json = data.to_string();
+        // Allocate and publish the sequence to in-process waiters first.  A
+        // busy SQLite writer must not turn a live SSE/WebSocket notification
+        // into a 50ms+ wake-up.  The same explicit sequence is then persisted
+        // so restart replay remains cursor-stable.
+        let seq = GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst);
         let item = serde_json::json!({
             "seq_id": seq,
             "event": event_name,
@@ -433,6 +575,47 @@ impl DashboardServer {
             *generation = generation.wrapping_add(1);
             signal.notify_all();
         }
+        (seq, data_json)
+    }
+
+    fn broadcast_event_in_storage(
+        &self,
+        storage: Option<&StorageEngine>,
+        event_name: &str,
+        data: serde_json::Value,
+    ) -> i64 {
+        let (seq, data_json) = self.publish_live_event(event_name, data);
+        if let Some(storage) = storage {
+            let _ = storage.record_live_event_with_seq(seq, event_name, &data_json);
+        }
+        seq
+    }
+
+    pub fn broadcast_event(&self, event_name: &str, data: serde_json::Value) -> i64 {
+        // Do not acquire the database/storage locks until after the in-memory
+        // publication.  A concurrent repository scan must not delay a live
+        // client wake-up; the explicit sequence keeps later persistence and
+        // replay ordered.
+        let (seq, data_json) = self.publish_live_event(event_name, data);
+        if let Ok(storage) = self.live_event_storage() {
+            let _ = storage.record_live_event_with_seq(seq, event_name, &data_json);
+        }
+        seq
+    }
+
+    fn live_event_storage(&self) -> Result<StorageEngine, String> {
+        let guard = self
+            .storage
+            .lock()
+            .map_err(|_| "storage lock is unavailable".to_string())?;
+        if let Some(storage) = guard.as_ref() {
+            // The live trajectory is a daemon-wide ordered stream, not a
+            // repository snapshot.  Persist it in the daemon database so a
+            // repository-local recovery or repository switch cannot erase
+            // reconnect/replay events from the active client session.
+            return Ok(storage.clone());
+        }
+        Err("storage unavailable".to_string())
     }
 
     fn wait_for_live_events(
@@ -447,9 +630,7 @@ impl DashboardServer {
             let observed_generation = *generation
                 .lock()
                 .map_err(|_| "live event signal is unavailable".to_string())?;
-            let events = storage
-                .live_events_since(cursor, 500)
-                .map_err(|error| error.to_string())?;
+            let events = self.live_events_since_merged(storage, cursor, 500)?;
             if !events.is_empty() {
                 return Ok(events);
             }
@@ -467,6 +648,58 @@ impl DashboardServer {
                 .wait_timeout(generation_guard, remaining)
                 .map_err(|_| "live event signal is unavailable".to_string())?;
         }
+    }
+
+    fn memory_live_events_since(&self, cursor: i64) -> Vec<LiveEventRecord> {
+        let Ok(events) = self.live_events.lock() else {
+            return Vec::new();
+        };
+        events
+            .iter()
+            .filter_map(|event| {
+                let seq_id = event.get("seq_id")?.as_i64()?;
+                if seq_id <= cursor {
+                    return None;
+                }
+                Some(LiveEventRecord {
+                    seq_id,
+                    event_type: event.get("event")?.as_str()?.to_string(),
+                    data_json: event.get("data")?.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    fn live_events_since_merged(
+        &self,
+        storage: &StorageEngine,
+        cursor: i64,
+        limit: i64,
+    ) -> Result<Vec<LiveEventRecord>, String> {
+        // A newly published event is already in the bounded in-memory ring.
+        // When that ring starts exactly at the requested cursor, it is a
+        // contiguous authoritative prefix and we can wake a live client
+        // without waiting on SQLite. Older cursors still take the persisted
+        // replay path below, so restart/reconnect semantics remain intact.
+        let recent = self.memory_live_events_since(cursor);
+        if recent
+            .first()
+            .is_some_and(|event| event.seq_id == cursor.saturating_add(1))
+        {
+            return Ok(recent.into_iter().take(limit.max(1) as usize).collect());
+        }
+
+        let mut by_seq = BTreeMap::new();
+        for event in storage
+            .live_events_since(cursor, limit)
+            .map_err(|error| error.to_string())?
+        {
+            by_seq.insert(event.seq_id, event);
+        }
+        for event in self.memory_live_events_since(cursor) {
+            by_seq.insert(event.seq_id, event);
+        }
+        Ok(by_seq.into_values().take(limit.max(1) as usize).collect())
     }
 
     pub fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -622,7 +855,7 @@ impl DashboardServer {
             .lock()
             .ok()
             .and_then(|repos| repos.get(&active_id).cloned());
-        let Some(record) = record else {
+        let Some(record) = record.and_then(Self::normalize_existing_repository_record) else {
             return;
         };
         let root = PathBuf::from(&record.root_path);
@@ -720,10 +953,28 @@ impl DashboardServer {
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or("/");
 
+        if self.loopback_token.is_some() && !self.is_authorized(&request) {
+            self.respond_unauthorized(request);
+            return;
+        }
+
+        if request.method() == &Method::Get
+            && path == "/api/v1/live"
+            && Self::is_websocket_upgrade(&request)
+        {
+            self.handle_live_websocket(request);
+            return;
+        }
+
         match (request.method(), path) {
             // Health Endpoint
             (&Method::Get, "/api/v1/health") | (&Method::Get, "/health") => {
-                self.respond_json(request, r#"{"status":"ok"}"#);
+                let mut health = serde_json::json!({ "status": "ok" });
+                if let Some(notice) = self.storage_recovery_value() {
+                    health["error_code"] = notice["error_code"].clone();
+                    health["storage_recovery"] = notice;
+                }
+                self.respond_json(request, &health.to_string());
             }
 
             // Headless daemon discovery; the compatibility dashboard remains opt-in.
@@ -771,6 +1022,15 @@ impl DashboardServer {
                 self.respond_json(request, &res);
             }
 
+            // Phase 5 deterministic analytics center and report exports.
+            (&Method::Get, p)
+                if p == "/api/v1/analytics/report"
+                    || p.starts_with("/api/v1/analytics/report?") =>
+            {
+                let res = self.handle_analytics_report(&url);
+                self.respond_json(request, &res);
+            }
+
             // Phase 1 Local Filesystem Navigator & Directory Picker (FR-P1-008)
             (&Method::Get, p) if p.starts_with("/api/v1/fs/browse") => {
                 let res = self.handle_fs_browse(&url);
@@ -798,6 +1058,12 @@ impl DashboardServer {
                 let res = self.handle_graph_ego(&url);
                 self.respond_json(request, &res);
             }
+            (&Method::Get, p) if p.starts_with("/api/v1/graph/ego/") => {
+                let requested_id =
+                    Self::url_decode(p.strip_prefix("/api/v1/graph/ego/").unwrap_or_default());
+                let res = self.handle_graph_ego_id(&requested_id);
+                self.respond_json(request, &res);
+            }
 
             // Phase 1 In-Memory Live Simulation (<50ms) (FR-P1-004)
             (&Method::Post, "/api/v1/simulate/edit") => {
@@ -810,6 +1076,11 @@ impl DashboardServer {
             (&Method::Get, "/api/v1/live") => {
                 self.handle_live_sse(request);
             }
+            (&Method::Post, "/api/v1/live") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_live_broadcast(&body);
+                self.respond_json(request, &res);
+            }
 
             // Phase 3 Native .git Engine & Time-Travel Galaxy Endpoints (FR-P3-001..FR-P3-005)
             (&Method::Get, p) if p.starts_with("/api/v1/git/galaxy") => {
@@ -820,11 +1091,19 @@ impl DashboardServer {
                 let res = self.handle_git_time_travel(&url);
                 self.respond_json(request, &res);
             }
+            (&Method::Get, p) if p.starts_with("/api/v1/git/blame") => {
+                let res = self.handle_git_blame(&url);
+                self.respond_json(request, &res);
+            }
             (&Method::Get, p) if p.starts_with("/api/v1/git/diff-file") => {
                 let res = self.handle_git_diff_file(&url);
                 self.respond_json(request, &res);
             }
-            (&Method::Get, p) if p == "/api/v1/git/diff" || p.starts_with("/api/v1/git/diff?") => {
+            (&Method::Get, p)
+                if p == "/api/v1/git/diff"
+                    || p.starts_with("/api/v1/git/diff?")
+                    || p.starts_with("/api/v1/git/diff/") =>
+            {
                 let res = self.handle_git_diff(&url);
                 self.respond_json(request, &res);
             }
@@ -898,6 +1177,11 @@ impl DashboardServer {
             (&Method::Post, "/api/v1/forensics/sessions/start") => {
                 let body = self.read_body(&mut request);
                 let res = self.handle_forensic_sessions_start(&body);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/forensics/event") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_forensic_event_record(&body);
                 self.respond_json(request, &res);
             }
             (&Method::Get, p)
@@ -1033,6 +1317,39 @@ impl DashboardServer {
         content
     }
 
+    fn is_authorized(&self, request: &Request) -> bool {
+        let Some(expected) = self.loopback_token.as_deref() else {
+            return true;
+        };
+        let expected_header = format!("Bearer {expected}");
+        request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("Authorization"))
+            .is_some_and(|header| header.value.as_str() == expected_header)
+            || Self::parse_query_param(request.url(), "token").as_deref() == Some(expected)
+    }
+
+    fn respond_unauthorized(&self, req: Request) {
+        let content = Header::from_bytes(
+            &b"Content-Type"[..],
+            &b"application/json; charset=utf-8"[..],
+        )
+        .unwrap();
+        let allow = Header::from_bytes(
+            &b"Access-Control-Allow-Headers"[..],
+            &b"Content-Type, Authorization"[..],
+        )
+        .unwrap();
+        let response = Response::from_string(
+            r#"{"error_code":"ERR-AUTH-401","error":"A valid local loopback token is required"}"#,
+        )
+        .with_status_code(StatusCode(401))
+        .with_header(content)
+        .with_header(allow);
+        let _ = req.respond(response);
+    }
+
     fn respond_json(&self, req: Request, json: &str) {
         let header_content = Header::from_bytes(
             &b"Content-Type"[..],
@@ -1068,7 +1385,10 @@ impl DashboardServer {
                 if !path.is_dir() {
                     return serde_json::json!({
                         "error_code": "ERR-REPO-001",
-                        "error": format!("Repository directory does not exist: {}", req.root_path)
+                        "error": format!(
+                            "Repository directory does not exist: {}",
+                            path.to_string_lossy().replace('\\', "/")
+                        )
                     })
                     .to_string();
                 }
@@ -1084,6 +1404,11 @@ impl DashboardServer {
                     }
                 };
                 let canonical_path = canon.to_string_lossy().replace('\\', "/");
+                let canonical_path = canonical_path
+                    .strip_prefix("//?/")
+                    .unwrap_or(&canonical_path)
+                    .to_string();
+                let _ = autopsy_wasm_plugin::register_wasm_policy_plugins(&self.registry, &canon);
                 let repo_id = blake3::hash(canonical_path.as_bytes()).to_hex().to_string();
                 let display_name = req.display_name.unwrap_or_else(|| {
                     canon
@@ -1092,6 +1417,70 @@ impl DashboardServer {
                         .unwrap_or("repo")
                         .to_string()
                 });
+
+                // Connecting a directory that is already registered is an
+                // activation operation, not a second insert. This keeps the
+                // native folder picker idempotent and avoids a database
+                // uniqueness error when the user selects the same directory.
+                let existing = self
+                    .connected_repos
+                    .lock()
+                    .ok()
+                    .and_then(|repos| {
+                        repos.values().find_map(|candidate| {
+                            let normalized =
+                                Self::normalize_existing_repository_record(candidate.clone())?;
+                            if normalized.repo_id == repo_id
+                                || normalized.root_path.eq_ignore_ascii_case(&canonical_path)
+                            {
+                                Some(normalized)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .or_else(|| {
+                        self.storage.lock().ok().and_then(|guard| {
+                            guard.as_ref().and_then(|st| {
+                                st.list_repositories()
+                                    .ok()?
+                                    .into_iter()
+                                    .find_map(|candidate| {
+                                        let normalized =
+                                            Self::normalize_existing_repository_record(candidate)?;
+                                        if normalized.repo_id == repo_id
+                                            || normalized
+                                                .root_path
+                                                .eq_ignore_ascii_case(&canonical_path)
+                                        {
+                                            Some(normalized)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                            })
+                        })
+                    });
+                if let Some(record) = existing {
+                    if let Ok(guard) = self.storage.lock() {
+                        if let Some(ref st) = *guard {
+                            let _ = st.set_daemon_state("active_repo_id", &record.repo_id);
+                        }
+                    }
+                    self.connected_repos
+                        .lock()
+                        .unwrap()
+                        .insert(record.repo_id.clone(), record.clone());
+                    *self.active_repo_id.lock().unwrap() = record.repo_id.clone();
+                    *self.active_repo_path.lock().unwrap() = canon.clone();
+                    return serde_json::json!({
+                        "status": "connected",
+                        "repo_id": record.repo_id,
+                        "display_name": record.display_name,
+                        "root_path": record.root_path
+                    })
+                    .to_string();
+                }
 
                 let storage = match open_repository_storage_with_registry(&canon, &self.registry) {
                     Ok(storage) => storage,
@@ -1103,7 +1492,7 @@ impl DashboardServer {
                         .to_string();
                     }
                 };
-                let (record, receipt, artifacts) =
+                let (mut record, receipt, artifacts) =
                     match index_repository_with_artifacts_with_registry(
                         &canon,
                         &repo_id,
@@ -1124,6 +1513,7 @@ impl DashboardServer {
                             .to_string();
                         }
                     };
+                record.root_path = canonical_path.clone();
 
                 if let Ok(guard) = self.storage.lock() {
                     if let Some(ref st) = *guard {
@@ -1189,11 +1579,13 @@ impl DashboardServer {
     pub fn handle_list_repos(&self) -> String {
         let mut list: Vec<RepoRecord> = Vec::new();
         if let Ok(repos) = self.connected_repos.lock() {
-            for (_, r) in repos.iter() {
+            for r in repos.values() {
                 if !r.root_path.ends_with("SynEvid")
                     && !r.display_name.to_lowercase().contains("synevid")
                 {
-                    list.push(r.clone());
+                    if let Some(record) = Self::normalize_existing_repository_record(r.clone()) {
+                        list.push(record);
+                    }
                 }
             }
         }
@@ -1205,7 +1597,9 @@ impl DashboardServer {
                         && !r.display_name.to_lowercase().contains("synevid")
                         && !list.iter().any(|existing| existing.repo_id == r.repo_id)
                     {
-                        list.push(r);
+                        if let Some(record) = Self::normalize_existing_repository_record(r) {
+                            list.push(record);
+                        }
                     }
                 }
             }
@@ -1268,7 +1662,7 @@ impl DashboardServer {
             Err(error) => return serde_json::json!({ "error": error.to_string() }).to_string(),
         };
         let export = CanonicalRepositoryExport {
-            schema_version: "v0.5.0-repository-export",
+            schema_version: "v0.6.0-repository-export",
             repo_id: &repo_id,
             snapshot: &snapshot,
             nodes: &nodes,
@@ -1284,6 +1678,255 @@ impl DashboardServer {
         };
         serde_json::to_string(&envelope)
             .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }).to_string())
+    }
+
+    /// Builds the deterministic Phase 5 executive analytics report from the
+    /// persisted graph, Git DAG, forensic sessions, and AI ledgers.
+    pub fn handle_analytics_report(&self, url: &str) -> String {
+        let format = Self::parse_query_param(url, "format")
+            .unwrap_or_else(|| "json".to_string())
+            .to_lowercase();
+        if !matches!(format.as_str(), "json" | "markdown" | "html" | "sarif") {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-400",
+                "error": "format must be json, markdown, html, or sarif"
+            })
+            .to_string();
+        }
+
+        let repo_id = self
+            .active_repo_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let record = self
+            .connected_repos
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(&repo_id).cloned())
+            .or_else(|| {
+                self.storage.lock().ok().and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .and_then(|storage| storage.get_repository(&repo_id).ok().flatten())
+                })
+            });
+        let Some(record) = record else {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-404",
+                "error": "No active repository is connected"
+            })
+            .to_string();
+        };
+        let root = PathBuf::from(&record.root_path);
+        let Ok(storage) = open_repository_storage_with_registry(&root, &self.registry) else {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-404",
+                "error": "Repository analytics storage is unavailable"
+            })
+            .to_string();
+        };
+        let Some(snapshot_id) = record.latest_snap_id.clone() else {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-404",
+                "error": "Repository has no indexed snapshot"
+            })
+            .to_string();
+        };
+        let Ok((nodes, edges)) = storage.graph_rows_for_snapshot(&snapshot_id) else {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-500",
+                "error": "Indexed graph rows are unavailable"
+            })
+            .to_string();
+        };
+
+        let files: BTreeSet<String> = nodes.iter().map(|node| node.file_path.clone()).collect();
+        let mut coverage_counts = BTreeMap::<String, usize>::new();
+        for node in &nodes {
+            *coverage_counts
+                .entry(node.coverage_state.clone())
+                .or_default() += 1;
+        }
+        let verified = coverage_counts.get("verified").copied().unwrap_or(0);
+        let coverage_ratio = if nodes.is_empty() {
+            0.0
+        } else {
+            (verified as f64 / nodes.len() as f64 * 10000.0).round() / 100.0
+        };
+        let mut hub_counts = BTreeMap::<String, usize>::new();
+        for edge in &edges {
+            *hub_counts.entry(edge.source_stable_id.clone()).or_default() += 1;
+            *hub_counts.entry(edge.target_stable_id.clone()).or_default() += 1;
+        }
+        let node_names: BTreeMap<String, String> = nodes
+            .iter()
+            .map(|node| (node.stable_id.clone(), node.qualified_name.clone()))
+            .collect();
+        let mut hubs: Vec<serde_json::Value> = hub_counts
+            .into_iter()
+            .map(|(stable_id, edge_count)| {
+                serde_json::json!({
+                    "stable_id": stable_id,
+                    "qualified_name": node_names.get(&stable_id).cloned().unwrap_or_default(),
+                    "edge_count": edge_count
+                })
+            })
+            .collect();
+        hubs.sort_by(|left, right| {
+            right["edge_count"]
+                .as_u64()
+                .cmp(&left["edge_count"].as_u64())
+                .then_with(|| left["stable_id"].as_str().cmp(&right["stable_id"].as_str()))
+        });
+        hubs.truncate(10);
+
+        let dead_items: Vec<serde_json::Value> = nodes
+            .iter()
+            .filter(|node| node.is_dead_code)
+            .map(|node| {
+                serde_json::json!({
+                    "stable_id": node.stable_id,
+                    "file_path": node.file_path,
+                    "line": node.start_line,
+                    "qualified_name": node.qualified_name,
+                    "coverage_state": node.coverage_state
+                })
+            })
+            .collect();
+        let git = GitReader::new(&root).read_galaxy(5_000).ok();
+        let commits = git
+            .as_ref()
+            .map(|galaxy| &galaxy.commits)
+            .cloned()
+            .unwrap_or_default();
+        let risk_commits: Vec<serde_json::Value> = commits
+            .iter()
+            .filter(|commit| commit.verdict == "BREAKING" || commit.blast_radius_score > 0)
+            .map(|commit| {
+                serde_json::json!({
+                    "oid": commit.oid,
+                    "summary": commit.summary,
+                    "blast_radius_score": commit.blast_radius_score,
+                    "verdict": commit.verdict
+                })
+            })
+            .collect();
+        let ledgers = storage.list_ai_ledgers().unwrap_or_default();
+        let total_queries: i64 = ledgers.iter().map(|ledger| ledger.total_queries).sum();
+        let total_hits: i64 = ledgers.iter().map(|ledger| ledger.cache_hits).sum();
+        let tokens_spent: i64 = ledgers.iter().map(|ledger| ledger.tokens_spent).sum();
+        let tokens_saved: i64 = ledgers.iter().map(|ledger| ledger.tokens_saved).sum();
+        let display_name = record.display_name.clone();
+        let root_path = record.root_path.clone();
+        let report_core = serde_json::json!({
+            "schema_version": "synevid.analytics.v1",
+            "repository": {
+                "repo_id": repo_id,
+                "display_name": display_name,
+                "root_path": root_path
+            },
+            "snapshot": {
+                "snapshot_id": snapshot_id,
+                "active_branch": record.active_branch,
+                "head_commit_oid": record.head_commit_oid
+            },
+            "structural_health": {
+                "total_files": files.len(),
+                "total_symbols": nodes.len(),
+                "total_edges": edges.len(),
+                "coverage_counts": coverage_counts,
+                "verified_coverage_percent": coverage_ratio,
+                "top_blast_radius_symbols": hubs,
+                "cyclic_dependency_nodes": count_cyclic_nodes(&nodes, &edges)
+            },
+            "dead_code_inventory": {
+                "total": dead_items.len(),
+                "items": dead_items
+            },
+            "git_evolution": {
+                "total_commits": commits.len(),
+                "risk_commit_count": risk_commits.len(),
+                "risk_commits": risk_commits
+            },
+            "ai_session_audit": {
+                "sessions": ledgers.len(),
+                "queries": total_queries,
+                "cache_hits": total_hits,
+                "cache_hit_percent": if total_queries == 0 { 0.0 } else { (total_hits as f64 / total_queries as f64 * 10000.0).round() / 100.0 },
+                "tokens_spent": tokens_spent,
+                "tokens_saved": tokens_saved,
+                "ledgers": ledgers
+            }
+        });
+        let canonical = serde_json::to_vec(&report_core).unwrap_or_default();
+        let digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
+        let mut report = report_core.clone();
+        report["result_digest"] = serde_json::Value::String(digest.clone());
+        let json_content =
+            serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string());
+        let markdown = format!(
+            "# SynEvid Analytics Report\n\n- Repository: `{}`\n- Snapshot: `{}`\n- BLAKE3: `{}`\n\n## Structural health\n\n- Files: {}\n- Symbols: {}\n- Edges: {}\n- Verified coverage: {}%\n- Cyclic dependency nodes: {}\n\n## Dead code inventory\n\n- Dead symbols: {}\n\n## Git evolution\n\n- Commits analyzed: {}\n- Risk commits: {}\n\n## AI session audit\n\n- Sessions: {}\n- Queries: {}\n- Cache hits: {}\n- Tokens spent: {}\n- Tokens saved: {}\n",
+            report["repository"]["display_name"]
+                .as_str()
+                .unwrap_or("repository"),
+            report["snapshot"]["snapshot_id"]
+                .as_str()
+                .unwrap_or("unknown"),
+            digest,
+            report["structural_health"]["total_files"],
+            report["structural_health"]["total_symbols"],
+            report["structural_health"]["total_edges"],
+            report["structural_health"]["verified_coverage_percent"],
+            report["structural_health"]["cyclic_dependency_nodes"],
+            report["dead_code_inventory"]["total"],
+            report["git_evolution"]["total_commits"],
+            report["git_evolution"]["risk_commit_count"],
+            report["ai_session_audit"]["sessions"],
+            report["ai_session_audit"]["queries"],
+            report["ai_session_audit"]["cache_hits"],
+            report["ai_session_audit"]["tokens_spent"],
+            report["ai_session_audit"]["tokens_saved"]
+        );
+        let html = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>SynEvid Analytics</title></head><body><pre>{}</pre></body></html>",
+            markdown
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        );
+        let sarif = serde_json::json!({
+            "version": "2.1.0",
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "runs": [{
+                "tool": { "driver": { "name": "SynEvid Analytics", "semanticVersion": "0.6.0" } },
+                "results": report["dead_code_inventory"]["items"].as_array().cloned().unwrap_or_default().into_iter().map(|item| serde_json::json!({
+                    "ruleId": "dead-code",
+                    "level": "warning",
+                    "message": { "text": format!("Dead or unreachable symbol: {}", item["qualified_name"].as_str().unwrap_or("unknown")) },
+                    "locations": [{ "physicalLocation": { "artifactLocation": { "uri": item["file_path"] }, "region": { "startLine": item["line"] } } }]
+                })).collect::<Vec<_>>()
+            }]
+        });
+        let (content_type, extension, content) = match format.as_str() {
+            "markdown" => ("text/markdown; charset=utf-8", "md", markdown),
+            "html" => ("text/html; charset=utf-8", "html", html),
+            "sarif" => (
+                "application/sarif+json; charset=utf-8",
+                "sarif",
+                serde_json::to_string_pretty(&sarif).unwrap_or_default(),
+            ),
+            _ => ("application/json; charset=utf-8", "json", json_content),
+        };
+        serde_json::json!({
+            "format": format.clone(),
+            "filename": format!("synevid-analytics-{}.{}", record.display_name.to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"), extension),
+            "content_type": content_type,
+            "digest": digest,
+            "content": content,
+            "report": if format == "json" { report } else { serde_json::Value::Null }
+        })
+        .to_string()
     }
 
     pub fn handle_switch_repo(&self, body: &str) -> String {
@@ -1302,17 +1945,13 @@ impl DashboardServer {
                             .and_then(|st| st.get_repository(&req.repo_id).ok().flatten())
                     });
                 }
-                let Some(mut record) = record else {
+                let Some(record) = record.and_then(Self::normalize_existing_repository_record)
+                else {
                     return serde_json::json!({ "error_code": "ERR-REPO-404", "error": "Repository not found" }).to_string();
                 };
                 let root = PathBuf::from(&record.root_path);
-                if !root.is_dir() {
-                    return serde_json::json!({
-                        "error_code": "ERR-REPO-003",
-                        "error": "Repository directory is unavailable"
-                    })
-                    .to_string();
-                }
+                let mut record = record;
+                let _ = autopsy_wasm_plugin::register_wasm_policy_plugins(&self.registry, &root);
                 let storage = match open_repository_storage_with_registry(&root, &self.registry) {
                     Ok(storage) => storage,
                     Err(error) => {
@@ -1459,35 +2098,50 @@ impl DashboardServer {
 
     pub fn handle_fs_browse(&self, url: &str) -> String {
         let requested_path = Self::parse_query_param(url, "path");
-        let home_dir = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| "/home".to_string());
+        let default_path = self
+            .active_repo_path
+            .lock()
+            .ok()
+            .filter(|path| path.is_dir())
+            .map(|path| path.clone())
+            .unwrap_or_else(|| self.repo_root.clone());
 
         let target_path = match requested_path {
             Some(ref p) if !p.trim().is_empty() => Self::normalize_cross_platform_path(p),
-            _ => PathBuf::from(&home_dir),
+            _ => default_path,
         };
 
         let resolved_dir = if target_path.is_dir() {
             target_path.canonicalize().unwrap_or(target_path)
-        } else if target_path.is_file() {
-            target_path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from(&home_dir))
-        } else if let Some(parent) = target_path.parent() {
-            if parent.is_dir() {
-                parent
-                    .canonicalize()
-                    .unwrap_or_else(|_| parent.to_path_buf())
-            } else {
-                PathBuf::from(&home_dir)
-            }
         } else {
-            PathBuf::from(&home_dir)
+            let reason = if target_path.exists() {
+                "the selected path is not a directory"
+            } else {
+                "the selected directory does not exist"
+            };
+            return serde_json::json!({
+                "error_code": "ERR-FS-001",
+                "error": format!("Cannot browse '{}': {reason}", target_path.display()),
+                "requested_path": target_path.to_string_lossy(),
+                "current_path": "",
+                "parent_path": null,
+                "is_git_repo": false,
+                "directories": [],
+                "quick_presets": []
+            })
+            .to_string();
         };
 
         let current_path_str = resolved_dir.to_string_lossy().to_string();
+        let directory_modified = fs::metadata(&resolved_dir)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if let Ok(cache) = self.fs_browse_cache.lock()
+            && let Some(entry) = cache.get(&resolved_dir)
+            && entry.directory_modified == directory_modified
+        {
+            return entry.response.clone();
+        }
         let parent_path_str = resolved_dir
             .parent()
             .map(|p| p.to_string_lossy().to_string());
@@ -1515,112 +2169,41 @@ impl DashboardServer {
                 }
             }
             dir_items.sort_by(|a, b| a.0.cmp(&b.0));
-            let worker_count = std::thread::available_parallelism()
-                .map(usize::from)
-                .unwrap_or(1)
-                .clamp(1, 4)
-                .min(dir_items.len().max(1));
-            let chunk_size = dir_items.len().div_ceil(worker_count).max(1);
-            let mut batches = Vec::new();
-            let mut worker_failed = false;
-            std::thread::scope(|scope| {
-                let handles = dir_items
-                    .chunks(chunk_size)
-                    .map(|chunk| {
-                        scope.spawn(move || {
-                            chunk
-                                .iter()
-                                .map(|(name, path)| {
-                                    serde_json::json!({
-                                        "name": name,
-                                        "path": path.to_string_lossy(),
-                                        "is_dir": true,
-                                        "is_git_repo": path.join(".git").exists()
-                                    })
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                for handle in handles {
-                    match handle.join() {
-                        Ok(batch) => batches.push(batch),
-                        Err(_) => worker_failed = true,
-                    }
-                }
-            });
-            if worker_failed {
-                for (name, path) in &dir_items {
-                    subdirs.push(serde_json::json!({
-                        "name": name,
-                        "path": path.to_string_lossy(),
-                        "is_dir": true,
-                        "is_git_repo": path.join(".git").exists()
-                    }));
-                }
-            } else {
-                subdirs.extend(batches.into_iter().flatten());
-            }
+            // Directory browsing is a latency-sensitive picker operation.  A
+            // short, deterministic pass is faster than spawning several
+            // threads for the small metadata probes performed per child,
+            // especially on Windows where each `.git` existence check is a
+            // filesystem round trip.  Keep the list sorted before this pass
+            // so the response remains byte-stable across platforms.
+            subdirs.extend(dir_items.into_iter().map(|(name, path)| {
+                let is_git_repo = path.join(".git").is_dir();
+                serde_json::json!({
+                    "name": name,
+                    "path": path.to_string_lossy(),
+                    "is_dir": true,
+                    "is_git_repo": is_git_repo
+                })
+            }));
         }
 
-        let mut presets = vec![
-            serde_json::json!({
-                "label": "User Home",
-                "path": home_dir
-            }),
-            serde_json::json!({
-                "label": "Root Filesystem",
-                "path": if cfg!(windows) { "C:\\" } else { "/" }
-            }),
-        ];
-
-        let daemon_root_str = self.repo_root.to_string_lossy().to_string();
-        let daemon_root_canon = self
-            .repo_root
-            .canonicalize()
-            .unwrap_or_else(|_| self.repo_root.clone())
-            .to_string_lossy()
-            .to_string();
-
-        if let Ok(repos) = self.connected_repos.lock() {
-            for (_, r) in repos.iter() {
-                if !r.display_name.to_lowercase().contains("synevid")
-                    && r.root_path != daemon_root_str
-                    && r.root_path != daemon_root_canon
-                {
-                    presets.push(serde_json::json!({
-                        "label": r.display_name,
-                        "path": r.root_path
-                    }));
-                }
-            }
-        }
-        let storage_guard = self.storage.lock().unwrap();
-        if let Some(ref st) = *storage_guard {
-            if let Ok(repos) = st.list_repositories() {
-                for r in repos {
-                    if !r.display_name.to_lowercase().contains("synevid")
-                        && r.root_path != daemon_root_str
-                        && r.root_path != daemon_root_canon
-                        && !presets.iter().any(|p| p["path"] == r.root_path)
-                    {
-                        presets.push(serde_json::json!({
-                            "label": r.display_name,
-                            "path": r.root_path
-                        }));
-                    }
-                }
-            }
-        }
-
-        serde_json::json!({
+        let response = serde_json::json!({
             "current_path": current_path_str,
             "parent_path": parent_path_str,
             "is_git_repo": is_git_repo,
             "directories": subdirs,
-            "quick_presets": presets
+            "quick_presets": []
         })
-        .to_string()
+        .to_string();
+        if let Ok(mut cache) = self.fs_browse_cache.lock() {
+            cache.insert(
+                resolved_dir,
+                FsBrowseCacheEntry {
+                    directory_modified,
+                    response: response.clone(),
+                },
+            );
+        }
+        response
     }
 
     pub fn handle_files(&self) -> String {
@@ -2009,13 +2592,19 @@ impl DashboardServer {
 
     pub fn handle_graph_ego(&self, url: &str) -> String {
         let requested_id = Self::parse_query_param(url, "id").unwrap_or_default();
+        self.handle_graph_ego_id(&requested_id)
+    }
+
+    /// Resolves the PRD path form while the query form remains supported for
+    /// existing clients: `/api/v1/graph/ego/:id` and `?id=...` are equivalent.
+    pub fn handle_graph_ego_id(&self, requested_id: &str) -> String {
         if requested_id.is_empty() {
             return empty_ego();
         }
         let stable_id = if requested_id.contains('/') && !requested_id.contains('#') {
-            file_node_id(&requested_id)
+            file_node_id(requested_id)
         } else {
-            requested_id
+            requested_id.to_string()
         };
         let active_id = self.active_repo_id.lock().unwrap().clone();
         let record = self
@@ -2059,12 +2648,16 @@ impl DashboardServer {
             }
         };
         let response_json = serde_json::to_string(&response).unwrap_or_default();
-        let session_id = self.active_ai_session_id.lock().unwrap().clone();
+        let session_id = request
+            .session_id
+            .clone()
+            .unwrap_or_else(|| self.active_ai_session_id.lock().unwrap().clone());
         let receipt_digest = format!(
             "blake3:{}",
             blake3::hash(request.unsaved_buffer.as_bytes()).to_hex()
         );
-        if let Some(storage) = self.get_storage_for_active_repo() {
+        if let Ok((storage, _)) = self.storage_for_request_root(request.repo_root.as_deref()) {
+            self.ensure_forensic_session(&storage, &session_id, response.repo_id.as_str());
             let event = TrajectoryEventRecord {
                 event_seq: 0,
                 session_id: session_id.clone(),
@@ -2086,7 +2679,33 @@ impl DashboardServer {
                 tokens_spent: 0,
                 tokens_saved: 0,
             };
-            let _ = storage.record_trajectory_event(&event);
+            if let Ok(event_seq) = storage.record_trajectory_event(&event) {
+                self.broadcast_event_in_storage(
+                    Some(&storage),
+                    "trajectory.step_recorded",
+                    serde_json::json!({
+                        "event_seq": event_seq,
+                        "session_id": session_id,
+                        "event_type": "simulate_edit",
+                        "target_file": request.file_path.clone(),
+                        "verdict": response.verdict.clone()
+                    }),
+                );
+                self.broadcast_event_in_storage(
+                    Some(&storage),
+                    "mcp.live_activity",
+                    serde_json::json!({
+                        "tool": "autopsy_simulate_edit",
+                        "action": "simulate_edit",
+                        "status": "completed",
+                        "event_seq": event_seq,
+                        "session_id": session_id,
+                        "target_file": request.file_path.clone(),
+                        "verdict": response.verdict.clone(),
+                        "affected_symbols": response.impacted_entities.clone(),
+                    }),
+                );
+            }
         }
         let event_data = serde_json::json!({
             "repo_id": response.repo_id,
@@ -2097,8 +2716,17 @@ impl DashboardServer {
             "impacted_callers": response.damaged_callers.len(),
             "receipt": receipt_digest
         });
-        self.broadcast_event("simulate.edit_completed", event_data.clone());
-        self.broadcast_event("blast.simulated", event_data);
+        if let Ok((storage, _)) = self.storage_for_request_root(request.repo_root.as_deref()) {
+            self.broadcast_event_in_storage(
+                Some(&storage),
+                "simulate.edit_completed",
+                event_data.clone(),
+            );
+            self.broadcast_event_in_storage(Some(&storage), "blast.simulated", event_data);
+        } else {
+            self.broadcast_event("simulate.edit_completed", event_data.clone());
+            self.broadcast_event("blast.simulated", event_data);
+        }
         response_json
     }
 
@@ -2139,17 +2767,42 @@ impl DashboardServer {
         &self,
         request: &SimulateEditRequest,
     ) -> Result<SimulateEditResponse, String> {
-        let repo_id = request
-            .repo_id
-            .clone()
-            .unwrap_or_else(|| self.active_repo_id.lock().unwrap().clone());
+        let requested_canonical = request
+            .repo_root
+            .as_deref()
+            .filter(|root| !root.trim().is_empty() && root.trim() != ".")
+            .map(Self::normalize_cross_platform_path)
+            .and_then(|root| root.canonicalize().ok());
         let repo = self
             .connected_repos
             .lock()
             .map_err(|_| "repository registry is unavailable".to_string())?
-            .get(&repo_id)
+            .values()
+            .find(|candidate| {
+                if requested_canonical.is_some() {
+                    PathBuf::from(&candidate.root_path)
+                        .canonicalize()
+                        .ok()
+                        .as_ref()
+                        == requested_canonical.as_ref()
+                } else if let Some(repo_id) = request.repo_id.as_deref() {
+                    candidate.repo_id == repo_id
+                } else {
+                    let active_id = self.active_repo_id.lock().ok();
+                    active_id
+                        .as_deref()
+                        .is_some_and(|active| candidate.repo_id == *active)
+                }
+            })
             .cloned()
-            .ok_or_else(|| format!("repository is not connected: {repo_id}"))?;
+            .ok_or_else(|| {
+                request
+                    .repo_root
+                    .as_ref()
+                    .map(|root| format!("repository is not connected: {root}"))
+                    .unwrap_or_else(|| "repository is not connected".to_string())
+            })?;
+        let repo_id = repo.repo_id.clone();
         let root = PathBuf::from(&repo.root_path);
         let root = root
             .canonicalize()
@@ -2600,15 +3253,7 @@ impl DashboardServer {
                     .ok()
             })
             .unwrap_or(0);
-        let storage = match open_storage_engine_with_registry(
-            &self.registry,
-            &StorageEngineConfig {
-                database_path: self.repo_root.join(".autopsy").join("storage.db"),
-                cache_dir: Some(self.repo_root.join(".autopsy").join("cache")),
-                use_wal: true,
-                recover_corruption: true,
-            },
-        ) {
+        let storage = match self.live_event_storage() {
             Ok(storage) => storage,
             Err(error) => {
                 let response = Response::from_string(
@@ -2628,6 +3273,19 @@ impl DashboardServer {
                     sse_data.push_str(&format!(
                         "id: {}\nevent: {}\ndata: {}\n\n",
                         event.seq_id, event.event_type, event.data_json
+                    ));
+                    // Keep the named event for protocol consumers while also emitting
+                    // the default `message` event consumed by browser EventSource
+                    // clients.  The browser client de-duplicates by seq_id.
+                    sse_data.push_str(&format!(
+                        "id: {}\ndata: {}\n\n",
+                        event.seq_id,
+                        serde_json::json!({
+                            "seq_id": event.seq_id,
+                            "event": event.event_type.clone(),
+                            "data": serde_json::from_str::<serde_json::Value>(&event.data_json)
+                                .unwrap_or(serde_json::Value::Null)
+                        })
                     ));
                 }
             }
@@ -2652,6 +3310,155 @@ impl DashboardServer {
             .with_header(header_cache)
             .with_header(header_cors);
         let _ = req.respond(response);
+    }
+
+    fn is_websocket_upgrade(request: &Request) -> bool {
+        request.headers().iter().any(|header| {
+            header.field.equiv("Upgrade") && header.value.as_str().eq_ignore_ascii_case("websocket")
+        }) && request.headers().iter().any(|header| {
+            header.field.equiv("Connection")
+                && header
+                    .value
+                    .as_str()
+                    .to_ascii_lowercase()
+                    .contains("upgrade")
+        })
+    }
+
+    fn send_websocket_events_since(
+        &self,
+        stream: &mut dyn Write,
+        cursor: &mut i64,
+    ) -> std::io::Result<()> {
+        let Ok(storage) = self.live_event_storage() else {
+            return Ok(());
+        };
+        let events = self
+            .live_events_since_merged(&storage, *cursor, 500)
+            .map_err(std::io::Error::other)?;
+        for event in events {
+            let payload = serde_json::json!({
+                "seq_id": event.seq_id,
+                "event": event.event_type,
+                "data": serde_json::from_str::<serde_json::Value>(&event.data_json)
+                    .unwrap_or(serde_json::Value::Null),
+            });
+            write_websocket_frame(stream, 0x1, payload.to_string().as_bytes())?;
+            *cursor = event.seq_id;
+        }
+        Ok(())
+    }
+
+    /// Upgrades `/api/v1/live` to a capability-free WebSocket. SSE remains the
+    /// browser-compatible fallback, while this path provides one connection
+    /// for both client commands and ordered server events.
+    pub fn handle_live_websocket(&self, request: Request) {
+        let key = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("Sec-WebSocket-Key"))
+            .map(|header| header.value.as_str().trim().to_string());
+        let Some(key) = key else {
+            let response = Response::from_string(
+                serde_json::json!({ "error": "missing Sec-WebSocket-Key" }).to_string(),
+            )
+            .with_status_code(StatusCode(400));
+            let _ = request.respond(response);
+            return;
+        };
+        let mut cursor = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("Last-Event-ID"))
+            .and_then(|header| header.value.as_str().parse::<i64>().ok())
+            .or_else(|| {
+                Self::parse_query_param(request.url(), "since")?
+                    .parse::<i64>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        let mut digest = Sha1::new();
+        digest.update(key.as_bytes());
+        digest.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        let accept = base64_encode(&digest.finalize());
+        let accept_header = Header::from_bytes(&b"Sec-WebSocket-Accept"[..], accept.as_bytes())
+            .expect("valid WebSocket response header");
+        let response = Response::empty(StatusCode(101)).with_header(accept_header);
+        let mut stream = request.upgrade("websocket", response);
+
+        if self
+            .send_websocket_events_since(&mut *stream, &mut cursor)
+            .is_err()
+        {
+            return;
+        }
+
+        while let Ok(frame) = read_websocket_frame(&mut *stream) {
+            match frame.opcode {
+                0x1 => {
+                    let body = String::from_utf8(frame.payload).unwrap_or_default();
+                    let parsed: Result<LiveBroadcastRequest, _> = serde_json::from_str(&body);
+                    let Ok(req) = parsed else {
+                        let _ = write_websocket_frame(
+                            &mut *stream,
+                            0x1,
+                            serde_json::json!({ "error": "invalid live command" })
+                                .to_string()
+                                .as_bytes(),
+                        );
+                        continue;
+                    };
+                    if req.event.is_empty()
+                        || req.event.len() > 128
+                        || !req
+                            .event
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+                    {
+                        let _ = write_websocket_frame(
+                            &mut *stream,
+                            0x1,
+                            serde_json::json!({ "error": "invalid event name" })
+                                .to_string()
+                                .as_bytes(),
+                        );
+                        continue;
+                    }
+                    if req.event == "live.poll" {
+                        if let Some(requested_cursor) =
+                            req.data.get("since_seq").and_then(|v| v.as_i64())
+                        {
+                            cursor = cursor.max(requested_cursor);
+                        }
+                        if self
+                            .send_websocket_events_since(&mut *stream, &mut cursor)
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    let seq_id = self.broadcast_event(&req.event, req.data.clone());
+                    cursor = cursor.max(seq_id);
+                    let event = serde_json::json!({
+                        "seq_id": seq_id,
+                        "event": req.event,
+                        "data": req.data,
+                    });
+                    if write_websocket_frame(&mut *stream, 0x1, event.to_string().as_bytes())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                0x8 => {
+                    let _ = write_websocket_frame(&mut *stream, 0x8, &frame.payload);
+                    break;
+                }
+                0x9 if write_websocket_frame(&mut *stream, 0xA, &frame.payload).is_err() => break,
+                _ => {}
+            }
+        }
     }
 
     pub fn url_decode(s: &str) -> String {
@@ -2698,10 +3505,37 @@ impl DashboardServer {
             return PathBuf::from(".");
         }
 
-        // Standardize separators to forward slashes for cross-platform inspection
+        // Standardize separators while preserving the path's operating-system
+        // meaning. The web client must not guess whether the daemon is native
+        // Windows or WSL; that decision belongs here.
         let normalized = trimmed.replace('\\', "/");
+        let without_extended_prefix = normalized.strip_prefix("//?/").unwrap_or(&normalized);
 
-        // 1. WSL UNC paths: //wsl.localhost/<distro>/... or //wsl$/<distro>/...
+        // Native Windows can access a WSL distribution through its UNC path.
+        // Keep the distro component on Windows; stripping it would turn a real
+        // UNC path into an unrelated POSIX path such as /home/ravi.
+        #[cfg(windows)]
+        if normalized.starts_with("//wsl.localhost/") || normalized.starts_with("//wsl$/") {
+            return PathBuf::from(normalized.replace('/', "\\"));
+        }
+
+        // WSL/Linux can address a Windows drive through /mnt/<drive>/...
+        #[cfg(windows)]
+        if let Some(rest) = normalized.strip_prefix("/mnt/") {
+            if rest.len() >= 2 && rest.as_bytes()[1] == b'/' {
+                let drive = rest.as_bytes()[0] as char;
+                if drive.is_ascii_alphabetic() {
+                    return PathBuf::from(format!(
+                        "{}:/{}",
+                        drive.to_ascii_uppercase(),
+                        &rest[2..]
+                    ));
+                }
+            }
+        }
+
+        // Linux/WSL can address a Windows drive through C:/... or c:/....
+        #[cfg(not(windows))]
         if normalized.starts_with("//wsl.localhost/") || normalized.starts_with("//wsl$/") {
             let after_prefix = if let Some(stripped) = normalized.strip_prefix("//wsl.localhost/") {
                 stripped
@@ -2720,7 +3554,8 @@ impl DashboardServer {
             }
         }
 
-        // 2. Windows drive letters on Linux/WSL: C:/... or c:/... -> /mnt/c/...
+        // Windows drive letters on Linux/WSL: C:/... or c:/... -> /mnt/c/...
+        #[cfg(not(windows))]
         if normalized.len() >= 3
             && normalized.as_bytes()[1] == b':'
             && normalized.as_bytes()[2] == b'/'
@@ -2737,29 +3572,38 @@ impl DashboardServer {
             }
         }
 
-        // 3. Tilde expansion: ~/path -> $HOME/path
-        if let Some(stripped) = normalized.strip_prefix("~/") {
+        // Tilde expansion: ~/path -> $HOME/path
+        if let Some(stripped) = without_extended_prefix.strip_prefix("~/") {
             if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-                let candidate =
-                    PathBuf::from(format!("{}/{}", home.trim_end_matches('/'), stripped));
+                let candidate = PathBuf::from(format!(
+                    "{}/{}",
+                    home.trim_end_matches(['/', '\\']),
+                    stripped
+                ));
                 if candidate.exists() {
                     return candidate;
                 }
             }
         }
 
-        // 4. Fallback directly or with normalized slashes
+        // Prefer the normalized host path, then retain the original spelling as
+        // a final fallback for diagnostics.
+        let normalized_path = PathBuf::from(without_extended_prefix);
+        if normalized_path.exists() {
+            return normalized_path;
+        }
+
         let direct = PathBuf::from(trimmed);
         if direct.exists() {
             return direct;
         }
 
-        let slash_direct = PathBuf::from(&normalized);
+        let slash_direct = PathBuf::from(without_extended_prefix);
         if slash_direct.exists() {
             return slash_direct;
         }
 
-        direct
+        slash_direct
     }
 
     pub fn get_active_repo_dir(&self) -> PathBuf {
@@ -2840,9 +3684,26 @@ impl DashboardServer {
             }
         };
 
+        let cache_key = format!("{}:{}:{}", repo_root.display(), oid, is_3d);
+        if let Ok(cache) = self.git_frame_cache.lock()
+            && let Some(frame) = cache.get(&cache_key)
+        {
+            return frame.clone();
+        }
         let builder = VirtualTreeBuilder::new(&repo_root);
         match builder.build_frame(&oid, is_3d) {
-            Ok(frame) => serde_json::to_string(&frame).unwrap_or_else(|_| "{}".to_string()),
+            Ok(frame) => {
+                let encoded = serde_json::to_string(&frame).unwrap_or_else(|_| "{}".to_string());
+                if let Ok(mut cache) = self.git_frame_cache.lock() {
+                    cache.insert(cache_key, encoded.clone());
+                    while cache.len() > 64 {
+                        if let Some(first) = cache.keys().next().cloned() {
+                            cache.remove(&first);
+                        }
+                    }
+                }
+                encoded
+            }
             Err(e) => serde_json::json!({ "error": format!("{e}") }).to_string(),
         }
     }
@@ -2873,14 +3734,81 @@ impl DashboardServer {
         }
     }
 
+    pub fn handle_git_blame(&self, url: &str) -> String {
+        let repo_root = self.get_active_repo_dir();
+        let path = Self::parse_query_param(url, "path").unwrap_or_default();
+        let revision = Self::parse_query_param(url, "oid").unwrap_or_else(|| "HEAD".to_string());
+        let engine = GitBlameEngine::new(&repo_root);
+        match engine.blame(&path, &revision) {
+            Ok(report) => serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+            Err(error) => serde_json::json!({
+                "path": path,
+                "lines": [],
+                "coverage_state": "Unknown",
+                "result_digest": "",
+                "error": format!("{error}")
+            })
+            .to_string(),
+        }
+    }
+
+    fn record_git_mutation_trajectory(&self, result: &autopsy_git_engine::GitMutationResult) {
+        if !result.success {
+            return;
+        }
+        let session_id = self.active_ai_session_id.lock().unwrap().clone();
+        let evidence_json = serde_json::to_string(result).unwrap_or_default();
+        let receipt = format!(
+            "blake3:{}",
+            blake3::hash(format!("git\0{}\0{}", result.action, evidence_json).as_bytes()).to_hex()
+        );
+        if let Some(storage) = self.get_storage_for_active_repo() {
+            let event = TrajectoryEventRecord {
+                event_seq: 0,
+                session_id: session_id.clone(),
+                job_id: Some(format!("git_{}", result.action)),
+                workflow_id: Some("wf_git_guarded_mutation".to_string()),
+                event_type: format!("git.{}", result.action),
+                target_symbol: None,
+                target_file: None,
+                before_snap_id: None,
+                after_snap_id: result.new_commit_oid.clone(),
+                verdict: "PASS".to_string(),
+                summary: result.message.clone(),
+                evidence_json,
+                blake3_receipt: receipt.clone(),
+                tokens_spent: 0,
+                tokens_saved: 0,
+            };
+            let seq = storage.record_trajectory_event(&event).unwrap_or(0);
+            self.broadcast_event(
+                "trajectory.step_recorded",
+                serde_json::json!({
+                    "seq_id": seq,
+                    "session_id": session_id,
+                    "event_type": event.event_type,
+                    "receipt": receipt,
+                }),
+            );
+        }
+    }
+
     pub fn handle_git_stage(&self, body: &str) -> String {
         let repo_root = self.get_active_repo_dir();
         let parsed: Result<StageRequest, _> = serde_json::from_str(body);
         match parsed {
             Ok(req) => {
                 let manager = GitMutationManager::new(&repo_root);
-                match manager.stage(&req.paths) {
-                    Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string()),
+                let stage_result = if req.hunks.is_empty() {
+                    manager.stage(&req.paths)
+                } else {
+                    manager.stage_hunks(&req.hunks)
+                };
+                match stage_result {
+                    Ok(res) => {
+                        self.record_git_mutation_trajectory(&res);
+                        serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
+                    }
                     Err(e) => serde_json::json!({ "success": false, "action": "stage", "error": format!("{e}") })
                         .to_string(),
                 }
@@ -2901,6 +3829,7 @@ impl DashboardServer {
                 match manager.commit_request(&req) {
                     Ok(res) => {
                         self.refresh_active_git_head();
+                        self.record_git_mutation_trajectory(&res);
                         serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
                     }
                     Err(e) => serde_json::json!({ "success": false, "action": "commit", "error": format!("{e}") })
@@ -2923,6 +3852,7 @@ impl DashboardServer {
                 match manager.branch_request(&req) {
                     Ok(res) => {
                         self.refresh_active_git_head();
+                        self.record_git_mutation_trajectory(&res);
                         serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
                     }
                     Err(e) => serde_json::json!({ "success": false, "action": "branch", "error": format!("{e}") })
@@ -2942,6 +3872,7 @@ impl DashboardServer {
         match manager.undo() {
             Ok(res) => {
                 self.refresh_active_git_head();
+                self.record_git_mutation_trajectory(&res);
                 serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
             }
             Err(e) => {
@@ -2999,7 +3930,10 @@ impl DashboardServer {
         let manager = GitMutationManager::new(&repo_root);
         match parsed {
             Ok(req) => match manager.unstage(&req.paths) {
-                Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string()),
+                Ok(res) => {
+                    self.record_git_mutation_trajectory(&res);
+                    serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
+                }
                 Err(e) => serde_json::json!({ "success": false, "action": "unstage", "error": format!("{e}") })
                     .to_string(),
             },
@@ -3018,7 +3952,10 @@ impl DashboardServer {
             Ok(req) => {
                 let manager = GitMutationManager::new(&repo_root);
                 match manager.tag(&req) {
-                    Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string()),
+                    Ok(res) => {
+                        self.record_git_mutation_trajectory(&res);
+                        serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
+                    }
                     Err(e) => serde_json::json!({ "success": false, "action": "tag", "error": format!("{e}") })
                         .to_string(),
                 }
@@ -3039,6 +3976,7 @@ impl DashboardServer {
                 match manager.merge(&req) {
                     Ok(res) => {
                         self.refresh_active_git_head();
+                        self.record_git_mutation_trajectory(&res);
                         serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
                     }
                     Err(e) => serde_json::json!({ "success": false, "action": "merge", "error": format!("{e}") })
@@ -3061,6 +3999,7 @@ impl DashboardServer {
                 match manager.checkout(&req) {
                     Ok(res) => {
                         self.refresh_active_git_head();
+                        self.record_git_mutation_trajectory(&res);
                         serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
                     }
                     Err(e) => serde_json::json!({ "success": false, "action": "checkout", "error": format!("{e}") })
@@ -3081,6 +4020,7 @@ impl DashboardServer {
                 match manager.revert(&req) {
                     Ok(res) => {
                         self.refresh_active_git_head();
+                        self.record_git_mutation_trajectory(&res);
                         serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string())
                     }
                     Err(e) => serde_json::json!({ "success": false, "action": "revert", "error": format!("{e}") })
@@ -3382,7 +4322,7 @@ impl DashboardServer {
         .to_string()
     }
 
-    fn handle_status(&self) -> String {
+    pub fn handle_status(&self) -> String {
         let active_id = self.active_repo_id.lock().unwrap().clone();
         let record = self
             .connected_repos
@@ -3396,7 +4336,7 @@ impl DashboardServer {
                         .and_then(|st| st.get_repository(&active_id).ok().flatten())
                 })
             });
-        let Some(record) = record else {
+        let Some(record) = record.and_then(Self::normalize_existing_repository_record) else {
             return serde_json::json!({
                 "repo_root": "",
                 "repo_name": "",
@@ -3407,7 +4347,7 @@ impl DashboardServer {
                 "symbol_count": 0,
                 "edge_count": 0,
                 "index_state": "unconnected",
-                "version": "0.5.0"
+                "version": "0.6.0"
             })
             .to_string();
         };
@@ -3425,7 +4365,7 @@ impl DashboardServer {
                     "symbol_count": 0,
                     "edge_count": 0,
                     "index_state": "storage_unavailable",
-                    "version": "0.5.0"
+                    "version": "0.6.0"
                 })
                 .to_string();
             }
@@ -3441,7 +4381,7 @@ impl DashboardServer {
                 .iter()
                 .filter(|node| node.node_kind != "file" && node.node_kind != "unknown")
                 .count();
-            let coverage = snapshot_coverage(&snapshot, &nodes);
+            let coverage = snapshot_coverage(snapshot, &nodes);
             (symbols, edges.len(), coverage)
         } else {
             (0, 0, "unknown".to_string())
@@ -3459,7 +4399,7 @@ impl DashboardServer {
             "index_state": if snapshot.is_some() { "indexed" } else { "unindexed" },
             "skipped_oversize_files": snapshot.as_ref().map(|value| value.skipped_oversize_files.clone()).unwrap_or_default(),
             "traversal_limit_reached": snapshot.as_ref().map(|value| value.traversal_limit_reached).unwrap_or(false),
-            "version": "0.5.0"
+            "version": "0.6.0"
         })
         .to_string()
     }
@@ -3473,15 +4413,24 @@ impl DashboardServer {
         });
         serde_json::json!({
             "service": "synevid-local-daemon",
-            "version": "0.5.0",
+            "version": "0.6.0",
             "api_version": "v1",
             "mode": "headless",
             "active_repo_id": active_repo_id,
             "active_repo": active_repo,
             "cockpit_url": "http://127.0.0.1:3000",
-            "mcp_bridge_status": "not_managed_by_daemon"
+            "mcp_bridge_status": "not_managed_by_daemon",
+            "storage_recovery": self.storage_recovery_value()
         })
         .to_string()
+    }
+
+    fn storage_recovery_value(&self) -> Option<serde_json::Value> {
+        self.storage
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(StorageEngine::recovery_notice))
+            .and_then(|notice| serde_json::to_value(notice).ok())
     }
 
     pub fn handle_capabilities(&self) -> String {
@@ -3529,7 +4478,7 @@ impl DashboardServer {
         serde_json::to_string(&capabilities).unwrap_or_default()
     }
 
-    fn handle_verify(&self) -> String {
+    pub fn handle_verify(&self) -> String {
         let active_id = self.active_repo_id.lock().unwrap().clone();
         let Some(mut record) = self
             .connected_repos
@@ -3761,6 +4710,59 @@ impl DashboardServer {
         serde_json::json!({ "runs": runs }).to_string()
     }
 
+    fn ensure_forensic_session(
+        &self,
+        storage: &StorageEngine,
+        session_id: &str,
+        repo_id: &str,
+    ) -> String {
+        let workflow_id = format!("wf_guardrail_{}", &session_id[..session_id.len().min(8)]);
+        if storage
+            .get_forensic_session(session_id)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            let snapshot_id = self
+                .connected_repos
+                .lock()
+                .ok()
+                .and_then(|repos| {
+                    repos
+                        .get(repo_id)
+                        .and_then(|repo| repo.latest_snap_id.clone())
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            let record = ForensicSessionRecord {
+                session_id: session_id.to_string(),
+                repo_id: repo_id.to_string(),
+                actor_kind: "AI_AGENT".to_string(),
+                actor_name: "MCP".to_string(),
+                baseline_snap_id: snapshot_id.clone(),
+                current_snap_id: snapshot_id,
+                status: "ACTIVE".to_string(),
+            };
+            let _ = storage.create_forensic_session(&record);
+        }
+        if storage
+            .list_forensic_workflows(session_id)
+            .ok()
+            .is_none_or(|workflows| workflows.is_empty())
+        {
+            let workflow = ForensicWorkflowRecord {
+                workflow_id: workflow_id.clone(),
+                session_id: session_id.to_string(),
+                name: "MCP/UI forensic workflow".to_string(),
+                status: "ACTIVE".to_string(),
+                start_seq: 0,
+                end_seq: None,
+                duration_ms: 0,
+            };
+            let _ = storage.create_forensic_workflow(&workflow);
+        }
+        workflow_id
+    }
+
     pub fn handle_forensic_sessions(&self, _url: &str) -> String {
         let repo_id = self.active_repo_id.lock().unwrap().clone();
         if let Some(st) = self.get_storage_for_active_repo() {
@@ -3897,72 +4899,27 @@ impl DashboardServer {
             .unwrap_or(i64::MAX);
 
         if let Some(st) = self.get_storage_for_active_repo() {
-            let session = st
-                .get_forensic_session(&session_id)
-                .unwrap_or(None)
-                .unwrap_or_else(|| ForensicSessionRecord {
-                    session_id: session_id.clone(),
-                    repo_id: self.active_repo_id.lock().unwrap().clone(),
-                    actor_kind: "AI_AGENT".to_string(),
-                    actor_name: "Claude-Code".to_string(),
-                    baseline_snap_id: "snap_baseline_000".to_string(),
-                    current_snap_id: "snap_baseline_000".to_string(),
-                    status: "ACTIVE".to_string(),
-                });
+            let Some(session) = st.get_forensic_session(&session_id).unwrap_or(None) else {
+                return serde_json::json!({
+                    "error": "Forensic session not found",
+                    "session_id": session_id
+                })
+                .to_string();
+            };
 
-            let mut workflows = st.list_forensic_workflows(&session_id).unwrap_or_default();
-            if workflows.is_empty() {
-                workflows.push(ForensicWorkflowRecord {
-                    workflow_id: format!("wf_default_{}", &session_id[..session_id.len().min(8)]),
-                    session_id: session_id.clone(),
-                    name: "Pre-Edit Guardrail -> Multi-File Edit -> Verification Loop".to_string(),
-                    status: "ACTIVE".to_string(),
-                    start_seq: 1,
-                    end_seq: None,
-                    duration_ms: 120,
-                });
-            }
+            let workflows = st.list_forensic_workflows(&session_id).unwrap_or_default();
 
-            let mut events = st
+            let events = st
                 .list_trajectory_events_range(&session_id, start_seq, end_seq)
                 .unwrap_or_default();
-            if events.is_empty() {
-                // Ensure at least one initial baseline event exists
-                let default_evt = TrajectoryEventRecord {
-                    event_seq: 1,
-                    session_id: session_id.clone(),
-                    job_id: Some("baseline_init".to_string()),
-                    workflow_id: Some(workflows[0].workflow_id.clone()),
-                    event_type: "baseline_created".to_string(),
-                    target_symbol: Some("RepositoryRoot".to_string()),
-                    target_file: Some("package.json".to_string()),
-                    before_snap_id: Some(session.baseline_snap_id.clone()),
-                    after_snap_id: Some(session.current_snap_id.clone()),
-                    verdict: "INFO".to_string(),
-                    summary: "Baseline snapshot created and cryptographic digest verified"
-                        .to_string(),
-                    evidence_json: "{}".to_string(),
-                    blake3_receipt: format!(
-                        "blake3:{}",
-                        blake3::hash(session_id.as_bytes()).to_hex()
-                    ),
-                    tokens_spent: 45,
-                    tokens_saved: 12500,
-                };
-                let _ = st.record_trajectory_event(&default_evt);
-                events.push(default_evt);
-            }
 
-            let ledger = st
-                .get_or_create_ai_ledger(&session_id)
-                .unwrap_or(AiSessionLedgerRecord {
-                    session_id: session_id.clone(),
-                    total_queries: events.len() as i64,
-                    cache_hits: events.iter().filter(|e| e.tokens_saved > 0).count() as i64,
-                    tokens_spent: events.iter().map(|e| e.tokens_spent).sum(),
-                    tokens_saved: events.iter().map(|e| e.tokens_saved).sum(),
-                    cost_saved_microcents: events.iter().map(|e| e.tokens_saved * 3).sum(),
-                });
+            let Ok(ledger) = st.get_or_create_ai_ledger(&session_id) else {
+                return serde_json::json!({
+                    "error": "AI session ledger unavailable",
+                    "session_id": session_id
+                })
+                .to_string();
+            };
 
             let total_spent = ledger.tokens_spent.max(1);
             let total_saved = ledger.tokens_saved;
@@ -4013,6 +4970,130 @@ impl DashboardServer {
         }
 
         serde_json::json!({ "error": "Event not found" }).to_string()
+    }
+
+    pub fn handle_forensic_event_record(&self, body: &str) -> String {
+        let parsed: Result<RecordForensicEventRequest, _> = serde_json::from_str(body);
+        let Ok(req) = parsed else {
+            return serde_json::json!({
+                "status": "ERROR",
+                "error": "invalid forensic event request"
+            })
+            .to_string();
+        };
+        if req.event_type.is_empty()
+            || req.event_type.len() > 128
+            || !req
+                .event_type
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+            || req.summary.trim().is_empty()
+        {
+            return serde_json::json!({
+                "status": "ERROR",
+                "error": "event_type and summary must be non-empty; event_type must be 1-128 ASCII letters, digits, or . _ : -"
+            })
+            .to_string();
+        }
+
+        let session_id = req
+            .session_id
+            .unwrap_or_else(|| self.active_ai_session_id.lock().unwrap().clone());
+        let (storage, repo_id) = match self.storage_for_request_root(req.repo_root.as_deref()) {
+            Ok(value) => value,
+            Err(error) => {
+                return serde_json::json!({
+                    "status": "ERROR",
+                    "error": error
+                })
+                .to_string();
+            }
+        };
+        let default_workflow_id = self.ensure_forensic_session(&storage, &session_id, &repo_id);
+        let workflow_id = req.workflow_id.unwrap_or(default_workflow_id);
+        let evidence_json =
+            serde_json::to_string(&req.evidence).unwrap_or_else(|_| "null".to_string());
+        let receipt_material = format!(
+            "{}|{}|{}|{}|{}",
+            session_id, req.event_type, req.summary, evidence_json, workflow_id
+        );
+        let event = TrajectoryEventRecord {
+            event_seq: 0,
+            session_id: session_id.clone(),
+            job_id: req.job_id,
+            workflow_id: Some(workflow_id),
+            event_type: req.event_type.clone(),
+            target_symbol: req.target_symbol,
+            target_file: req.target_file,
+            before_snap_id: req.before_snap_id,
+            after_snap_id: req.after_snap_id,
+            verdict: req.verdict.unwrap_or_else(|| "INFO".to_string()),
+            summary: req.summary,
+            evidence_json,
+            blake3_receipt: format!(
+                "blake3:{}",
+                blake3::hash(receipt_material.as_bytes()).to_hex()
+            ),
+            tokens_spent: req.tokens_spent.unwrap_or(0).max(0),
+            tokens_saved: req.tokens_saved.unwrap_or(0).max(0),
+        };
+        let Ok(event_seq) = storage.record_trajectory_event(&event) else {
+            return serde_json::json!({
+                "status": "ERROR",
+                "error": "failed to persist forensic event"
+            })
+            .to_string();
+        };
+        self.broadcast_event_in_storage(
+            Some(&storage),
+            "trajectory.step_recorded",
+            serde_json::json!({
+                "event_seq": event_seq,
+                "session_id": session_id,
+                "event_type": event.event_type.clone(),
+                "verdict": event.verdict.clone(),
+                "target_symbol": event.target_symbol.clone(),
+                "target_file": event.target_file.clone()
+            }),
+        );
+        if event.event_type == "canvas_focus" {
+            self.broadcast_event_in_storage(
+                Some(&storage),
+                "mcp.canvas_focus",
+                serde_json::json!({
+                    "session_id": event.session_id.clone(),
+                    "target_symbol": event.target_symbol.clone(),
+                    "target_file": event.target_file.clone(),
+                    "evidence": serde_json::from_str::<serde_json::Value>(&event.evidence_json)
+                        .unwrap_or(serde_json::Value::Null)
+                }),
+            );
+        }
+        if matches!(event.event_type.as_str(), "impact_queried" | "verify_run") {
+            let evidence = serde_json::from_str::<serde_json::Value>(&event.evidence_json)
+                .unwrap_or(serde_json::Value::Null);
+            self.broadcast_event_in_storage(
+                Some(&storage),
+                "mcp.live_activity",
+                serde_json::json!({
+                    "tool": evidence.get("tool").and_then(|v| v.as_str()).unwrap_or("mcp.analysis"),
+                    "action": event.event_type.clone(),
+                    "status": "completed",
+                    "event_seq": event_seq,
+                    "session_id": event.session_id.clone(),
+                    "target_symbol": event.target_symbol.clone(),
+                    "target_file": event.target_file.clone(),
+                    "verdict": event.verdict.clone(),
+                }),
+            );
+        }
+        serde_json::json!({
+            "status": "RECORDED",
+            "event_seq": event_seq,
+            "session_id": event.session_id,
+            "blake3_receipt": event.blake3_receipt
+        })
+        .to_string()
     }
 
     pub fn handle_forensic_revert(&self, body: &str) -> String {
@@ -4088,7 +5169,7 @@ impl DashboardServer {
             let ledger = st.get_or_create_ai_ledger(&session_id).ok();
 
             let payload_str = serde_json::json!({
-                "schema_version": "v0.5.0-trace",
+                "schema_version": "v0.6.0-trace",
                 "exported_at": "RFC-TRAJECTORY-001",
                 "session": session,
                 "workflows": workflows,
@@ -4188,52 +5269,188 @@ impl DashboardServer {
         let parsed: Result<AiCacheQueryRequest, _> = serde_json::from_str(body);
         match parsed {
             Ok(req) => {
-                let cache_key = format!("cache_{}_{}", req.session_id, req.symbol);
-                if let Some(st) = self.get_storage_for_active_repo() {
-                    if let Ok(Some(cached)) = st.get_ai_working_cache(&cache_key) {
-                        let _ = st.record_ai_query(&req.session_id, true, 20, 4000);
+                let query_kind = req.query_kind.as_str();
+                if !matches!(
+                    query_kind,
+                    "callers" | "callees" | "dependencies" | "full_subgraph"
+                ) {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": "query_kind must be callers, callees, dependencies, or full_subgraph"
+                    })
+                    .to_string();
+                }
+                let (st, repo_id) = match self.storage_for_request_root(req.repo_root.as_deref()) {
+                    Ok(value) => value,
+                    Err(error) => {
                         return serde_json::json!({
-                            "status": "UNCHANGED_SINCE_PREVIOUS_STEP",
-                            "receipt_token": cached.last_receipt_token.unwrap_or_else(|| "rcpt_cached".to_string()),
-                            "symbol": req.symbol,
-                            "compact_pointer": true,
-                            "tokens_saved": 4000
-                        })
-                        .to_string();
-                    } else {
-                        // Cache miss: synthesize and cache
-                        let new_entry = AiWorkingCacheEntry {
-                            cache_key: cache_key.clone(),
-                            repo_id: self.active_repo_id.lock().unwrap().clone(),
-                            snapshot_id: req
-                                .snapshot_id
-                                .unwrap_or_else(|| "snap_active".to_string()),
-                            query_kind: req.query_kind,
-                            target_id: req.symbol.clone(),
-                            compact_payload:
-                                serde_json::json!({ "symbol": req.symbol, "callers_count": 8 })
-                                    .to_string(),
-                            token_estimate: 80,
-                            hit_count: 0,
-                            last_receipt_token: Some(format!(
-                                "rcpt_{}",
-                                blake3::hash(req.symbol.as_bytes()).to_hex()
-                            )),
-                        };
-                        let _ = st.set_ai_working_cache(&new_entry);
-                        let _ = st.record_ai_query(&req.session_id, false, 80, 0);
-                        return serde_json::json!({
-                            "status": "CACHED_NEW",
-                            "receipt_token": new_entry.last_receipt_token,
-                            "symbol": req.symbol,
-                            "tokens_spent": 80
+                            "status": "ERROR",
+                            "error": error
                         })
                         .to_string();
                     }
+                };
+                let repo_record = self
+                    .connected_repos
+                    .lock()
+                    .ok()
+                    .and_then(|repos| repos.get(&repo_id).cloned())
+                    .or_else(|| st.get_repository(&repo_id).ok().flatten());
+                let snapshot_id = req.snapshot_id.clone().or_else(|| {
+                    repo_record
+                        .as_ref()
+                        .and_then(|repo| repo.latest_snap_id.clone())
+                });
+                let Some(snapshot_id) = snapshot_id else {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": "No indexed snapshot is available for the active repository"
+                    })
+                    .to_string();
+                };
+
+                let Ok((nodes, _)) = st.graph_rows_for_snapshot(&snapshot_id) else {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": "Indexed graph is unavailable for the requested snapshot"
+                    })
+                    .to_string();
+                };
+                let matches = nodes
+                    .iter()
+                    .filter(|node| {
+                        node.stable_id == req.symbol
+                            || node.qualified_name == req.symbol
+                            || node.file_path == req.symbol
+                    })
+                    .collect::<Vec<_>>();
+                if matches.len() != 1 {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": if matches.is_empty() {
+                            format!("Symbol or file not found in snapshot: {}", req.symbol)
+                        } else {
+                            format!("Symbol or file is ambiguous in snapshot: {}", req.symbol)
+                        }
+                    })
+                    .to_string();
                 }
-                serde_json::json!({ "error": "Storage unavailable" }).to_string()
+                let target_id = matches[0].stable_id.clone();
+                let Ok(network) = st.query_ego_network(&snapshot_id, &target_id) else {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": "Unable to query the indexed dependency graph"
+                    })
+                    .to_string();
+                };
+                let incoming = if matches!(query_kind, "callers" | "dependencies" | "full_subgraph")
+                {
+                    network.incoming_callers.clone()
+                } else {
+                    Vec::new()
+                };
+                let outgoing = if matches!(query_kind, "callees" | "dependencies" | "full_subgraph")
+                {
+                    network.outgoing_callees.clone()
+                } else {
+                    Vec::new()
+                };
+                let query_payload = serde_json::json!({
+                    "repo_id": repo_id.clone(),
+                    "snapshot_id": snapshot_id.clone(),
+                    "query_kind": query_kind,
+                    "requested_target": req.symbol.clone(),
+                    "resolved_target": target_id.clone(),
+                    "target_node": network.target_node.clone(),
+                    "incoming_callers": incoming,
+                    "outgoing_callees": outgoing
+                });
+                let payload_string = query_payload.to_string();
+                let full_tokens = ((payload_string.len() as i64) + 3) / 4;
+                let cache_key_material = format!(
+                    "{}|{}|{}|{}",
+                    req.session_id, snapshot_id, query_kind, target_id
+                );
+                let cache_key = format!(
+                    "ai:{}",
+                    blake3::hash(cache_key_material.as_bytes()).to_hex()
+                );
+
+                if req.cache_mode.as_deref() == Some("invalidate") {
+                    let invalidated = st.delete_ai_working_cache(&cache_key).unwrap_or(false);
+                    return serde_json::json!({
+                        "status": if invalidated { "INVALIDATED" } else { "NOT_CACHED" },
+                        "cache_key": cache_key,
+                        "snapshot_id": snapshot_id,
+                        "symbol": req.symbol
+                    })
+                    .to_string();
+                }
+
+                if let Ok(Some(cached)) = st.get_ai_working_cache(&cache_key) {
+                    let pointer = serde_json::json!({
+                        "status": "UNCHANGED_SINCE_PREVIOUS_STEP",
+                        "base_receipt": cached.last_receipt_token.clone(),
+                        "snapshot_id": snapshot_id.clone(),
+                        "symbol": req.symbol.clone(),
+                        "query_kind": query_kind,
+                        "cached_token_estimate": cached.token_estimate
+                    });
+                    let pointer_tokens = ((pointer.to_string().len() as i64) + 3) / 4;
+                    let tokens_saved = (cached.token_estimate - pointer_tokens).max(0);
+                    let _ = st.record_ai_query(&req.session_id, true, pointer_tokens, tokens_saved);
+                    return serde_json::json!({
+                        "status": "UNCHANGED_SINCE_PREVIOUS_STEP",
+                        "receipt_token": cached.last_receipt_token.clone(),
+                        "snapshot_id": snapshot_id.clone(),
+                        "symbol": req.symbol.clone(),
+                        "query_kind": query_kind,
+                        "compact_pointer": true,
+                        "tokens_spent": pointer_tokens,
+                        "tokens_saved": tokens_saved
+                    })
+                    .to_string();
+                }
+
+                let receipt_token =
+                    format!("rcpt_{}", blake3::hash(payload_string.as_bytes()).to_hex());
+                let new_entry = AiWorkingCacheEntry {
+                    cache_key,
+                    repo_id: repo_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                    query_kind: query_kind.to_string(),
+                    target_id,
+                    compact_payload: payload_string,
+                    token_estimate: full_tokens,
+                    hit_count: 0,
+                    last_receipt_token: Some(receipt_token.clone()),
+                };
+                if st.set_ai_working_cache(&new_entry).is_err() {
+                    return serde_json::json!({
+                        "status": "ERROR",
+                        "error": "Unable to persist working-memory query"
+                    })
+                    .to_string();
+                }
+                let _ = st.record_ai_query(&req.session_id, false, full_tokens, 0);
+                serde_json::json!({
+                    "status": "CACHED_NEW",
+                    "receipt_token": receipt_token,
+                    "snapshot_id": snapshot_id.clone(),
+                    "symbol": req.symbol.clone(),
+                    "query_kind": query_kind,
+                    "compact_pointer": false,
+                    "query": query_payload,
+                    "tokens_spent": full_tokens,
+                    "tokens_saved": 0
+                })
+                .to_string()
             }
-            Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+            Err(e) => serde_json::json!({
+                "status": "ERROR",
+                "error": e.to_string()
+            })
+            .to_string(),
         }
     }
 
@@ -4330,19 +5547,11 @@ impl DashboardServer {
         let since_seq = Self::parse_query_param(url, "since_seq")
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
-        let storage = open_storage_engine_with_registry(
-            &self.registry,
-            &StorageEngineConfig {
-                database_path: self.repo_root.join(".autopsy").join("storage.db"),
-                cache_dir: Some(self.repo_root.join(".autopsy").join("cache")),
-                use_wal: true,
-                recover_corruption: true,
-            },
-        );
+        let storage = self.live_event_storage();
         match storage {
             Ok(storage) => {
-                let events = storage
-                    .live_events_since(since_seq, 500)
+                let events = self
+                    .live_events_since_merged(&storage, since_seq, 500)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|event| {
@@ -4354,7 +5563,13 @@ impl DashboardServer {
                         })
                     })
                     .collect::<Vec<_>>();
-                let latest_seq = storage.latest_live_event_seq().unwrap_or(since_seq);
+                let latest_seq = storage.latest_live_event_seq().unwrap_or(since_seq).max(
+                    self.memory_live_events_since(since_seq)
+                        .into_iter()
+                        .map(|event| event.seq_id)
+                        .max()
+                        .unwrap_or(since_seq),
+                );
                 serde_json::json!({ "events": events, "latest_seq": latest_seq }).to_string()
             }
             Err(error) => serde_json::json!({
@@ -4382,12 +5597,113 @@ impl DashboardServer {
                     })
                     .to_string();
                 }
-                self.broadcast_event(&req.event, req.data);
-                serde_json::json!({ "success": true }).to_string()
+                let seq_id = self.broadcast_event(&req.event, req.data);
+                serde_json::json!({ "success": true, "seq_id": seq_id }).to_string()
             }
             Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
         }
     }
+}
+
+const MAX_WEBSOCKET_FRAME_BYTES: usize = 512 * 1024;
+
+struct WebSocketFrame {
+    opcode: u8,
+    payload: Vec<u8>,
+}
+
+fn read_websocket_frame(stream: &mut dyn Read) -> std::io::Result<WebSocketFrame> {
+    let mut header = [0_u8; 2];
+    stream.read_exact(&mut header)?;
+    let opcode = header[0] & 0x0F;
+    let masked = header[1] & 0x80 != 0;
+    if !masked {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "client WebSocket frames must be masked",
+        ));
+    }
+    let mut payload_len = u64::from(header[1] & 0x7F);
+    if payload_len == 126 {
+        let mut extended = [0_u8; 2];
+        stream.read_exact(&mut extended)?;
+        payload_len = u64::from(u16::from_be_bytes(extended));
+    } else if payload_len == 127 {
+        let mut extended = [0_u8; 8];
+        stream.read_exact(&mut extended)?;
+        payload_len = u64::from_be_bytes(extended);
+    }
+    let payload_len = usize::try_from(payload_len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WebSocket frame is too large",
+        )
+    })?;
+    if payload_len > MAX_WEBSOCKET_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WebSocket frame exceeds the configured limit",
+        ));
+    }
+    let mut mask = [0_u8; 4];
+    stream.read_exact(&mut mask)?;
+    let mut payload = vec![0_u8; payload_len];
+    stream.read_exact(&mut payload)?;
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte ^= mask[index % 4];
+    }
+    Ok(WebSocketFrame { opcode, payload })
+}
+
+fn write_websocket_frame(
+    stream: &mut dyn Write,
+    opcode: u8,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    if payload.len() > MAX_WEBSOCKET_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "WebSocket frame exceeds the configured limit",
+        ));
+    }
+    let mut header = vec![0x80 | (opcode & 0x0F)];
+    match payload.len() {
+        length if length < 126 => header.push(length as u8),
+        length if length <= u16::MAX as usize => {
+            header.push(126);
+            header.extend_from_slice(&(length as u16).to_be_bytes());
+        }
+        length => {
+            header.push(127);
+            header.extend_from_slice(&(length as u64).to_be_bytes());
+        }
+    }
+    stream.write_all(&header)?;
+    stream.write_all(payload)?;
+    stream.flush()
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[((first & 0x03) << 4 | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[((second & 0x0F) << 2 | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(third & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 struct ManifestWorkspaceResolver {
@@ -4405,7 +5721,7 @@ impl PluginDescriptor for ManifestWorkspaceResolver {
     }
 
     fn version(&self) -> &'static str {
-        "0.1.0"
+        env!("CARGO_PKG_VERSION")
     }
 
     fn display_name(&self) -> &'static str {
@@ -4439,7 +5755,7 @@ impl PluginDescriptor for SnapshotIntegrityGate {
     }
 
     fn version(&self) -> &'static str {
-        "0.1.0"
+        env!("CARGO_PKG_VERSION")
     }
 
     fn display_name(&self) -> &'static str {
@@ -4502,7 +5818,7 @@ impl PluginDescriptor for TraversalCompletenessGate {
     }
 
     fn version(&self) -> &'static str {
-        "0.1.0"
+        env!("CARGO_PKG_VERSION")
     }
 
     fn display_name(&self) -> &'static str {
@@ -4985,6 +6301,29 @@ mod tests {
                 && capability.category == "storage_engine"
                 && capability.implementation_available
         }));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_phase1_corruption_recovery_is_reported_by_daemon_api() {
+        let temp = std::env::temp_dir().join(format!(
+            "synevid_ui_storage_recovery_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join(".autopsy")).unwrap();
+        let db_path = temp.join(".autopsy/storage.db");
+        let _ = StorageEngine::open(&db_path, autopsy_storage::StorageOptions::default()).unwrap();
+        fs::write(&db_path, b"not-a-sqlite-database").unwrap();
+
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+        let discovery: serde_json::Value =
+            serde_json::from_str(&server.handle_service_discovery()).unwrap();
+        assert_eq!(
+            discovery["storage_recovery"]["error_code"],
+            autopsy_storage::ERR_STORAGE_CORRUPTION_RECOVERED
+        );
+        assert!(temp.join(".autopsy/storage.db.bak").is_file());
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -5780,11 +7119,33 @@ mod tests {
         assert_eq!(commits[0]["oid"], commit_oid);
 
         // Test GET /api/v1/git/time-travel
-        let tt_url = format!("/api/v1/git/time-travel?oid={}&dim=3d", commit_oid);
+        let tt_url = format!("/api/v1/git/time-travel/{}?dim=3d", commit_oid);
         let tt_json = server.handle_git_time_travel(&tt_url);
         let tt_val: serde_json::Value = serde_json::from_str(&tt_json).unwrap();
         assert_eq!(tt_val["oid"], commit_oid);
         assert_eq!(tt_val["dimensions"], "3D");
+
+        let diff_url = format!("/api/v1/git/diff/{0}/{0}", commit_oid);
+        let diff_val: serde_json::Value =
+            serde_json::from_str(&server.handle_git_diff(&diff_url)).unwrap();
+        assert_eq!(diff_val["base_oid"], commit_oid);
+        assert!(
+            !diff_val["result_digest"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty()
+        );
+
+        let blame_url = format!("/api/v1/git/blame?path=core.ts&oid={}", commit_oid);
+        let blame_val: serde_json::Value =
+            serde_json::from_str(&server.handle_git_blame(&blame_url)).unwrap();
+        assert_eq!(blame_val["path"], "core.ts");
+        assert!(
+            !blame_val["result_digest"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty()
+        );
 
         // Test POST /api/v1/git/branch (create)
         let branch_json = server.handle_git_branch(
@@ -5842,6 +7203,11 @@ mod tests {
     fn test_cross_platform_path_normalization() {
         let win_wsl_unc = r"\\wsl.localhost\Ubuntu\home\ravi\Projects Alpha\rea-rea-agents-6.8.0\rea-rea-agents-6.8.0";
         let norm = DashboardServer::normalize_cross_platform_path(win_wsl_unc);
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(norm, PathBuf::from(win_wsl_unc));
+
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             norm,
             PathBuf::from("/home/ravi/Projects Alpha/rea-rea-agents-6.8.0/rea-rea-agents-6.8.0")
@@ -5849,18 +7215,102 @@ mod tests {
 
         let win_wsl_dollar = r"\\wsl$\Ubuntu\home\ravi\test";
         let norm2 = DashboardServer::normalize_cross_platform_path(win_wsl_dollar);
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(norm2, PathBuf::from(win_wsl_dollar));
+
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(norm2, PathBuf::from("/home/ravi/test"));
 
         let win_drive = r"C:\Windows\System32";
         let norm3 = DashboardServer::normalize_cross_platform_path(win_drive);
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(norm3, PathBuf::from("C:/Windows/System32"));
+
         #[cfg(not(target_os = "windows"))]
         assert_eq!(norm3, PathBuf::from("/mnt/c/Windows/System32"));
+    }
+
+    #[test]
+    fn test_native_windows_paths_are_not_rewritten_to_wsl_mounts() {
+        let native = DashboardServer::normalize_cross_platform_path(
+            r"C:\Users\Ravin\Projects\selected-repository",
+        );
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            native,
+            PathBuf::from("C:/Users/Ravin/Projects/selected-repository")
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            native,
+            PathBuf::from("/mnt/c/Users/Ravin/Projects/selected-repository")
+        );
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            DashboardServer::normalize_cross_platform_path(
+                "/mnt/c/Users/Ravin/Projects/selected-repository"
+            ),
+            PathBuf::from("C:/Users/Ravin/Projects/selected-repository")
+        );
+    }
+
+    #[test]
+    fn test_filesystem_browse_does_not_emit_persistent_quick_presets() {
+        let temp =
+            std::env::temp_dir().join(format!("synevid_browse_presets_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp);
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+        let response: serde_json::Value = serde_json::from_str(
+            &server.handle_fs_browse(&format!("/api/v1/fs/browse?path={}", temp.display())),
+        )
+        .unwrap();
+
+        assert_eq!(response["quick_presets"], serde_json::json!([]));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_filesystem_browse_rejects_missing_path_without_parent_fallback() {
+        let temp =
+            std::env::temp_dir().join(format!("synevid_browse_missing_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+        let missing = temp.join("does-not-exist").join("nested");
+        let response: serde_json::Value = serde_json::from_str(
+            &server.handle_fs_browse(&format!("/api/v1/fs/browse?path={}", missing.display())),
+        )
+        .unwrap();
+
+        assert_eq!(response["error_code"], "ERR-FS-001");
+        assert_eq!(response["current_path"], "");
+        assert_eq!(response["directories"], serde_json::json!([]));
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("does not exist"))
+        );
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
     fn test_phase4_forensic_timeline_and_ai_cache_endpoints() {
         let temp = std::env::temp_dir().join(format!("synevid_p4_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&temp);
+        let _ = fs::create_dir_all(temp.join("src"));
+        let _ = fs::write(
+            temp.join("src/PaymentService.ts"),
+            "export function chargeCard(amount: number) { return amount; }\n",
+        );
+        let _ = fs::write(
+            temp.join("src/OrderController.ts"),
+            "import { chargeCard } from './PaymentService';\nexport function checkout(amount: number) { return chargeCard(amount); }\n",
+        );
         let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
 
         // 1. Test POST /api/v1/forensics/sessions/start
@@ -5879,14 +7329,14 @@ mod tests {
         // 2. Test GET /api/v1/forensics/sessions
         let sess_list_json = server.handle_forensic_sessions("/api/v1/forensics/sessions");
         let sess_list: serde_json::Value = serde_json::from_str(&sess_list_json).unwrap();
-        assert!(sess_list["sessions"].as_array().unwrap().len() >= 1);
+        assert!(!sess_list["sessions"].as_array().unwrap().is_empty());
 
         // 3. Test GET /api/v1/forensics/timeline
         let timeline_json =
             server.handle_forensic_timeline("/api/v1/forensics/timeline?session_id=sess_test_p4");
         let timeline_val: serde_json::Value = serde_json::from_str(&timeline_json).unwrap();
         assert_eq!(timeline_val["session"]["session_id"], "sess_test_p4");
-        assert!(timeline_val["events"].as_array().unwrap().len() >= 1);
+        assert!(!timeline_val["events"].as_array().unwrap().is_empty());
         assert!(timeline_val["summary"]["percent_saved"].is_string());
 
         // 4. Test GET /api/v1/forensics/event?seq=1
@@ -5895,11 +7345,33 @@ mod tests {
         assert!(evt_val["event"]["event_seq"].is_number());
         assert!(evt_val["diff"]["blake3_receipt"].is_string());
 
+        // 4b. Explicit MCP/UI actions persist as real trajectory events.
+        let focus_json = server.handle_forensic_event_record(
+            &serde_json::json!({
+                "session_id": "sess_test_p4",
+                "event_type": "canvas_focus",
+                "summary": "Focused the real payment graph",
+                "target_symbol": "PaymentService.chargeCard",
+                "evidence": { "source": "integration-test" }
+            })
+            .to_string(),
+        );
+        let focus_val: serde_json::Value = serde_json::from_str(&focus_json).unwrap();
+        assert_eq!(focus_val["status"], "RECORDED");
+
         // 5. Test POST /api/v1/ai/cache/query (First: CACHED_NEW, Second: UNCHANGED_SINCE_PREVIOUS_STEP)
+        let status: serde_json::Value = serde_json::from_str(&server.handle_status()).unwrap();
+        let snapshot_id = status["snapshot_id"].as_str().unwrap();
+        let storage = server.get_storage_for_active_repo().unwrap();
+        let (nodes, _) = storage.graph_rows_for_snapshot(snapshot_id).unwrap();
+        let target = nodes
+            .iter()
+            .find(|node| node.node_kind == "function")
+            .unwrap();
         let cache_query = serde_json::json!({
             "session_id": "sess_test_p4",
-            "symbol": "PaymentService.chargeCard",
-            "query_kind": "impact"
+            "symbol": target.qualified_name.clone(),
+            "query_kind": "callers"
         })
         .to_string();
         let query1_json = server.handle_ai_cache_query(&cache_query);
@@ -5910,12 +7382,12 @@ mod tests {
         let query2_val: serde_json::Value = serde_json::from_str(&query2_json).unwrap();
         assert_eq!(query2_val["status"], "UNCHANGED_SINCE_PREVIOUS_STEP");
         assert!(query2_val["compact_pointer"].as_bool().unwrap());
-        assert_eq!(query2_val["tokens_saved"], 4000);
+        assert!(query2_val["tokens_saved"].as_i64().unwrap() > 0);
 
         // 6. Test GET /api/v1/ai/ledger
         let ledger_json = server.handle_ai_ledger("/api/v1/ai/ledger?session_id=sess_test_p4");
         let ledger_val: serde_json::Value = serde_json::from_str(&ledger_json).unwrap();
-        assert!(ledger_val["ledger"]["tokens_saved"].as_i64().unwrap() >= 4000);
+        assert!(ledger_val["ledger"]["tokens_saved"].as_i64().unwrap() > 0);
 
         // 7. Test GET /api/v1/ai/config-snippet for clients
         for client in &["claude", "cursor", "windsurf", "vscode", "gemini"] {
@@ -5941,7 +7413,7 @@ mod tests {
 
         let poll_json = server.handle_live_poll("/api/v1/live/poll?since_seq=0");
         let poll_val: serde_json::Value = serde_json::from_str(&poll_json).unwrap();
-        assert!(poll_val["events"].as_array().unwrap().len() >= 1);
+        assert!(!poll_val["events"].as_array().unwrap().is_empty());
 
         // 9. Test export and import trace bundle
         let export_json =
@@ -5960,6 +7432,57 @@ mod tests {
         .to_string();
         let import_res = server.handle_forensic_import(&import_body);
         assert!(import_res.contains("\"success\":true"));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_phase5_analytics_report_formats_are_deterministic() {
+        let temp =
+            std::env::temp_dir().join(format!("synevid_p5_analytics_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join("src")).unwrap();
+        fs::write(
+            temp.join("src/lib.ts"),
+            "export function stableReportValue(input: number) { return input + 1; }\n",
+        )
+        .unwrap();
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+
+        let invalid: serde_json::Value = serde_json::from_str(
+            &server.handle_analytics_report("/api/v1/analytics/report?format=xml"),
+        )
+        .unwrap();
+        assert_eq!(invalid["error_code"], "ERR-ANALYTICS-400");
+
+        let first: serde_json::Value = serde_json::from_str(
+            &server.handle_analytics_report("/api/v1/analytics/report?format=json"),
+        )
+        .unwrap();
+        let second: serde_json::Value = serde_json::from_str(
+            &server.handle_analytics_report("/api/v1/analytics/report?format=json"),
+        )
+        .unwrap();
+        assert_eq!(first["digest"], second["digest"]);
+        assert_eq!(first["content"], second["content"]);
+        assert!(
+            first["content"]
+                .as_str()
+                .unwrap()
+                .contains("synevid.analytics.v1")
+        );
+
+        for (format, extension) in [("markdown", "md"), ("html", "html"), ("sarif", "sarif")] {
+            let envelope: serde_json::Value = serde_json::from_str(
+                &server
+                    .handle_analytics_report(&format!("/api/v1/analytics/report?format={format}")),
+            )
+            .unwrap();
+            assert_eq!(envelope["format"], format);
+            assert!(envelope["filename"].as_str().unwrap().ends_with(extension));
+            assert!(envelope["digest"].as_str().unwrap().starts_with("blake3:"));
+            assert!(!envelope["content"].as_str().unwrap().is_empty());
+        }
 
         let _ = fs::remove_dir_all(temp);
     }

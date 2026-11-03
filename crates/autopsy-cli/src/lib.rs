@@ -1751,6 +1751,7 @@ fn remember_file_artifact(scope: &str, cache_key: &str, artifact: FileAnalysisAr
 /// Parses one file and extracts its file-local model.
 /// Returns None when the file cannot be parsed (caller skips it).
 /// The adapter is selected by the file's classified language.
+#[allow(clippy::too_many_arguments)]
 fn analyze_single_file(
     registry: &PluginRegistry,
     ts_adapter: &TypeScriptAdapter,
@@ -4510,6 +4511,31 @@ fn handle_doctor(cli: &Cli) -> Result<i32, CliError> {
         )
         .unwrap();
         checks_passed = false;
+    }
+
+    // Do not let the doctor probe create .autopsy state for an invalid path.
+    // Apart from producing misleading PASS results, initializing storage here
+    // would turn a missing repository into a real directory on disk and make a
+    // later invocation report the wrong root as healthy.
+    if !checks_passed {
+        writeln!(
+            output,
+            " [ INFO ] Storage and adapter checks skipped because the repository root is invalid"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "================================================================================"
+        )
+        .unwrap();
+        writeln!(output, " Overall Status: DEGRADED / UNHEALTHY").unwrap();
+        writeln!(
+            output,
+            "================================================================================"
+        )
+        .unwrap();
+        print!("{}", String::from_utf8_lossy(&output));
+        return Ok(EXIT_ANALYSIS_ERROR);
     }
 
     // 2. Storage & Cache Check

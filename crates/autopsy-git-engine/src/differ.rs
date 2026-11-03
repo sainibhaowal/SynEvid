@@ -4,6 +4,8 @@
 //! symbol and blast-radius diffs between any two historical commits or branches.
 
 use crate::model::*;
+use crate::semantic;
+use autopsy_diff::{ContractDelta, DiffEngine, DiffInput};
 use autopsy_temporal::git::{GitError, GitObjectStore, flatten_tree};
 use std::path::{Path, PathBuf};
 
@@ -24,10 +26,11 @@ impl GitDiffer {
         base_hex: &str,
         head_hex: &str,
     ) -> Result<SemanticDiffReport, GitError> {
-        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let store = GitObjectStore::discover(&self.repo_root)?;
+        let mut store_for_refs = GitObjectStore::discover(&self.repo_root)?;
         let git_dir = store.git_dir().to_path_buf();
-        let base_oid = crate::reader::resolve_revision(&mut store, &git_dir, base_hex)?;
-        let head_oid = crate::reader::resolve_revision(&mut store, &git_dir, head_hex)?;
+        let base_oid = crate::reader::resolve_revision(&mut store_for_refs, &git_dir, base_hex)?;
+        let head_oid = crate::reader::resolve_revision(&mut store_for_refs, &git_dir, head_hex)?;
 
         let base_commit = store.commit(base_oid)?;
         let head_commit = store.commit(head_oid)?;
@@ -77,13 +80,70 @@ impl GitDiffer {
         deleted_files.sort();
         drifted_contracts.sort();
 
-        let total_changed_files = added_files.len() + modified_files.len() + deleted_files.len();
-        let blast_radius_score =
-            modified_files.len() * 2 + added_files.len() + deleted_files.len() * 3;
+        let before = semantic::analyze_tree(
+            &self.repo_root,
+            &store,
+            base_commit.tree,
+            &format!("git:{base_oid}"),
+        )?;
+        let after = semantic::analyze_tree(
+            &self.repo_root,
+            &store,
+            head_commit.tree,
+            &format!("git:{head_oid}"),
+        )?;
+        let semantic_diff = DiffEngine::compute_diff(DiffInput {
+            before_snapshot_id: before.snapshot_id.clone(),
+            after_snapshot_id: after.snapshot_id.clone(),
+            before_files: &before.files,
+            after_files: &after.files,
+            before_graph: &before.graph,
+            after_graph: &after.graph,
+            before_contracts: &before.contracts,
+            after_contracts: &after.contracts,
+        });
 
-        let verdict = if !drifted_contracts.is_empty() && !deleted_files.is_empty() {
+        for delta in &semantic_diff.contract_deltas {
+            match delta {
+                ContractDelta::Modified {
+                    owner,
+                    is_breaking,
+                    breaking_reasons,
+                    ..
+                } => {
+                    if *is_breaking {
+                        drifted_contracts.push(format!(
+                            "Breaking contract {owner}: {}",
+                            breaking_reasons.join(", ")
+                        ));
+                    }
+                }
+                ContractDelta::Added { contract } => {
+                    drifted_contracts.push(format!("Added contract: {}", contract.owner));
+                }
+                ContractDelta::Removed { contract } => {
+                    drifted_contracts.push(format!("Removed contract: {}", contract.owner));
+                }
+            }
+        }
+        drifted_contracts.sort();
+        drifted_contracts.dedup();
+
+        let total_changed_files = semantic_diff.summary.files_added
+            + semantic_diff.summary.files_modified
+            + semantic_diff.summary.files_deleted;
+        let blast_radius_score = semantic_diff.frontier.impacted_boundary.len()
+            + semantic_diff.frontier.direct_symbols.len();
+        let verdict = if before.coverage_state != autopsy_domain::CoverageState::Verified
+            || after.coverage_state != autopsy_domain::CoverageState::Verified
+        {
+            "UNKNOWN".to_string()
+        } else if semantic_diff.summary.breaking_contract_changes > 0 {
             "BREAKING".to_string()
-        } else if modified_files.len() > 15 || !drifted_contracts.is_empty() {
+        } else if !drifted_contracts.is_empty()
+            || !semantic_diff.symbol_deltas.is_empty()
+            || !semantic_diff.edge_deltas.is_empty()
+        {
             "WARN".to_string()
         } else {
             "PASS".to_string()
@@ -99,6 +159,23 @@ impl GitDiffer {
             blast_radius_score,
             verdict,
             drifted_contracts,
+            result_digest: semantic_diff.diff_digest.clone(),
+            direct_symbols: semantic_diff
+                .frontier
+                .direct_symbols
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            impacted_boundary: semantic_diff
+                .frontier
+                .impacted_boundary
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            symbol_deltas: semantic_diff.symbol_deltas,
+            contract_deltas: semantic_diff.contract_deltas,
+            edge_deltas: semantic_diff.edge_deltas,
+            coverage_state: format!("{:?}", after.coverage_state),
         })
     }
 }

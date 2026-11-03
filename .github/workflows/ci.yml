@@ -93,7 +93,10 @@ jobs:
           key: ${{ matrix.os.name }}-${{ matrix.arch }}
 
       - name: Run Workspace Unit & Integration Tests
-        run: cargo test --workspace --all-targets -- --nocapture
+        # Phase 1 latency assertions measure wake-up and filesystem service
+        # time. Serializing the harness prevents unrelated test binaries from
+        # turning those measurements into scheduler-contention failures.
+        run: cargo test --workspace --all-targets -- --nocapture --test-threads=1
 
       - name: Run Documentation Tests
         run: cargo test --workspace --doc
@@ -209,6 +212,91 @@ jobs:
       - name: Test VS Code Extension (headless, zero-build)
         run: cd apps/vscode-extension && npm test
 
+  electron-native-packaged-smoke:
+    name: Electron Native Packaged Smoke (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Linux headless display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/mcp-server/package-lock.json
+            apps/desktop-electron/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install MCP dependencies
+        working-directory: apps/mcp-server
+        run: npm ci --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop-electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Build unsigned unpacked Electron runtime
+        working-directory: apps/desktop-electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:dir
+
+      - name: Run packaged smoke on Linux virtual display
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop-electron
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:packaged
+
+      - name: Run packaged smoke on Windows and macOS
+        if: runner.os != 'Linux'
+        working-directory: apps/desktop-electron
+        run: npm run smoke:packaged
+
+  phase3-loose-history-performance:
+    name: Phase 3 Loose Git History Budget (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify strict 5,000-loose-commit history budget
+        env:
+          SYNEVID_PHASE3_LOOSE_HISTORY_GATE: '1'
+        run: cargo test --release -p autopsy-git-engine tests::test_phase3_galaxy_5000_commit_acceptance_budget -- --exact --nocapture --test-threads=1
+
   installer-and-wiring-check:
     name: Installer, Update & Host-Wiring Self-Test (offline)
     runs-on: ubuntu-latest
@@ -245,6 +333,8 @@ jobs:
       - schemas-and-configs
       - msrv-check
       - mcp-server-check
+      - electron-native-packaged-smoke
+      - phase3-loose-history-performance
       - installer-and-wiring-check
       - supply-chain-audit
     if: always()

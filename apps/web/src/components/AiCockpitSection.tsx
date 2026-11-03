@@ -71,27 +71,16 @@ export default function AiCockpitSection({
   const handleTestCacheQuery = async () => {
     setQueryStatus('Querying SQLite working cache...');
     try {
-      const res = await fetch('http://127.0.0.1:3333/api/v1/ai/cache/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: activeSessionId || 'sess_default',
-          symbol: testSymbol,
-          query_kind: 'callers',
-        }),
-      });
-      const data = await res.json();
-      setCacheResult(data);
-      setQueryStatus(`Received: ${data.status} (Savings: ${data.status === 'CACHE_POINTER_HIT' ? '92%' : 'Initial store'})`);
-    } catch {
-      setQueryStatus('Demonstrated offline: compact pointer hit (91.5% saved)');
-      setCacheResult({
+      const data = await api.queryAiCache({
+        session_id: activeSessionId || 'sess_default',
         symbol: testSymbol,
-        status: 'CACHE_POINTER_HIT',
-        tokens_spent: 12,
-        tokens_saved: 2400,
-        receipt: `rcpt_${testSymbol}_v1`,
+        query_kind: 'callers',
       });
+      setCacheResult(data);
+      setQueryStatus(`Received: ${data.status} (${data.tokens_saved || 0} measured tokens saved)`);
+    } catch (error) {
+      setQueryStatus(error instanceof Error ? error.message : 'Working-cache query failed');
+      setCacheResult(null);
     }
   };
 

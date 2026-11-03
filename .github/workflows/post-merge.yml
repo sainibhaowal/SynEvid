@@ -39,6 +39,11 @@ jobs:
       - name: Verify Architecture Boundaries
         run: ./scripts/verify-arch-boundaries.sh
 
+      - name: Verify strict 5,000-loose-commit history budget on native Linux
+        env:
+          SYNEVID_PHASE3_LOOSE_HISTORY_GATE: '1'
+        run: cargo test --release -p autopsy-git-engine tests::test_phase3_galaxy_5000_commit_acceptance_budget -- --exact --nocapture --test-threads=1
+
   cross-platform-builds:
     name: Build Release Binary (${{ matrix.target }})
     needs: post-merge-audit
@@ -184,9 +189,101 @@ jobs:
           name: autopsy-${{ matrix.target }}
           path: artifacts/
 
+  electron-desktop-builds:
+    name: Electron Desktop Artifacts (${{ matrix.name }})
+    needs: post-merge-audit
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            command: dist:win
+          - name: macOS
+            os: macos-latest
+            command: dist:mac
+          - name: Linux
+            os: ubuntu-latest
+            command: dist:linux
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot rpm ruby ruby-dev build-essential xvfb
+          sudo gem install --no-document fpm
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/mcp-server/package-lock.json
+            apps/desktop-electron/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install MCP dependencies
+        working-directory: apps/mcp-server
+        run: npm ci --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop-electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Electron release artifacts
+        working-directory: apps/desktop-electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run ${{ matrix.command }}
+
+      - name: Verify all native Electron artifacts exist
+        working-directory: apps/desktop-electron
+        env:
+          SYNEVID_RELEASE_OS: ${{ runner.os == 'Windows' && 'win32' || runner.os == 'macOS' && 'darwin' || 'linux' }}
+        run: npm run verify:artifacts
+
+      - name: Run packaged smoke test on Linux virtual display
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop-electron
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:packaged
+
+      - name: Run packaged smoke test on Windows and macOS
+        if: runner.os != 'Linux'
+        working-directory: apps/desktop-electron
+        run: npm run smoke:packaged
+
+      - name: Upload Electron artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: synevid-electron-${{ matrix.name }}
+          path: |
+            apps/desktop-electron/dist/*.exe
+            apps/desktop-electron/dist/*.msi
+            apps/desktop-electron/dist/*.dmg
+            apps/desktop-electron/dist/*.zip
+            apps/desktop-electron/dist/*.AppImage
+            apps/desktop-electron/dist/*.deb
+            apps/desktop-electron/dist/*.rpm
+          if-no-files-found: error
+
   release-manifest:
     name: Generate Aggregated Release Manifest, SBOM & Provenance
-    needs: cross-platform-builds
+    needs: [cross-platform-builds, electron-desktop-builds]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -213,7 +310,7 @@ jobs:
       - name: Consolidate Release Bundle, Manifests & SHA256SUMS
         run: |
           mkdir -p release-bundle
-          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-bundle/ \;
+          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-bundle/ \;
           cp sbom-autopsy-cli.cdx.json release-bundle/
           cd release-bundle
           sha256sum * > SHA256SUMS.txt

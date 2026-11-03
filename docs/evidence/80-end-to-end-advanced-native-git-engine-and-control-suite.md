@@ -1,5 +1,7 @@
 # Production Evidence Receipt 80: End-to-End Advanced Native Git Engine, Explorer Git Overlays, and Interactive Terminal Workbench (v0.4.0)
 
+> Historical receipt notice (2026-11-01): this document records the earlier implementation snapshot. Its completion/performance claims are superseded by [evidence 97](97-phase3-end-to-end-closure.md), which records the current functional verification and the remaining 5,000-commit and first-frame latency gaps.
+
 **Date:** 2026-10-28  
 **Author:** Synevid Core Systems Engineering Team  
 **Milestone:** Phase 3 (`v0.4.0`) — End-to-End Advanced Native Git Engine, Visual Time-Travel Galaxy & Full Git Control UI  

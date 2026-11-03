@@ -2,6 +2,7 @@
 /target/
 Cargo.lock
 dist/
+/apps/desktop-electron/build/
 
 # Test Coverage & Profiling Artifacts
 coverage/

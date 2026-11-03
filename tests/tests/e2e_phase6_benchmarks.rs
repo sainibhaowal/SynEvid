@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +33,40 @@ fn count_ts_files(dir: &Path) -> usize {
         }
     }
     count
+}
+
+/// Resolve a usable Python runtime without relying on a developer's virtualenv
+/// or a stale WindowsApps alias. `PYTHON` is an explicit escape hatch for CI;
+/// otherwise use the first launcher that can execute `--version`.
+fn python_command() -> (String, Vec<String>) {
+    if let Ok(explicit) = env::var("PYTHON")
+        && !explicit.trim().is_empty()
+    {
+        return (explicit, Vec::new());
+    }
+
+    let candidates: Vec<(&str, Vec<&str>)> = if cfg!(windows) {
+        vec![
+            ("python3", Vec::new()),
+            ("python", Vec::new()),
+            ("py", vec!["-3"]),
+        ]
+    } else {
+        vec![("python3", Vec::new()), ("python", Vec::new())]
+    };
+
+    for (program, prefix_args) in candidates {
+        let mut probe = Command::new(program);
+        probe.args(&prefix_args).arg("--version");
+        if probe.output().is_ok_and(|output| output.status.success()) {
+            return (
+                program.to_owned(),
+                prefix_args.into_iter().map(str::to_owned).collect(),
+            );
+        }
+    }
+
+    panic!("Python runtime not found; install Python 3.11+ or set the PYTHON environment variable");
 }
 
 #[test]
@@ -192,7 +227,9 @@ fn test_benchmark_harness_execution_and_pre_registered_gate() {
     let _ = fs::remove_dir_all(&temp_out);
     fs::create_dir_all(&temp_out).unwrap();
 
-    let mut cmd = Command::new("python3");
+    let (python_program, python_prefix_args) = python_command();
+    let mut cmd = Command::new(python_program);
+    cmd.args(python_prefix_args);
     cmd.arg(&runner_script)
         .arg("--check-gate")
         .arg("--output-dir")

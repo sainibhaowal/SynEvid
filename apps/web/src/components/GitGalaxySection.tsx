@@ -43,6 +43,7 @@ import {
   FileStatusItem,
   FileDiffReport,
   BisectReport,
+  BlameReport,
 } from '@/lib/api';
 
 interface GitGalaxySectionProps {
@@ -77,6 +78,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
   const [activeDiffPath, setActiveDiffPath] = useState<string | null>(null);
   const [fileDiff, setFileDiff] = useState<FileDiffReport | null>(null);
   const [diffFileLoading, setDiffFileLoading] = useState<boolean>(false);
+  const [blameReport, setBlameReport] = useState<BlameReport | null>(null);
 
   // Commit Form State
   const [commitType, setCommitType] = useState<string>('feat');
@@ -147,6 +149,24 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
     } finally {
       setStatusLoading(false);
     }
+  }, [activeDiffPath]);
+
+  // Line-level blame is read from native Git objects and is independent from
+  // the visual canvas. Selecting a commit can jump back to the Galaxy tab.
+  useEffect(() => {
+    if (!activeDiffPath) {
+      setBlameReport(null);
+      return;
+    }
+    let cancelled = false;
+    api.getGitBlame(activeDiffPath).then((report) => {
+      if (!cancelled) setBlameReport(report);
+    }).catch(() => {
+      if (!cancelled) setBlameReport(null);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeDiffPath]);
 
   useEffect(() => {
@@ -1297,6 +1317,9 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                   >
                     Stage File
                   </button>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                    {blameReport ? `${blameReport.lines.length} blamed lines` : 'Blame loading...'}
+                  </span>
                 </div>
               )}
             </div>
@@ -1340,6 +1363,26 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                 </div>
               )}
             </div>
+            {blameReport && blameReport.lines.length > 0 && (
+              <div className="max-h-28 overflow-y-auto border-t border-[var(--border-subtle)] bg-[var(--card-elevated)] p-2 space-y-1">
+                <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Semantic line blame</div>
+                {blameReport.lines.slice(0, 40).map((line) => (
+                  <button
+                    key={`${line.line}:${line.commit_oid}`}
+                    onClick={() => {
+                      setSelectedCommitOid(line.commit_oid);
+                      setActiveTab('dag');
+                    }}
+                    className="w-full text-left text-[10px] font-mono text-[var(--text-secondary)] hover:text-violet-300 truncate"
+                    title={`Jump to ${line.commit_oid}`}
+                  >
+                    <span className="text-[var(--text-muted)] mr-2">{line.line}</span>
+                    <span className="text-violet-400 mr-2">{line.commit_oid.slice(0, 7)}</span>
+                    <span>{line.author}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

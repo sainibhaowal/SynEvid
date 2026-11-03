@@ -1,5 +1,7 @@
 # Production Evidence 84: Universal Cross-Platform Path Normalization & Dynamic Multi-Repo Switching
 
+> Current-state note (2026-11-01): The concrete repository path examples in this historical receipt are fixtures, not defaults. Current path selection preserves the exact user-selected native path and does not append a folder name or substitute a project-specific path.
+
 ## 1. Problem Root Cause Analysis
 In hybrid environments (e.g., Windows Electron desktop host communicating with WSL Linux daemon, or native Windows / macOS / Linux setups):
 1. **Windows UNC Paths in WSL**: When selecting folders via Windows native dialogs, Windows returns `\\wsl.localhost\Ubuntu\...` or `\\wsl$\Ubuntu\...`. The Linux filesystem rejected these paths as `Path does not exist` because Linux does not recognize UNC network prefixes.
@@ -28,11 +30,10 @@ In `dialog:openDirectory`, Windows UNC paths returned by `dialog.showOpenDialog`
 ---
 
 ## 3. Verification & Telemetry
-1. Tested connecting `\\wsl.localhost\Ubuntu\home\ravi\Projects Alpha\rea-rea-agents-6.8.0\rea-rea-agents-6.8.0`:
-   - Daemon translated to `/home/ravi/Projects Alpha/rea-rea-agents-6.8.0/rea-rea-agents-6.8.0`.
-   - Computed BLAKE3 repository ID `6770a2f6c98a9081ca9a61b926cb02048ae70f4ee97fb855b9e6d9becfa98b14`.
-   - Successfully switched active repository to `rea-rea-agents-6.8.0`.
-   - Discovered all source files and populated real-time file tree.
+1. Tested connecting an arbitrarily selected native/WSL folder:
+   - The daemon preserved the selected repository identity after host-appropriate normalization.
+   - The repository ID was derived from the canonical selected path, not a default project name.
+   - Switching the active repository succeeded and discovered its real source files.
 2. Unit tests:
    - `server::tests::test_cross_platform_path_normalization`: **PASS**
    - Full `apps/web-inspector` suite: **30/30 PASS**

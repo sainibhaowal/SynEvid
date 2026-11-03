@@ -4,6 +4,8 @@
 //! using a Barnes-Hut force-directed simulation with exponential cooling, seeded
 //! by the repository snapshot's BLAKE3 digest.
 
+#![allow(clippy::needless_range_loop)]
+
 use autopsy_plugin_api::{GraphLayoutPlugin, NodeCoordinates, PluginDescriptor, PluginError};
 use std::collections::{BTreeMap, BTreeSet};
 

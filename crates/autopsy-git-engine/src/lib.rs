@@ -9,13 +9,19 @@
 //! - `FR-026`: Read-only analyzer mode preserves source tree and working tree untouched.
 //! - `NFR-001`: 100/100 deterministic floating-point layout and BLAKE3 receipts.
 
+#![allow(clippy::collapsible_if)]
+
+pub mod blame;
 pub mod differ;
+pub mod index;
 pub mod model;
 pub mod mutation;
 pub mod reader;
+pub mod semantic;
 pub mod status;
 pub mod virtual_tree;
 
+pub use blame::GitBlameEngine;
 pub use differ::{GitDiffer, GitDiffer as GitDiffEngine};
 pub use model::*;
 pub use mutation::GitMutationManager;

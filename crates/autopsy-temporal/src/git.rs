@@ -24,11 +24,12 @@
 
 use flate2::read::ZlibDecoder;
 use sha1::{Digest, Sha1};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use thiserror::Error;
 
 /// Upper bound on a single decompressed object, guarding against zlib bombs.
@@ -72,11 +73,15 @@ pub struct ObjectId(pub [u8; 20]);
 impl ObjectId {
     /// Renders the canonical 40-character lowercase hex form.
     pub fn to_hex(self) -> String {
-        let mut s = String::with_capacity(40);
-        for b in self.0 {
-            s.push_str(&format!("{b:02x}"));
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = [0_u8; 40];
+        for (index, byte) in self.0.into_iter().enumerate() {
+            out[index * 2] = HEX[(byte >> 4) as usize];
+            out[index * 2 + 1] = HEX[(byte & 0x0f) as usize];
         }
-        s
+        // The lookup table contains ASCII bytes only, so this conversion is
+        // infallible and avoids one formatting allocation per byte.
+        String::from_utf8(out.to_vec()).expect("hex lookup table is ASCII")
     }
 
     /// Parses 40 hex characters. Rejects any other length or charset.
@@ -382,14 +387,23 @@ impl PackEntryKind {
     }
 }
 
+type RawObject = (String, Vec<u8>);
+type PackedOffset = (usize, u64);
+
 /// A read-only git object database supporting loose and packed objects.
 #[derive(Debug)]
 pub struct GitObjectStore {
     git_dir: PathBuf,
     loose_objects_dir: PathBuf,
+    has_loose_objects: bool,
     packs: Vec<PackedObjects>,
     packed_refs: BTreeMap<String, ObjectId>,
     resolved_refs: BTreeMap<String, ObjectId>,
+    // These are private hot-path caches. Their iteration order is never
+    // serialized, so hash maps reduce lookup overhead without affecting
+    // deterministic output ordering.
+    raw_cache: Mutex<HashMap<ObjectId, RawObject>>,
+    packed_offset_cache: Mutex<HashMap<PackedOffset, RawObject>>,
 }
 
 /// A single `.pack` / `.idx` pair with in-memory pack cache.
@@ -462,15 +476,30 @@ impl GitObjectStore {
         }
 
         let loose_objects_dir = git_dir.join("objects");
+        let has_loose_objects = fs::read_dir(&loose_objects_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+            .any(|entry| {
+                fs::read_dir(entry.path())
+                    .ok()
+                    .and_then(|mut children| children.next())
+                    .is_some()
+            });
         let packed_refs = Self::load_packed_refs(&git_dir)?;
         let packs = Self::load_packs(&loose_objects_dir)?;
 
         Ok(Self {
             git_dir,
             loose_objects_dir,
+            has_loose_objects,
             packs,
             packed_refs,
             resolved_refs: BTreeMap::new(),
+            raw_cache: Mutex::new(HashMap::new()),
+            packed_offset_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -579,6 +608,128 @@ impl GitObjectStore {
         self.packs.iter().map(|p| p.index.oids.len()).sum()
     }
 
+    /// Warm a bounded packed-object history in parallel.
+    ///
+    /// Large history views otherwise follow a linear parent chain and pay one
+    /// zlib decode at a time even though every indexed pack entry is already
+    /// resident in memory. This is an in-memory read-only optimization: it
+    /// never writes the repository, and cache population does not affect the
+    /// deterministic order or bytes returned by any public API. The bound is
+    /// deliberate so a repository with a very large asset pack is not scanned
+    /// merely because a caller requested a large history window.
+    pub fn preload_packed_objects(&self, max_objects: usize) {
+        let mut total_objects = 0usize;
+        for (pack_index, pack) in self.packs.iter().enumerate() {
+            if total_objects.saturating_add(pack.index.oids.len()) > max_objects {
+                return;
+            }
+            total_objects = total_objects.saturating_add(pack.index.oids.len());
+            if pack.index.oids.len() < 2 {
+                continue;
+            }
+
+            // The index is sorted by object id, while decompression benefits
+            // from visiting pack entries in their physical offset order. Keep
+            // the known offsets so each worker avoids a second index lookup and
+            // pack scan. This only changes cache-warming order; public output
+            // remains sorted by the caller's deterministic DAG traversal.
+            let mut entries: Vec<(u64, ObjectId)> = pack
+                .index
+                .oids
+                .iter()
+                .copied()
+                .zip(pack.index.offsets.iter().copied())
+                .map(|(oid, offset)| (offset, oid))
+                .collect();
+            entries.sort_unstable_by_key(|(offset, _)| *offset);
+
+            let workers = std::thread::available_parallelism()
+                .map(|count| count.get().min(16))
+                .unwrap_or(2)
+                .min(entries.len());
+            let chunk_size = entries.len().div_ceil(workers);
+            std::thread::scope(|scope| {
+                for chunk in entries.chunks(chunk_size) {
+                    scope.spawn(move || {
+                        for (offset, oid) in chunk.iter().copied() {
+                            // A later authoritative read reports malformed
+                            // data normally; prefetch is only a latency
+                            // optimization.
+                            if let Ok(object) = self.read_packed(pack_index, pack, offset, oid, 0)
+                                && let Ok(mut cache) = self.raw_cache.lock()
+                            {
+                                cache.insert(oid, object);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    /// Warm a bounded loose-object history in parallel.
+    ///
+    /// This mirrors [`Self::preload_packed_objects`] for repositories before
+    /// maintenance has packed their objects. Only canonical two-hex fanout
+    /// files are considered; `info/`, `pack/`, and symlinks are ignored.
+    pub fn preload_loose_objects(&self, max_objects: usize) {
+        if !self.has_loose_objects {
+            return;
+        }
+        let mut oids = Vec::new();
+        let Ok(prefixes) = fs::read_dir(&self.loose_objects_dir) else {
+            return;
+        };
+        for prefix_entry in prefixes.flatten() {
+            let prefix_path = prefix_entry.path();
+            let Ok(prefix_type) = prefix_entry.file_type() else {
+                continue;
+            };
+            if !prefix_type.is_dir() {
+                continue;
+            }
+            let prefix = prefix_entry.file_name().to_string_lossy().to_string();
+            if prefix.len() != 2 || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                continue;
+            }
+            let Ok(objects) = fs::read_dir(prefix_path) else {
+                continue;
+            };
+            for object_entry in objects.flatten() {
+                let Ok(object_type) = object_entry.file_type() else {
+                    continue;
+                };
+                if !object_type.is_file() {
+                    continue;
+                }
+                let suffix = object_entry.file_name().to_string_lossy().to_string();
+                if suffix.len() != 38 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    continue;
+                }
+                if let Ok(oid) = ObjectId::from_hex(&format!("{prefix}{suffix}")) {
+                    oids.push(oid);
+                }
+            }
+        }
+        if oids.len() < 2 || oids.len() > max_objects {
+            return;
+        }
+        let workers = std::thread::available_parallelism()
+            .map(|count| count.get().min(16))
+            .unwrap_or(2)
+            .min(oids.len());
+        let chunk_size = oids.len().div_ceil(workers);
+        std::thread::scope(|scope| {
+            for chunk in oids.chunks(chunk_size) {
+                scope.spawn(move || {
+                    for oid in chunk {
+                        let _ = self.raw_object(*oid, 0);
+                    }
+                });
+            }
+        });
+    }
+
     /// Reads and decodes any object by id.
     pub fn object(&self, oid: ObjectId) -> Result<GitObject, GitError> {
         let (kind, data) = self.raw_object(oid, 0)?;
@@ -658,13 +809,28 @@ impl GitObjectStore {
             )));
         }
 
-        if let Some(loose) = self.read_loose(oid)? {
+        if let Ok(cache) = self.raw_cache.lock()
+            && let Some(object) = cache.get(&oid)
+        {
+            return Ok(object.clone());
+        }
+
+        if self.has_loose_objects
+            && let Some(loose) = self.read_loose(oid)?
+        {
+            if let Ok(mut cache) = self.raw_cache.lock() {
+                cache.insert(oid, loose.clone());
+            }
             return Ok(loose);
         }
 
-        for pack in &self.packs {
+        for (pack_index, pack) in self.packs.iter().enumerate() {
             if let Some(offset) = pack.index.offset_of(oid) {
-                return self.read_packed(pack, offset, oid, depth);
+                let object = self.read_packed(pack_index, pack, offset, oid, depth)?;
+                if let Ok(mut cache) = self.raw_cache.lock() {
+                    cache.insert(oid, object.clone());
+                }
+                return Ok(object);
             }
         }
 
@@ -675,10 +841,11 @@ impl GitObjectStore {
     fn read_loose(&self, oid: ObjectId) -> Result<Option<(String, Vec<u8>)>, GitError> {
         let hex = oid.to_hex();
         let path = self.loose_objects_dir.join(&hex[0..2]).join(&hex[2..]);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let compressed = fs::read(&path).map_err(|e| io_err(&path, e))?;
+        let compressed = match fs::read(&path) {
+            Ok(compressed) => compressed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_err(&path, error)),
+        };
         let inflated = inflate(&compressed, &hex)?;
         let (kind, payload) = split_loose_header(&inflated)?;
         Ok(Some((kind, payload)))
@@ -687,11 +854,17 @@ impl GitObjectStore {
     /// Reads an object stored at a pack offset, resolving delta chains.
     fn read_packed(
         &self,
+        pack_index: usize,
         pack: &PackedObjects,
         offset: u64,
         oid: ObjectId,
         depth: usize,
     ) -> Result<(String, Vec<u8>), GitError> {
+        if let Ok(cache) = self.packed_offset_cache.lock()
+            && let Some(object) = cache.get(&(pack_index, offset))
+        {
+            return Ok(object.clone());
+        }
         let bytes = &pack.pack_data;
         let at = offset as usize;
 
@@ -731,7 +904,7 @@ impl GitObjectStore {
             }
         }
 
-        match kind {
+        let object = match kind {
             PackEntryKind::OfsDelta => {
                 // Negative offset to the base, big-endian, 7 bits per byte.
                 let mut b = bytes
@@ -751,7 +924,8 @@ impl GitObjectStore {
                     .checked_sub(base_rel)
                     .ok_or_else(|| GitError::Malformed("ofs-delta base underflow".into()))?;
 
-                let (kind_name, base) = self.read_packed_at(bytes, base_offset, depth + 1)?;
+                let (kind_name, base) =
+                    self.read_packed_at(pack_index, bytes, base_offset, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
@@ -777,18 +951,28 @@ impl GitObjectStore {
                     .ok_or_else(|| GitError::Malformed("unexpected delta kind".into()))?;
                 Ok((name.to_string(), data))
             }
+        }?;
+        if let Ok(mut cache) = self.packed_offset_cache.lock() {
+            cache.insert((pack_index, offset), object.clone());
         }
+        Ok(object)
     }
 
     /// Reads a pack object at an offset without a known id (delta bases).
     fn read_packed_at(
         &self,
+        pack_index: usize,
         bytes: &[u8],
         offset: u64,
         depth: usize,
     ) -> Result<(String, Vec<u8>), GitError> {
         if depth > MAX_DELTA_DEPTH {
             return Err(GitError::Malformed("delta chain too deep".into()));
+        }
+        if let Ok(cache) = self.packed_offset_cache.lock()
+            && let Some(object) = cache.get(&(pack_index, offset))
+        {
+            return Ok(object.clone());
         }
         let at = offset as usize;
         let mut cursor = at;
@@ -807,7 +991,7 @@ impl GitObjectStore {
             cursor += 1;
         }
 
-        match kind {
+        let object = match kind {
             PackEntryKind::OfsDelta => {
                 let mut b = *bytes
                     .get(cursor)
@@ -824,7 +1008,8 @@ impl GitObjectStore {
                 let base_offset = offset
                     .checked_sub(base_rel)
                     .ok_or_else(|| GitError::Malformed("ofs-delta base underflow".into()))?;
-                let (kind_name, base) = self.read_packed_at(bytes, base_offset, depth + 1)?;
+                let (kind_name, base) =
+                    self.read_packed_at(pack_index, bytes, base_offset, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, "<delta>")?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
@@ -848,7 +1033,11 @@ impl GitObjectStore {
                     .ok_or_else(|| GitError::Malformed("unexpected delta kind".into()))?;
                 Ok((name.to_string(), data))
             }
+        }?;
+        if let Ok(mut cache) = self.packed_offset_cache.lock() {
+            cache.insert((pack_index, offset), object.clone());
         }
+        Ok(object)
     }
 }
 

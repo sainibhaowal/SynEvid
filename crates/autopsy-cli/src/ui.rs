@@ -16,18 +16,16 @@ use autopsy_graph_layout::DeterministicForceLayout;
 use autopsy_impact::{ImpactDirection, ImpactEngine, ImpactProfile, ImpactQuery};
 use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
 use autopsy_plugin_api::{GraphLayoutPlugin, PluginRegistry};
-use autopsy_storage::{EgoNetwork, GraphEdgeRow, GraphNodeRow, RepoRecord, StorageEngine};
+use autopsy_storage::{RepoRecord, StorageEngine};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
-
-static GLOBAL_SEQ_ID: AtomicI64 = AtomicI64::new(100);
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectRepoRequest {
@@ -168,13 +166,15 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
             repo_id: repo_id.clone(),
             root_path: root_canon.to_string_lossy().to_string(),
             display_name,
-            active_branch: Some("main".to_string()),
+            // Registration is metadata only. Do not invent a branch,
+            // snapshot, language inventory, or index sequence before the
+            // repository has actually been analyzed.
+            active_branch: None,
             head_commit_oid: None,
-            latest_snap_id: Some("snap_active_worktree".to_string()),
-            languages_json: "[\"typescript\",\"rust\",\"python\",\"go\",\"java\",\"csharp\"]"
-                .to_string(),
+            latest_snap_id: None,
+            languages_json: "[]".to_string(),
             monorepo_json: "{}".to_string(),
-            last_indexed_seq: 1,
+            last_indexed_seq: 0,
         };
         let _ = st.register_repository(&repo);
     }
@@ -262,13 +262,13 @@ pub fn handle_ui(cli: &Cli, port: u16, host: &str, open: bool) -> Result<i32, Cl
             // Phase 1 In-Memory Live Simulation (<50ms) (FR-P1-004)
             (&Method::Post, "/api/v1/simulate/edit") => {
                 let body = read_body(&mut request);
-                let res = handle_simulate_edit(&body);
+                let res = handle_simulate_edit(&body, &cli.repo_root);
                 respond_json(request, &res);
             }
 
             // Phase 1 Live SSE Stream (FR-P1-005)
             (&Method::Get, "/api/v1/live") => {
-                handle_live_sse(request, &active_repo_id);
+                handle_live_sse(request, &active_repo_id, &storage_arc, &req_url);
             }
 
             // Legacy & Compatibility Endpoints
@@ -396,13 +396,12 @@ fn handle_connect_repo(
                 repo_id: repo_id.clone(),
                 root_path: canon.to_string_lossy().to_string(),
                 display_name,
-                active_branch: Some("main".to_string()),
+                active_branch: None,
                 head_commit_oid: None,
-                latest_snap_id: Some("snap_active".to_string()),
-                languages_json: "[\"typescript\",\"rust\",\"python\",\"go\",\"java\",\"csharp\"]"
-                    .to_string(),
+                latest_snap_id: None,
+                languages_json: "[]".to_string(),
                 monorepo_json: "{}".to_string(),
-                last_indexed_seq: 1,
+                last_indexed_seq: 0,
             };
 
             let storage_guard = storage.lock().unwrap();
@@ -496,41 +495,45 @@ fn url_decode(s: &str) -> String {
     result
 }
 
-fn handle_fs_browse(url: &str, _repo_root: &Path) -> String {
+fn handle_fs_browse(url: &str, repo_root: &Path) -> String {
     let requested_path = parse_query_param(url, "path");
-    let home_dir = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/home".to_string());
 
     let target_path = match requested_path {
-        Some(ref p) if !p.trim().is_empty() => {
-            let expanded = if p.starts_with('~') {
-                p.replacen('~', &home_dir, 1)
-            } else {
-                p.clone()
-            };
-            PathBuf::from(expanded)
-        }
-        _ => PathBuf::from(&home_dir),
+        Some(ref p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => repo_root.to_path_buf(),
     };
 
     let resolved_dir = if target_path.is_dir() {
         target_path.canonicalize().unwrap_or(target_path)
-    } else if target_path.is_file() {
-        target_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(&home_dir))
-    } else if let Some(parent) = target_path.parent() {
-        if parent.is_dir() {
-            parent
-                .canonicalize()
-                .unwrap_or_else(|_| parent.to_path_buf())
+    } else if target_path.parent().is_some() {
+        let reason = if target_path.exists() {
+            "the selected path is not a directory"
         } else {
-            PathBuf::from(&home_dir)
-        }
+            "the selected directory does not exist"
+        };
+        return serde_json::json!({
+            "error_code": "ERR-FS-001",
+            "error": format!("Cannot browse '{}': {reason}", target_path.display()),
+            "requested_path": target_path.to_string_lossy(),
+            "current_path": "",
+            "parent_path": null,
+            "is_git_repo": false,
+            "directories": [],
+            "quick_presets": []
+        })
+        .to_string();
     } else {
-        PathBuf::from(&home_dir)
+        return serde_json::json!({
+            "error_code": "ERR-FS-001",
+            "error": format!("Cannot browse '{}': the selected directory does not exist", target_path.display()),
+            "requested_path": target_path.to_string_lossy(),
+            "current_path": "",
+            "parent_path": null,
+            "is_git_repo": false,
+            "directories": [],
+            "quick_presets": []
+        })
+        .to_string();
     };
 
     let current_path_str = resolved_dir.to_string_lossy().to_string();
@@ -573,23 +576,12 @@ fn handle_fs_browse(url: &str, _repo_root: &Path) -> String {
         }
     }
 
-    let presets = vec![
-        serde_json::json!({
-            "label": "User Home",
-            "path": home_dir
-        }),
-        serde_json::json!({
-            "label": "Root Filesystem",
-            "path": if cfg!(windows) { "C:\\" } else { "/" }
-        }),
-    ];
-
     serde_json::json!({
         "current_path": current_path_str,
         "parent_path": parent_path_str,
         "is_git_repo": is_git_repo,
         "directories": subdirs,
-        "quick_presets": presets
+        "quick_presets": []
     })
     .to_string()
 }
@@ -617,14 +609,12 @@ fn build_network_topology(
         groups.entry(key).or_default().push(node.clone());
     }
 
-    let mut cluster_id = 1u32;
     let mut group_leaders = Vec::new();
 
-    for (_grp_name, members) in &groups {
+    for (cluster_id, members) in (1u32..).zip(groups.values()) {
         for member in members {
             cluster_map.insert(member.clone(), cluster_id);
         }
-        cluster_id += 1;
 
         if let Some(leader) = members.first() {
             group_leaders.push(leader.clone());
@@ -730,8 +720,8 @@ fn handle_files(
     let items: Vec<serde_json::Value> = discovered
         .into_iter()
         .map(|path| {
-            let ext = path.split('.').last().unwrap_or("").to_lowercase();
-            let name = path.split('/').last().unwrap_or(&path).to_string();
+            let ext = path.split('.').next_back().unwrap_or("").to_lowercase();
+            let name = path.split('/').next_back().unwrap_or(&path).to_string();
             let dir = if let Some(idx) = path.rfind('/') {
                 path[..idx].to_string()
             } else {
@@ -742,7 +732,11 @@ fn handle_files(
                 "name": name,
                 "ext": ext,
                 "dir": dir,
-                "status": "verified"
+                // File discovery is not analysis. Keep this state explicit so
+                // the legacy CLI UI cannot present an unindexed file as a
+                // verified result.
+                "status": "discovered",
+                "coverage_state": "Unknown"
             })
         })
         .collect();
@@ -776,18 +770,7 @@ fn handle_graph_universe(
     }
     drop(storage_guard);
 
-    let discovered = discover_repo_files(&target_dir, 200);
-    let nodes = if discovered.len() >= 3 {
-        discovered
-    } else {
-        vec![
-            "src/index.ts".to_string(),
-            "src/controllers/OrderController.ts".to_string(),
-            "src/services/PaymentService.ts".to_string(),
-            "src/repositories/UserRepository.ts".to_string(),
-            "src/domain/Order.ts".to_string(),
-        ]
-    };
+    let nodes = discover_repo_files(&target_dir, 200);
 
     let (edges, cluster_map) = build_network_topology(&nodes);
 
@@ -816,6 +799,7 @@ fn handle_graph_universe(
         "dimensions": if is_3d { "3D" } else { "2D" },
         "node_count": nodes.len(),
         "edge_count": edges.len(),
+        "coverage_state": if nodes.is_empty() { "Unknown" } else { "Discovered" },
         "nodes": nodes_list,
         "edges": edges.into_iter().map(|(src, dst)| {
             serde_json::json!({ "source": src, "target": dst, "kind": "calls" })
@@ -839,145 +823,293 @@ fn handle_graph_ego(url: &str, storage: &Arc<Mutex<Option<StorageEngine>>>) -> S
             }
             None
         })
-        .unwrap_or_else(|| "PaymentService.chargeCard".to_string());
+        .unwrap_or_default();
+
+    if stable_id.is_empty() {
+        return serde_json::json!({
+            "target_node": null,
+            "incoming_callers": [],
+            "outgoing_callees": [],
+            "coverage_state": "Unknown",
+            "error_code": "ERR-GRAPH-400",
+            "error": "The graph ego request requires a non-empty id"
+        })
+        .to_string();
+    }
 
     let storage_guard = storage.lock().unwrap();
     if let Some(ref st) = *storage_guard {
-        if let Ok(ego) = st.query_ego_network("snap_active_worktree", &stable_id) {
-            if ego.target_node.is_some() {
-                return serde_json::to_string(&ego).unwrap_or_default();
+        if let Ok(repositories) = st.list_repositories() {
+            for repository in repositories {
+                if let Some(snapshot_id) = repository.latest_snap_id {
+                    if let Ok(ego) = st.query_ego_network(&snapshot_id, &stable_id) {
+                        if ego.target_node.is_some() {
+                            return serde_json::to_string(&ego).unwrap_or_default();
+                        }
+                    }
+                }
             }
         }
     }
 
-    serde_json::to_string(&EgoNetwork {
-        target_node: Some(GraphNodeRow {
-            snapshot_id: "snap_active_worktree".to_string(),
-            stable_id: stable_id.clone(),
-            node_kind: "function".to_string(),
-            qualified_name: stable_id.clone(),
-            file_path: "src/services/PaymentService.ts".to_string(),
-            start_line: 35,
-            end_line: 60,
-            signature_hash: "blake3:sig_exact".to_string(),
-            visibility: "public".to_string(),
-            is_exported: true,
-            is_dead_code: false,
-            coverage_state: "verified".to_string(),
-        }),
-        incoming_callers: vec![GraphEdgeRow {
-            snapshot_id: "snap_active_worktree".to_string(),
-            edge_id: "edge_ego_1".to_string(),
-            source_stable_id: "OrderController.createOrder".to_string(),
-            target_stable_id: stable_id.clone(),
-            edge_kind: "calls".to_string(),
-            source_file: "src/controllers/OrderController.ts".to_string(),
-            source_line: 42,
-            source_col: 18,
-            target_file: "src/services/PaymentService.ts".to_string(),
-            target_line: 35,
-            confidence: "exact".to_string(),
-        }],
-        outgoing_callees: vec![GraphEdgeRow {
-            snapshot_id: "snap_active_worktree".to_string(),
-            edge_id: "edge_ego_2".to_string(),
-            source_stable_id: stable_id,
-            target_stable_id: "UserRepository.findById".to_string(),
-            edge_kind: "calls".to_string(),
-            source_file: "src/services/PaymentService.ts".to_string(),
-            source_line: 48,
-            source_col: 10,
-            target_file: "src/repositories/UserRepository.ts".to_string(),
-            target_line: 19,
-            confidence: "exact".to_string(),
-        }],
+    serde_json::json!({
+        "target_node": null,
+        "incoming_callers": [],
+        "outgoing_callees": [],
+        "coverage_state": "Unknown",
+        "error_code": "ERR-GRAPH-404",
+        "error": format!("No analyzed symbol named '{stable_id}' was found")
     })
-    .unwrap_or_default()
+    .to_string()
 }
 
-fn handle_simulate_edit(body: &str) -> String {
+fn handle_simulate_edit(body: &str, repo_root: &Path) -> String {
     let start = Instant::now();
-    let parsed: Result<SimulateEditRequest, _> = serde_json::from_str(body);
-
-    match parsed {
-        Ok(req) => {
-            let mut damaged_callers = Vec::new();
-            let mut newly_dead_symbols = Vec::new();
-            let mut syntax_errors = Vec::new();
-            let broken_imports = Vec::new();
-
-            if req.unsaved_buffer.contains("(((")
-                || req.unsaved_buffer.contains("syntax_error_mock")
-            {
-                syntax_errors
-                    .push("SyntaxError: Unexpected token or unclosed parenthesis".to_string());
-            }
-
-            if req.unsaved_buffer.contains("taxRate: number")
-                || req.unsaved_buffer.contains("strictMode: boolean")
-            {
-                damaged_callers.push(DamagedCallerItem {
-                    stable_id: "OrderController.createPayment".to_string(),
-                    file_path: "src/controllers/OrderController.ts".to_string(),
-                    calling_line: 42,
-                    calling_col: 18,
-                    diagnostic: "Arity mismatch: expected 2 arguments, caller passes 1".to_string(),
-                    severity: "breaking_error".to_string(),
-                });
-            }
-
-            if !req.unsaved_buffer.contains("legacyFormat") && req.unsaved_buffer.len() > 20 {
-                newly_dead_symbols.push(DeadSymbolItem {
-                    stable_id: "PaymentService.legacyFormat".to_string(),
-                    file_path: req.file_path.clone(),
-                    line: 88,
-                    diagnostic: "0 remaining callers across workspace".to_string(),
-                });
-            }
-
-            let elapsed_ms = start.elapsed().as_millis() as u64;
-            let verdict = if !damaged_callers.is_empty() || !syntax_errors.is_empty() {
-                "FAIL"
-            } else if !newly_dead_symbols.is_empty() {
-                "WARN"
-            } else {
-                "PASS"
-            };
-
-            let resp = SimulateEditResponse {
-                verdict: verdict.to_string(),
-                damaged_callers,
-                newly_dead_symbols,
-                broken_imports,
-                syntax_errors,
-                computation_latency_ms: elapsed_ms.min(48),
-            };
-
-            serde_json::to_string(&resp).unwrap_or_default()
+    let request: SimulateEditRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(error) => {
+            return serde_json::json!({
+                "verdict": "UNKNOWN",
+                "error_code": "ERR-SIM-400",
+                "error": error.to_string()
+            })
+            .to_string();
         }
-        Err(e) => serde_json::json!({ "error": e.to_string() }).to_string(),
+    };
+    let relative_path = request.file_path.replace('\\', "/");
+    let invalid_path = relative_path.is_empty()
+        || Path::new(&relative_path).is_absolute()
+        || relative_path.split('/').any(|segment| {
+            segment.is_empty() || segment == ".." || segment == ".git" || segment == ".autopsy"
+        });
+    if invalid_path {
+        return serde_json::json!({
+            "verdict": "UNKNOWN",
+            "error_code": "ERR-SIM-400",
+            "error": "file_path must be a safe repository-relative path",
+            "computation_latency_ms": start.elapsed().as_millis() as u64
+        })
+        .to_string();
     }
+
+    let config = match load_or_default_config(repo_root) {
+        Ok(config) => config,
+        Err(error) => {
+            return serde_json::json!({
+                "verdict": "UNKNOWN",
+                "error_code": "ERR-SIM-500",
+                "error": error.to_string(),
+                "computation_latency_ms": start.elapsed().as_millis() as u64
+            })
+            .to_string();
+        }
+    };
+    let baseline = match build_snapshot_and_graph(repo_root, &config, None, None) {
+        Ok(artifacts) => artifacts,
+        Err(error) => {
+            return serde_json::json!({
+                "verdict": "UNKNOWN",
+                "error_code": "ERR-SIM-501",
+                "error": error.to_string(),
+                "computation_latency_ms": start.elapsed().as_millis() as u64
+            })
+            .to_string();
+        }
+    };
+    if !baseline.snapshot.files.contains_key(&relative_path) {
+        return serde_json::json!({
+            "verdict": "UNKNOWN",
+            "error_code": "ERR-SIM-404",
+            "error": format!("file is not part of the analyzed repository: {relative_path}"),
+            "computation_latency_ms": start.elapsed().as_millis() as u64
+        })
+        .to_string();
+    }
+
+    let parsed =
+        crate::parse_source_buffer(repo_root, &relative_path, request.unsaved_buffer.as_bytes());
+    if !parsed.parser_available || !parsed.syntax_valid {
+        let response = SimulateEditResponse {
+            verdict: if parsed.parser_available {
+                "FAIL"
+            } else {
+                "UNKNOWN"
+            }
+            .to_string(),
+            damaged_callers: Vec::new(),
+            newly_dead_symbols: Vec::new(),
+            broken_imports: Vec::new(),
+            syntax_errors: parsed.diagnostics,
+            computation_latency_ms: start.elapsed().as_millis() as u64,
+        };
+        return serde_json::to_string(&response).unwrap_or_default();
+    }
+
+    let overlays = BTreeMap::from([(relative_path, request.unsaved_buffer.into_bytes())]);
+    let candidate = match crate::build_snapshot_and_graph_with_overlays(
+        repo_root,
+        &config,
+        None,
+        Some(&baseline.snapshot),
+        &overlays,
+        None,
+    ) {
+        Ok(artifacts) => artifacts,
+        Err(error) => {
+            return serde_json::json!({
+                "verdict": "UNKNOWN",
+                "error_code": "ERR-SIM-502",
+                "error": error.to_string(),
+                "computation_latency_ms": start.elapsed().as_millis() as u64
+            })
+            .to_string();
+        }
+    };
+
+    let baseline_ids: BTreeSet<SymbolId> = baseline
+        .graph
+        .all_symbols_sorted()
+        .into_iter()
+        .map(|symbol| symbol.stable_id.clone())
+        .collect();
+    let candidate_ids: BTreeSet<SymbolId> = candidate
+        .graph
+        .all_symbols_sorted()
+        .into_iter()
+        .map(|symbol| symbol.stable_id.clone())
+        .collect();
+    let removed_ids: Vec<SymbolId> = baseline_ids.difference(&candidate_ids).cloned().collect();
+
+    let mut damaged_by_id = BTreeMap::<String, DamagedCallerItem>::new();
+    let impact_engine = ImpactEngine::new();
+    for removed_id in &removed_ids {
+        let Ok(report) = impact_engine.compute_impact(
+            &baseline.graph,
+            &ImpactQuery {
+                seed_symbols: vec![removed_id.clone()],
+                direction: ImpactDirection::Backward,
+                profile: ImpactProfile {
+                    name: "legacy-cli-simulation".to_string(),
+                    max_depth: 10,
+                    budget: 10_000,
+                    edge_kinds: BTreeSet::new(),
+                    traverse_file_nodes: true,
+                },
+            },
+        ) else {
+            continue;
+        };
+        for caller_id in report.impacted_entities {
+            if caller_id == *removed_id {
+                continue;
+            }
+            let Some(caller) = baseline.graph.get_node(&caller_id) else {
+                continue;
+            };
+            let location = caller.range.as_ref();
+            let edge = baseline
+                .graph
+                .all_edges_sorted()
+                .into_iter()
+                .find(|edge| edge.source == caller_id && edge.target == *removed_id);
+            let file_path = edge
+                .and_then(|item| item.location.as_ref())
+                .map(|item| item.path.clone())
+                .or_else(|| location.map(|item| item.path.clone()))
+                .unwrap_or_default();
+            let line = edge
+                .and_then(|item| item.location.as_ref())
+                .map(|item| i64::from(item.start_line))
+                .or_else(|| location.map(|item| i64::from(item.start_line)))
+                .unwrap_or(0);
+            let col = edge
+                .and_then(|item| item.location.as_ref())
+                .and_then(|item| item.start_col)
+                .map(i64::from)
+                .unwrap_or(0);
+            damaged_by_id.insert(
+                caller_id.to_string(),
+                DamagedCallerItem {
+                    stable_id: caller_id.to_string(),
+                    file_path,
+                    calling_line: line,
+                    calling_col: col,
+                    diagnostic: format!("depends on removed symbol {removed_id}"),
+                    severity: "breaking_error".to_string(),
+                },
+            );
+        }
+    }
+
+    let mut broken_imports = Vec::new();
+    for edge in baseline.graph.all_edges_sorted() {
+        if edge.target != edge.source
+            && removed_ids.contains(&edge.target)
+            && matches!(edge.kind, autopsy_domain::EdgeKind::Imports)
+        {
+            broken_imports.push(edge.target.to_string());
+        }
+    }
+    broken_imports.sort();
+    broken_imports.dedup();
+
+    let coverage_verified = baseline.coverage_state == CoverageState::Verified
+        && candidate.coverage_state == CoverageState::Verified;
+    let verdict = if !damaged_by_id.is_empty() || !broken_imports.is_empty() {
+        "FAIL"
+    } else if coverage_verified {
+        "PASS"
+    } else {
+        "UNKNOWN"
+    };
+    let response = SimulateEditResponse {
+        verdict: verdict.to_string(),
+        damaged_callers: damaged_by_id.into_values().collect(),
+        newly_dead_symbols: Vec::new(),
+        broken_imports,
+        syntax_errors: Vec::new(),
+        computation_latency_ms: start.elapsed().as_millis() as u64,
+    };
+    serde_json::to_string(&response).unwrap_or_default()
 }
 
-fn handle_live_sse(req: Request, active_repo_id: &Arc<Mutex<String>>) {
-    let seq = GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst);
-    let event_payload = serde_json::json!({
-        "seq_id": seq,
-        "event_type": "repo.indexed",
-        "timestamp_epoch_ms": 1729900000000u64,
-        "repo_id": *active_repo_id.lock().unwrap(),
-        "payload": {
-            "snapshot_id": "snap_active_worktree",
-            "symbols_count": 142,
-            "edges_count": 318,
-            "coverage_state": "VERIFIED"
-        }
-    });
-
-    let sse_data = format!(
-        "id: {}\nevent: repo.indexed\ndata: {}\n\n",
-        seq, event_payload
-    );
+fn handle_live_sse(
+    req: Request,
+    _active_repo_id: &Arc<Mutex<String>>,
+    storage: &Arc<Mutex<Option<StorageEngine>>>,
+    url: &str,
+) {
+    let since = url
+        .split('?')
+        .nth(1)
+        .and_then(|query| {
+            query.split('&').find_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                (key == "since" || key == "since_seq")
+                    .then(|| value.parse::<i64>().ok())
+                    .flatten()
+            })
+        })
+        .unwrap_or(0);
+    let events = storage
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .and_then(|st| st.live_events_since(since, 500).ok())
+        })
+        .unwrap_or_default();
+    let mut sse_data = String::from("retry: 1000\n\n");
+    for event in events {
+        sse_data.push_str(&format!(
+            "id: {}\nevent: {}\ndata: {}\n\n",
+            event.seq_id, event.event_type, event.data_json
+        ));
+    }
+    if sse_data == "retry: 1000\n\n" {
+        sse_data.push_str(": keep-alive\n\n");
+    }
     let header_event = Header::from_bytes(&b"Content-Type"[..], &b"text/event-stream"[..]).unwrap();
     let header_cache = Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]).unwrap();
     let header_conn = Header::from_bytes(&b"Connection"[..], &b"keep-alive"[..]).unwrap();
@@ -992,6 +1124,20 @@ fn handle_live_sse(req: Request, active_repo_id: &Arc<Mutex<String>>) {
 }
 
 fn api_status(repo_root: &Path) -> String {
+    if !repo_root.is_dir() {
+        return serde_json::json!({
+            "repo_root": repo_root.display().to_string(),
+            "snapshot_id": null,
+            "coverage_state": "Unknown",
+            "files_scanned": 0,
+            "symbol_count": 0,
+            "edge_count": 0,
+            "error_code": "ERR-REPO-001",
+            "error": "Repository directory does not exist",
+            "version": ANALYZER_VERSION
+        })
+        .to_string();
+    }
     let config = load_or_default_config(repo_root).unwrap_or_default();
     if let Ok(artifacts) = build_snapshot_and_graph(repo_root, &config, None, None) {
         let coverage_str = match artifacts.coverage_state {
@@ -1011,14 +1157,15 @@ fn api_status(repo_root: &Path) -> String {
         })
         .to_string()
     } else {
-        let hash = blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex()[..16].to_string();
         serde_json::json!({
             "repo_root": repo_root.display().to_string(),
-            "snapshot_id": hash,
-            "coverage_state": "Verified",
+            "snapshot_id": null,
+            "coverage_state": "Unknown",
             "files_scanned": 0,
             "symbol_count": 0,
             "edge_count": 0,
+            "error_code": "ERR-ANALYSIS-001",
+            "error": "Repository analysis did not complete",
             "version": ANALYZER_VERSION
         })
         .to_string()
@@ -1026,34 +1173,36 @@ fn api_status(repo_root: &Path) -> String {
 }
 
 fn api_verify(repo_root: &Path) -> String {
+    if !repo_root.is_dir() {
+        return serde_json::json!({
+            "snapshot_id": null,
+            "coverage_state": "Unknown",
+            "findings": [],
+            "error_code": "ERR-REPO-001",
+            "error": "Repository directory does not exist"
+        })
+        .to_string();
+    }
     let config = load_or_default_config(repo_root).unwrap_or_default();
     let inv_path = repo_root.join(".autopsy").join("invariants.yml");
     let invariants_config = if inv_path.exists() {
-        InvariantsConfig::load_from_file(&inv_path).unwrap_or_else(|_| InvariantsConfig {
-            version: "0.0.1".to_string(),
-            invariants: vec![],
-        })
+        match InvariantsConfig::load_from_file(&inv_path) {
+            Ok(config) => config,
+            Err(error) => {
+                return serde_json::json!({
+                    "snapshot_id": null,
+                    "coverage_state": "Unknown",
+                    "findings": [],
+                    "error_code": "ERR-VERIFY-400",
+                    "error": error.to_string()
+                })
+                .to_string();
+            }
+        }
     } else {
         InvariantsConfig {
             version: "0.0.1".to_string(),
-            invariants: vec![
-                autopsy_invariants::InvariantRule {
-                    id: "no-circular-deps".to_string(),
-                    description: "No circular dependencies introduced".to_string(),
-                    kind: "no_new_cycle".to_string(),
-                    severity: "error".to_string(),
-                    scope: None,
-                    rule: None,
-                },
-                autopsy_invariants::InvariantRule {
-                    id: "api-compatibility".to_string(),
-                    description: "Public API contract compatibility".to_string(),
-                    kind: "api_compatibility".to_string(),
-                    severity: "error".to_string(),
-                    scope: None,
-                    rule: None,
-                },
-            ],
+            invariants: vec![],
         }
     };
 
@@ -1096,8 +1245,11 @@ fn api_verify(repo_root: &Path) -> String {
         .to_string()
     } else {
         serde_json::json!({
-            "snapshot_id": "none",
-            "findings": []
+            "snapshot_id": null,
+            "coverage_state": "Unknown",
+            "findings": [],
+            "error_code": "ERR-VERIFY-501",
+            "error": "Repository verification did not complete"
         })
         .to_string()
     }
@@ -1125,7 +1277,10 @@ fn api_impact(repo_root: &Path, url: &str) -> String {
             "seed": "",
             "likely_affected": [],
             "possibly_affected": [],
-            "paths": []
+            "paths": [],
+            "coverage_state": "Unknown",
+            "error_code": "ERR-IMPACT-400",
+            "error": "The impact request requires a non-empty seed"
         })
         .to_string();
     }
@@ -1171,7 +1326,10 @@ fn api_impact(repo_root: &Path, url: &str) -> String {
             serde_json::json!({
                 "seed": seed,
                 "likely_affected": [],
-                "possibly_affected": []
+                "possibly_affected": [],
+                "coverage_state": "Unknown",
+                "error_code": "ERR-IMPACT-502",
+                "error": "Impact analysis did not complete"
             })
             .to_string()
         }
@@ -1179,7 +1337,10 @@ fn api_impact(repo_root: &Path, url: &str) -> String {
         serde_json::json!({
             "seed": seed,
             "likely_affected": [],
-            "possibly_affected": []
+            "possibly_affected": [],
+            "coverage_state": "Unknown",
+            "error_code": "ERR-IMPACT-501",
+            "error": "Repository analysis did not complete"
         })
         .to_string()
     }
@@ -1212,13 +1373,17 @@ fn api_graph(repo_root: &Path) -> String {
             "nodes": nodes,
             "edges": edges,
             "total_nodes": artifacts.graph.node_count(),
-            "total_edges": artifacts.graph.edge_count()
+            "total_edges": artifacts.graph.edge_count(),
+            "coverage_state": format!("{:?}", artifacts.coverage_state)
         })
         .to_string()
     } else {
         serde_json::json!({
             "nodes": [],
-            "edges": []
+            "edges": [],
+            "coverage_state": "Unknown",
+            "error_code": "ERR-GRAPH-501",
+            "error": "Repository graph analysis did not complete"
         })
         .to_string()
     }
@@ -1239,13 +1404,17 @@ fn api_contracts(repo_root: &Path) -> String {
         }
         serde_json::json!({
             "contracts": contracts_list,
-            "breaking_changes": []
+            "breaking_changes": [],
+            "coverage_state": format!("{:?}", artifacts.coverage_state)
         })
         .to_string()
     } else {
         serde_json::json!({
             "contracts": [],
-            "breaking_changes": []
+            "breaking_changes": [],
+            "coverage_state": "Unknown",
+            "error_code": "ERR-CONTRACT-501",
+            "error": "Repository contract analysis did not complete"
         })
         .to_string()
     }
@@ -1256,8 +1425,9 @@ fn api_trajectory(repo_root: &Path) -> String {
     let runs_dir = repo_root.join(".autopsy").join("runs");
     if runs_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(runs_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
+            let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+            paths.sort();
+            for p in paths {
                 if p.extension().is_some_and(|e| e == "json") && !p.ends_with("latest.json") {
                     if let Ok(content) = fs::read_to_string(&p) {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -1269,4 +1439,57 @@ fn api_trajectory(repo_root: &Path) -> String {
         }
     }
     serde_json::json!({ "runs": runs }).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ui_never_invents_repository_graph_data() {
+        let storage = Arc::new(Mutex::new(None));
+        let active_repo_id = Arc::new(Mutex::new("missing-repository".to_string()));
+        let response = handle_graph_universe(
+            "/api/v1/graph/universe?dim=3d",
+            &active_repo_id,
+            Path::new("C:/path/that/does/not/exist"),
+            &storage,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["node_count"], 0);
+        assert_eq!(value["coverage_state"], "Unknown");
+        assert!(!response.contains("PaymentService"));
+        assert!(!response.contains("OrderController"));
+    }
+
+    #[test]
+    fn legacy_ui_returns_explicit_unknown_for_missing_analysis() {
+        let status: serde_json::Value =
+            serde_json::from_str(&api_status(Path::new("C:/path/that/does/not/exist"))).unwrap();
+        assert_eq!(status["coverage_state"], "Unknown");
+        assert_eq!(status["error_code"], "ERR-REPO-001");
+
+        let ego: serde_json::Value = serde_json::from_str(&handle_graph_ego(
+            "/api/v1/graph/ego?id=not-indexed",
+            &Arc::new(Mutex::new(None)),
+        ))
+        .unwrap();
+        assert_eq!(ego["target_node"], serde_json::Value::Null);
+        assert_eq!(ego["error_code"], "ERR-GRAPH-404");
+    }
+
+    #[test]
+    fn legacy_ui_simulator_rejects_unsafe_paths_without_a_pass_fallback() {
+        let response = handle_simulate_edit(
+            &serde_json::json!({
+                "file_path": "../outside.ts",
+                "unsaved_buffer": "export const value = 1;"
+            })
+            .to_string(),
+            Path::new("."),
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["verdict"], "UNKNOWN");
+        assert_eq!(value["error_code"], "ERR-SIM-400");
+    }
 }

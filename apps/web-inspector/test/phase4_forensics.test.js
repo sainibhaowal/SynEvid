@@ -18,6 +18,9 @@ test('FR-P4-001: Three-Tier Forensic Trajectory Hierarchy Storage Schema (INV-DE
   assert.ok(content.includes('trajectory_events'), 'Must define trajectory_events table');
   assert.ok(content.includes('ai_working_cache'), 'Must define ai_working_cache table');
   assert.ok(content.includes('ai_session_ledger'), 'Must define ai_session_ledger table');
+  const serverContent = fs.readFileSync(path.join(REPO_ROOT, 'apps/synevid-ui/src/server.rs'), 'utf8');
+  assert.ok(serverContent.includes('send_websocket_events_since'), 'WebSocket clients must receive ordered external events');
+  assert.ok(serverContent.includes('live.poll'), 'Embedded WebSocket clients must have a cursor poll contract');
 });
 
 test('FR-P4-002: Sub-50ms In-Flight Edit Simulation & Cryptographic BLAKE3 Receipts', () => {
@@ -29,6 +32,7 @@ test('FR-P4-002: Sub-50ms In-Flight Edit Simulation & Cryptographic BLAKE3 Recei
   assert.ok(content.includes('computation_latency_ms'), 'Must record computation latency <= 50ms');
   assert.ok(content.includes('blake3::hash'), 'Must generate cryptographic BLAKE3 receipt');
   assert.ok(content.includes('damaged_callers'), 'Must compute damaged callers');
+  assert.ok(content.includes('/api/v1/simulate/edit'), 'Daemon must expose the canonical simulator route');
 });
 
 test('FR-P4-003: AI Zero-Token-Waste Local SQLite Working Cache (FR-014, FR-028)', () => {
@@ -36,9 +40,12 @@ test('FR-P4-003: AI Zero-Token-Waste Local SQLite Working Cache (FR-014, FR-028)
   assert.ok(fs.existsSync(testEfficiencyPath), 'phase4_ai_cache_efficiency.rs benchmark test must exist');
 
   const content = fs.readFileSync(testEfficiencyPath, 'utf8');
-  assert.ok(content.includes('test_phase4_ai_cache_efficiency_benchmark'), 'Must verify token slashing efficiency');
-  assert.ok(content.includes('reduction_percentage >= 60.0'), 'Must enforce >= 60% token reduction invariant');
-  assert.ok(content.includes('UNCHANGED_SINCE_STEP_'), 'Must verify UNCHANGED_SINCE_STEP compact receipts');
+  assert.ok(content.includes('test_phase4_real_edit_simulate_verify_and_working_memory'), 'Must exercise the real edit/verify loop');
+  assert.ok(content.includes('tokens_saved'), 'Must measure savings from persisted cache results');
+  assert.ok(content.includes('UNCHANGED_SINCE_PREVIOUS_STEP'), 'Must verify the persisted pointer receipt');
+  assert.ok(content.includes('for turn in 0..6'), 'Benchmark must cover the required six-turn loop');
+  assert.ok(content.includes('reduction >= 60.0'), 'Benchmark must enforce the >=60% reduction gate');
+  assert.ok(!content.includes('callers_count": 8'), 'Benchmark must not use a fabricated caller count');
 });
 
 test('FR-P4-004: Expanded MCP Tool Surface (21 Tools including 4 Phase 4 Tools)', () => {
@@ -84,4 +91,28 @@ test('FR-P4-007: Deterministic Trace Bundle Export & Import Endpoints', () => {
   assert.ok(content.includes('/api/v1/forensics/export'), 'Must route export endpoint');
   assert.ok(content.includes('/api/v1/forensics/import'), 'Must route import endpoint');
   assert.ok(content.includes('trace_bundle_digest'), 'Must attach trace bundle digest');
+});
+
+test('FR-P4-008: MCP/daemon contract refuses fabricated fallback evidence', () => {
+  const mcpPath = path.join(REPO_ROOT, 'apps/mcp-server/src/server.ts');
+  const apiPath = path.join(REPO_ROOT, 'apps/web/src/lib/api.ts');
+  const timelinePath = path.join(REPO_ROOT, 'apps/web/src/components/ForensicTrajectorySection.tsx');
+  const mcp = fs.readFileSync(mcpPath, 'utf8');
+  const api = fs.readFileSync(apiPath, 'utf8');
+  const timeline = fs.readFileSync(timelinePath, 'utf8');
+  const page = fs.readFileSync(path.join(REPO_ROOT, 'apps/web/src/app/page.tsx'), 'utf8');
+  assert.ok(mcp.includes("postDaemonJson('/api/v1/simulate/edit'"), 'MCP must call the daemon simulator');
+  assert.ok(mcp.includes("daemon_unavailable"), 'MCP must expose daemon failures');
+  assert.ok(!mcp.includes("verdict: 'PASS'"), 'MCP must not fabricate a simulator PASS');
+  assert.ok(!mcp.includes("estimated_token_savings: '82%'"), 'MCP must not fabricate cache savings');
+  assert.ok(!timeline.includes(": '91.5'"), 'UI must not fabricate a token reduction before real events exist');
+  assert.ok(api.includes('getLiveEventsSince'), 'UI must expose persisted live-event replay');
+  assert.match(
+    api,
+    /searchParams\.set\(['"]since['"],\s*String\(lastSeq\)\)/,
+    'SSE reconnect must carry its cursor through URLSearchParams',
+  );
+  assert.ok(api.includes("new WebSocket"), 'UI must prefer the live WebSocket transport');
+  assert.ok(page.includes('AI Active'), 'Canvas must render the live AI activity overlay');
+  assert.ok(timeline.includes('affectedEdges'), 'Canvas replay must carry complete affected edge evidence');
 });

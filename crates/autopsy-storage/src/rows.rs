@@ -670,6 +670,25 @@ impl StorageEngine {
         Ok(conn.last_insert_rowid())
     }
 
+    /// Persists a live event with the sequence allocated by the daemon's
+    /// in-memory bus.  The explicit sequence lets the HTTP stream publish to
+    /// waiting clients before a busy SQLite writer completes while retaining
+    /// the exact same cursor for restart/replay.
+    pub fn record_live_event_with_seq(
+        &self,
+        seq_id: i64,
+        event_type: &str,
+        data_json: &str,
+    ) -> Result<i64, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO live_events (seq_id, event_type, data_json)
+             VALUES (?1, ?2, ?3)",
+            params![seq_id, event_type, data_json],
+        )?;
+        Ok(seq_id)
+    }
+
     pub fn live_events_since(
         &self,
         since_seq: i64,
@@ -1474,6 +1493,17 @@ impl StorageEngine {
         Ok(())
     }
 
+    /// Removes one content-addressed working-memory entry.  Invalidation is
+    /// explicit so callers can never silently reuse a stale snapshot result.
+    pub fn delete_ai_working_cache(&self, cache_key: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM ai_working_cache WHERE cache_key = ?1;",
+            params![cache_key],
+        )?;
+        Ok(deleted > 0)
+    }
+
     /// Gets or creates an AI Session Ledger record.
     pub fn get_or_create_ai_ledger(
         &self,
@@ -1516,6 +1546,30 @@ impl StorageEngine {
             );
             Ok(default_record)
         }
+    }
+
+    /// Reads all persisted AI session ledgers in stable session order without
+    /// creating rows for sessions that have not issued a query.
+    pub fn list_ai_ledgers(&self) -> Result<Vec<AiSessionLedgerRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT session_id, total_queries, cache_hits, tokens_spent, tokens_saved,
+                    cost_saved_microcents
+             FROM ai_session_ledger ORDER BY session_id ASC;",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(AiSessionLedgerRecord {
+                    session_id: row.get(0)?,
+                    total_queries: row.get(1)?,
+                    cache_hits: row.get(2)?,
+                    tokens_spent: row.get(3)?,
+                    tokens_saved: row.get(4)?,
+                    cost_saved_microcents: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Records an AI query event in the session ledger, accumulating token metrics.

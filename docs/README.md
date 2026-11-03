@@ -6,6 +6,8 @@ This document is the **canonical public starting point** for developers, platfor
 
 ---
 
+> Current-state note (2026-11-01): Some older evidence dossiers retain historical test counts, example repository names, or early quick-shortcut behavior. The current implementation has no hardcoded repository path or repository-name shortcut; `/api/v1/fs/browse` returns `quick_presets: []`, and the authoritative current closures are [95: Native Live Electron](evidence/95-native-live-electron-and-path-selection.md) and [96: Phase 1 Literal PRD Closure](evidence/96-phase1-literal-prd-closure.md).
+
 ## 1. Documentation Sitemap & Reading Paths
 
 Depending on your role and interest, follow the designated reading path below:
@@ -46,6 +48,9 @@ docs/architecture/OVERVIEW.md  docs/requirements/TRACEABILITY.md  docs/security/
 2. [**Hardware & Architectural Boundaries**](../scripts/verify-arch-boundaries.sh): Script enforcing zero LLM, zero network sockets, and zero subprocess execution.
 
 ### Path D: Empirical Benchmarks & Production Evidence
+
+> Current documentation index (2026-11-01): the evidence directory contains more than the original 40 historical receipts. Use [95: Native Electron, live transport & path selection](evidence/95-native-live-electron-and-path-selection.md) and [96: Literal Phase 1 closure](evidence/96-phase1-literal-prd-closure.md) for the current implementation and verification status; older dossier counts and examples are historical.
+
 1. [**Benchmark Protocol**](benchmark/PROTOCOL.md): Pre-registered evaluation methodology across 50 refactoring tasks and 5 TypeScript target repositories.
 2. [**Evidence Dossier (40 Production Receipts)**](evidence/): Chronological, mathematically backed logs from Phase 0 through the Tier-1–3 agent-experience build-out, the install lifecycle, and P0 multi-arch distribution/plugin/forensic-trajectory closure (e.g., [13: Forensic Closure](evidence/13-forensic-benchmark-closure.md), [17: Temporal Graph](evidence/17-temporal-semantic-graph.md), [18: Test Impact](evidence/18-predictive-test-selection.md), [33: How to Verify](evidence/33-verification-procedures.md), [35: Tier-1 Agent Experience](evidence/35-tier1-agent-experience.md), [38: Acceptance-Gate Closure](evidence/38-agent-gate-closure.md), [39: Install Lifecycle](evidence/39-install-update-lifecycle.md), [40: P0 Release, Plugin & Forensic Trajectory](evidence/40-p0-release-plugin-and-forensic-trajectory.md)).
 
@@ -98,10 +103,16 @@ Verifies that 100 consecutive full snapshot calculations produce byte-identical 
 ./scripts/verify-determinism.sh
 ```
 
-### Step 4: Run the Complete Test Suite (924 workspace tests)
-Runs all unit, integration, fuzz, and schema conformance suites (the MCP server adds 44 protocol-level tests via `npm test`, including the shipped single-file bundle):
+### Step 4: Run the Complete Test Suite
+Runs all unit, integration, fuzz, and schema conformance suites. The test count is intentionally not frozen in this guide; report the count from the run. The benchmark harness requires Python 3 exposed as `python3`:
 ```bash
 cargo test --workspace --all-targets
+```
+
+For the current Phase 1 contract specifically:
+```bash
+cargo test -p autopsy-tests --test phase1_http_end_to_end -- --nocapture
+cargo test -p autopsy-tests --test phase1_incremental_determinism -- --nocapture --test-threads=1
 ```
 
 ### Step 5: Open the Web Inspector (zero-build, tracked)
@@ -110,6 +121,16 @@ The inspector is a single tracked HTML file — no build step, no server:
 xdg-open apps/web-inspector/index.html   # macOS: open ...   Windows: start ...
 npm --prefix apps/web-inspector test     # headless render tests in the gate
 ```
+
+### Step 6: Run the native Electron development app
+For live source-code development, use the Electron shell rather than opening the cockpit in a browser:
+```bash
+cd apps/desktop-electron
+npm install
+npm run dev
+```
+
+The launcher requires Node 20.9+ and npm 10+, starts Electron from source, and runs the Next.js cockpit in development mode. `electron-builder` is only needed for packaging. Repository selection uses the exact selected native path; there are no fixed `User Home`, `Root Filesystem`, `Eraser`, or project-specific shortcut entries. Production Electron keeps the strict CSP; the development-only React `unsafe-eval` allowance is not packaged.
 
 ---
 

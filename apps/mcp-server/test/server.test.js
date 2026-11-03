@@ -20,6 +20,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_API_ROOT = path.resolve(__dirname, '../../../benchmarks/corpus/repo-api');
 
+async function withDaemonFetch(handler, callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const request = new Request(url, init);
+    const body = request.method === 'POST' ? await request.text() : '';
+    const result = await handler(new URL(url), request, body);
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 // Pin tests to the current workspace build when present: resolver order
 // otherwise prefers a possibly stale ~/.cargo/bin install, which would
 // validate old behavior instead of the code under test.
@@ -40,7 +58,12 @@ test('CLI runner resolves valid autopsy binary', () => {
 
 test('CLI runner prefers the installer prefix ~/.local/bin', () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-home-'));
-  const localBin = path.join(tmpHome, '.local', 'bin', 'autopsy');
+  const localBin = path.join(
+    tmpHome,
+    '.local',
+    'bin',
+    process.platform === 'win32' ? 'autopsy.exe' : 'autopsy'
+  );
   const savedBin = process.env.AUTOPSY_BIN;
   const savedHome = process.env.HOME;
   try {
@@ -702,11 +725,25 @@ test('autopsy_simulate_edit simulates in-flight edits within envelope', async ()
   const server = createAutopsyMcpServer();
   const tool = server._registeredTools['autopsy_simulate_edit'];
   assert.ok(tool, 'autopsy_simulate_edit must be registered');
-  const res = await tool.handler({
+  const res = await withDaemonFetch(async (url, request, body) => {
+    assert.equal(url.pathname, '/api/v1/simulate/edit');
+    assert.equal(request.method, 'POST');
+    const payload = JSON.parse(body);
+    assert.equal(payload.session_id, 'sess_mcp_phase4');
+    return {
+      verdict: 'PASS',
+      coverage_state: 'verified',
+      file_path: payload.file_path,
+      damaged_callers: [],
+      syntax_errors: [],
+      computation_latency_ms: 3,
+    };
+  }, () => tool.handler({
     file_path: 'src/PaymentService.ts',
     unsaved_buffer: 'export function chargeCard() { return true; }',
     repo_root: REPO_API_ROOT,
-  });
+    session_id: 'sess_mcp_phase4',
+  }));
   assert.ok(res.content && res.content[0].text);
   const parsed = JSON.parse(res.content[0].text);
   assert.equal(parsed.command, 'simulate-edit');
@@ -717,28 +754,104 @@ test('autopsy_canvas_focus broadcasts canvas focus envelope', async () => {
   const server = createAutopsyMcpServer();
   const tool = server._registeredTools['autopsy_canvas_focus'];
   assert.ok(tool, 'autopsy_canvas_focus must be registered');
-  const res = await tool.handler({
+  const res = await withDaemonFetch(async (url, request, body) => {
+    assert.equal(url.pathname, '/api/v1/forensics/event');
+    assert.equal(request.method, 'POST');
+    const payload = JSON.parse(body);
+    assert.equal(payload.event_type, 'canvas_focus');
+    assert.equal(payload.session_id, 'sess_mcp_phase4');
+    return { status: 'RECORDED', event_seq: 19 };
+  }, () => tool.handler({
     symbol: 'UserService',
     annotation: 'AI Inspecting UserService',
     zoom_level: 1.5,
-  });
+    session_id: 'sess_mcp_phase4',
+  }));
   assert.ok(res.content && res.content[0].text);
   const parsed = JSON.parse(res.content[0].text);
   assert.equal(parsed.command, 'canvas-focus');
   assert.equal(parsed.report.symbol, 'UserService');
+  assert.equal(parsed.report.trajectory_persisted, true);
+});
+
+test('autopsy_impact and autopsy_verify persist trajectory events and publish live activity', async () => {
+  const server = createAutopsyMcpServer();
+  const impact = server._registeredTools.autopsy_impact;
+  const verify = server._registeredTools.autopsy_verify;
+  assert.ok(impact, 'autopsy_impact must be registered');
+  assert.ok(verify, 'autopsy_verify must be registered');
+  const seen = [];
+  const responses = await withDaemonFetch(async (url, request, body) => {
+    assert.equal(request.method, 'POST');
+    const payload = JSON.parse(body);
+    seen.push({ path: url.pathname, payload });
+    if (url.pathname === '/api/v1/live/broadcast') return { success: true, seq_id: seen.length };
+    assert.equal(url.pathname, '/api/v1/forensics/event');
+    return { status: 'RECORDED', event_seq: seen.length };
+  }, async () => ({
+    impact: await impact.handler({
+      symbol: 'UserService',
+      repo_root: REPO_API_ROOT,
+      session_id: 'sess_mcp_analysis',
+    }),
+    verify: await verify.handler({
+      repo_root: REPO_API_ROOT,
+      session_id: 'sess_mcp_analysis',
+    }),
+  }));
+
+  const impactReport = JSON.parse(responses.impact.content[0].text);
+  const verifyReport = JSON.parse(responses.verify.content[0].text);
+  assert.equal(impactReport.trajectory.trajectory_persisted, true);
+  assert.equal(verifyReport.trajectory.trajectory_persisted, true);
+  assert.deepEqual(
+    seen.filter((entry) => entry.path === '/api/v1/forensics/event').map((entry) => entry.payload.event_type),
+    ['impact_queried', 'verify_run']
+  );
+  assert.equal(
+    seen.filter((entry) => entry.path === '/api/v1/live/broadcast').length,
+    2,
+    'each analysis publishes an active live-canvas signal'
+  );
 });
 
 test('autopsy_working_memory returns zero-waste compact receipt', async () => {
   const server = createAutopsyMcpServer();
   const tool = server._registeredTools['autopsy_working_memory'];
   assert.ok(tool, 'autopsy_working_memory must be registered');
-  const res = await tool.handler({
+  const res = await withDaemonFetch(async (url, request, body) => {
+    assert.equal(url.pathname, '/api/v1/ai/cache/query');
+    assert.equal(request.method, 'POST');
+    const payload = JSON.parse(body);
+    assert.equal(payload.session_id, 'sess_test_1');
+    assert.equal(payload.query_kind, 'callers');
+    return {
+      status: 'UNCHANGED_SINCE_PREVIOUS_STEP',
+      receipt_token: 'rcpt_real',
+      tokens_saved: 41,
+    };
+  }, () => tool.handler({
     session_id: 'sess_test_1',
     symbol: 'chargeCard',
     query_kind: 'callers',
-  });
+  }));
   assert.ok(res.content && res.content[0].text);
   const parsed = JSON.parse(res.content[0].text);
   assert.equal(parsed.command, 'ai-working-memory');
-  assert.ok(parsed.report.receipt_token || parsed.report.status);
+  assert.equal(parsed.report.receipt_token, 'rcpt_real');
+  assert.equal(parsed.report.tokens_saved, 41);
+});
+
+test('Phase 4 MCP tools refuse daemon outages instead of fabricating PASS/cache hits', async () => {
+  const server = createAutopsyMcpServer();
+  const simulate = server._registeredTools['autopsy_simulate_edit'];
+  const memory = server._registeredTools['autopsy_working_memory'];
+  const result = await withDaemonFetch(async () => {
+    throw new Error('daemon offline');
+  }, async () => ({
+    simulate: await simulate.handler({ file_path: 'src/x.ts', unsaved_buffer: 'export const x = 1;' }),
+    memory: await memory.handler({ session_id: 'sess_offline', symbol: 'x', query_kind: 'callers' }),
+  }));
+  assert.equal(JSON.parse(result.simulate.content[0].text).actionable, false);
+  assert.equal(JSON.parse(result.memory.content[0].text).actionable, false);
 });

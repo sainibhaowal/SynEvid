@@ -12,6 +12,10 @@ test('FR-P5-001: Electron Desktop App Package Configuration', () => {
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   assert.equal(pkg.main, 'src/main.js');
   assert.ok(pkg.devDependencies.electron, 'Must specify electron dependency');
+  assert.equal(pkg.scripts.dev, 'node scripts/dev.js');
+  assert.equal(pkg.scripts.start, 'node scripts/dev.js');
+  assert.ok(pkg.engines.node.startsWith('>=20'), 'Must declare the supported Node.js floor');
+  assert.ok(pkg.engines.npm.startsWith('>=10'), 'Must declare the supported npm floor');
 });
 
 test('FR-P5-001: Main Process & Hardened Security Architecture (INV-SANDBOX-004)', () => {
@@ -25,8 +29,8 @@ test('FR-P5-001: Main Process & Hardened Security Architecture (INV-SANDBOX-004)
   assert.ok(content.includes('Content-Security-Policy'), 'Must install strict local loopback CSP');
   assert.ok(content.includes('dialog:openDirectory'), 'Must register native folder picker IPC');
   assert.ok(content.includes('ensureSidecarDaemon'), 'Must implement daemon watchdog');
-  assert.ok(content.includes("? 'release'\n    : 'debug'"), 'Must prefer the release daemon when available');
-  assert.ok(content.includes("!isWslUnc ? 'synevid-ui.exe' : 'synevid-ui'"), 'Must select the Linux binary for WSL workspaces');
+  assert.ok(content.includes("path.join(repoRoot, 'target', 'release', executableName)"), 'Must prefer the release daemon when available');
+  assert.ok(content.includes("path.join(repoRoot, 'target', 'debug', executableName)"), 'Must retain a debug daemon fallback');
   assert.ok(content.includes('checkApplicationHealth'), 'Must wait for both local services before loading the cockpit');
   assert.ok(content.includes('beginFrameSubscription'), 'Must expose native presentation-event measurement');
   assert.ok(content.includes('presentationLatencyMs'), 'Must report compositor-boundary timing');
@@ -54,8 +58,10 @@ test('FR-P5-001: Cockpit startup stays recoverable until the server is ready', (
 
   assert.ok(content.includes('while (mainWindow === shellWindow && !shellWindow.isDestroyed())'));
   assert.ok(content.includes('Cockpit is still starting; retrying automatically'));
-  assert.ok(content.includes("productionBuildExists ? 'start' : 'dev'"));
-  assert.ok(!content.includes("'unsafe-eval'"));
+  assert.ok(content.includes('LIVE_DEVELOPMENT'));
+  assert.ok(content.includes("LIVE_DEVELOPMENT || !productionBuildExists ? 'dev' : 'start'"));
+  assert.ok(content.includes('buildContentSecurityPolicy'));
+  assert.ok(content.includes("liveDevelopment ? \" 'unsafe-eval'\" : ''"));
   assert.ok(!content.includes('mainWindow.loadURL(COCKPIT_URL).catch(() => {});'));
 });
 
@@ -91,6 +97,10 @@ test('FR-P5-001: Desktop launchers clear Electron Node-only mode', () => {
   assert.ok(batchLauncher.includes('set "ELECTRON_RUN_AS_NODE="'));
   assert.ok(!powershellLauncher.includes('Start-Process -FilePath "wsl.exe"'));
   assert.ok(!batchLauncher.includes('start /b "" wsl.exe'));
+
+  const devLauncher = fs.readFileSync(path.join(PKG_ROOT, 'scripts/dev.js'), 'utf8');
+  assert.ok(devLauncher.includes("env.COCKPIT_URL = 'http://127.0.0.1:3001'"));
+  assert.ok(devLauncher.includes('source development independent from a stale production cockpit'));
 });
 
 test('Cockpit quick actions have working export and verification handlers', () => {

@@ -92,7 +92,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
           comparisonTable: {
             headers: ['Input Path Format', 'Host OS', 'Normalized Daemon Path', 'Validation Rule'],
             rows: [
-              ['C:\\Users\\Ravin\\Project', 'Windows', '/mnt/c/Users/Ravin/Project', 'Drive letter lowercased, slashes inverted'],
+              ['C:\\Users\\<user>\\Project', 'Windows', '/mnt/c/Users/<user>/Project', 'Drive letter lowercased, slashes inverted'],
               ['\\\\wsl.localhost\\Ubuntu\\home\\...', 'WSL UNC', '/home/...', 'Distro prefix stripped, POSIX canonicalized'],
               ['/home/ravi/project', 'Linux', '/home/ravi/project', 'Canonical path verified with symlink containment'],
               ['/Users/ravi/project', 'macOS', '/Users/ravi/project', 'Case-sensitive UTF-8 path checked']
@@ -149,10 +149,10 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
               scenario: 'Attaching an external monorepo without moving directories',
               steps: [
                 'Click "+ Connect" in the top bar.',
-                'Paste "C:\\Users\\Ravin\\Projects\\Monorepo" into the path input.',
+                'Paste your absolute Windows project path into the path input.',
                 'Click "Connect Repository".'
               ],
-              expectedOutcome: 'Normalized to /mnt/c/Users/Ravin/Projects/Monorepo, registered in SQLite, and active immediately.'
+              expectedOutcome: 'The daemon preserves and canonicalizes the selected host path, registers it in SQLite, and activates it immediately.'
             }
           ]
         }
@@ -645,7 +645,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
   'ws-ai': {
     workspaceId: 'ws-ai',
     workspaceName: 'AI Zero-Token Cache & Live MCP Cockpit',
-    shortDescription: 'Zero-token-waste working memory cache (60%-91.5% token savings), 1-click MCP configurators, and interactive verification terminal.',
+    shortDescription: 'Zero-token-waste working memory cache with measured six-turn savings, 1-click MCP configurators, and an interactive verification terminal.',
     sections: [
       {
         id: 'ai-token-cache',
@@ -653,18 +653,18 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
         badge: 'Phase 4 AI Cache',
         content: {
           summary: 'Persistent SQLite working history that returns delta-compressed receipts, eliminating redundant context token waste.',
-          whatIsIt: 'AI coding agents (Claude Code, Cursor, Windsurf, Gemini) waste tens of thousands of prompt tokens re-reading whole files and repeating graph searches. Phase 4 introduced the Zero-Token Working History Engine: a persistent local SQLite working cache keyed by `(session_id, snapshot_blake3, symbol_id)`. When an agent queries an impact or simulates an edit, SynEvid returns only the modified delta or a 20-token pointer receipt.',
-          howItWorks: 'The daemon checks `ai_working_cache` in `.autopsy/storage.db`. On repeated queries with identical BLAKE3 hashes, it returns `status: UNCHANGED_SINCE_STEP_X`, slashing LLM context consumption by 60% to 91.5% (verified in `phase4_ai_cache_efficiency.rs`).',
+          whatIsIt: 'AI coding agents (Claude Code, Cursor, Windsurf, Gemini) waste context by re-reading whole files and repeating graph searches. Phase 4 introduced the Zero-Token Working History Engine: a persistent local SQLite working cache keyed by `(session_id, snapshot_blake3, symbol_id)`. When an agent repeats an unchanged query, SynEvid returns a compact pointer receipt instead of duplicating the full graph payload.',
+          howItWorks: 'The daemon checks `ai_working_cache` in `.autopsy/storage.db`. On repeated queries with identical BLAKE3 keys, it returns `status: UNCHANGED_SINCE_PREVIOUS_STEP`. The real six-turn edit → verify → query benchmark measures the response-byte reduction and enforces the Phase 4 ≥60% gate; the percentage is not hardcoded.',
           diagramTitle: 'AI Working Memory Cache Loop',
           diagramSteps: [
             { label: 'Step 1: AI Query', sublabel: 'autopsy_impact("chargeCard")', badge: '~180 tokens', color: 'cyan' },
             { label: 'Step 2: Store Digest', sublabel: 'Key: BLAKE3(Session+Snap+Sym)', badge: 'SQLite WAL', color: 'indigo' },
             { label: 'Step 3: In-Flight Edit', sublabel: 'autopsy_simulate_edit(patch)', badge: 'Delta <90 tokens', color: 'amber' },
-            { label: 'Step 4: Repeated Query', sublabel: 'UNCHANGED_SINCE_STEP_1', badge: '20 tokens (91.5% saved)', color: 'emerald' }
+            { label: 'Step 4: Repeated Query', sublabel: 'UNCHANGED_SINCE_PREVIOUS_STEP', badge: 'Measured pointer receipt', color: 'emerald' }
           ],
           mathFormulas: [
             {
-              formula: '\\text{TokenSavings} = 1 - \\frac{\\text{Tokens}(\\text{PointerReceipt})}{\\text{Tokens}(\\text{FullJsonPayload})} = 1 - \\frac{20}{2500} = 99.2\\%',
+              formula: '\\text{Reduction} = 1 - \\frac{\\text{SerializedBytes}(\\text{CachedSixTurnLoop})}{\\text{SerializedBytes}(\\text{UncachedSixTurnLoop})}',
               label: 'Token Reduction Ratio Formulation',
               explanation: 'Reduces prompt token expenditure from multi-thousand-token file dumps down to compact cryptographic pointers.'
             }
@@ -672,10 +672,10 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
           comparisonTable: {
             headers: ['Operation', 'Standard AI Workflow (Without SynEvid)', 'SynEvid Phase 4 Working Cache', 'Token Savings'],
             rows: [
-              ['Finding Callers', 'AI re-reads 15 entire files (~25,000 tokens)', 'SynEvid returns exact 10 callers (~180 tokens)', '99.2% saved'],
-              ['In-Flight Edit Test', 'AI saves to disk and runs test suite (~10,000 tokens)', 'Simulates in memory in <50ms and returns delta (<90 tokens)', '99.1% saved'],
-              ['Repeated Query', 'AI re-queries and redumps entire JSON payload (~2,500 tokens)', 'Returns pointer: UNCHANGED_SINCE_STEP_X (~20 tokens)', '99.2% saved'],
-              ['Average Refactor Task', 'Consumes 120,000+ context tokens', 'Consumes under 10,200 context tokens', '91.5% overall reduction']
+              ['Finding Callers', 'AI re-reads entire source context', 'SynEvid returns the persisted graph receipt', 'Measured'],
+              ['In-Flight Edit Test', 'AI saves to disk and runs the suite', 'Simulates in memory in <50ms and returns authoritative evidence', 'Measured'],
+              ['Repeated Query', 'AI re-queries and redumps the full payload', 'Returns UNCHANGED_SINCE_PREVIOUS_STEP', 'Measured'],
+              ['Six-Turn Refactor Loop', 'Six full responses', 'One full receipt plus five compact pointers', 'Must be ≥60%']
             ]
           },
           infoCards: [
@@ -696,7 +696,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
               points: [
                 'Includes 4 new Phase 4 tools: autopsy_simulate_edit, autopsy_canvas_focus, autopsy_git_time_travel, autopsy_working_memory.',
                 '100% backward compatible with existing v0.1.0 tools.',
-                'Runs over local loopback or STDIO with sub-15ms response latency.'
+                'Runs over local loopback or STDIO with measured local response latency.'
               ]
             }
           ],
@@ -725,7 +725,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
           developerAndArchitecture: 'Stores ledger in `ai_session_ledger` table. Fully deterministic: identical input trees produce identical cache keys and delta receipts.',
           evidenceAndInvariants: [
             'PHASE-4-v0.5.0: AI Agent Zero-Token-Waste Working Memory specification.',
-            'Verified in tests/tests/phase4_ai_cache_efficiency.rs (91.50% token reduction).'
+            'Verified in tests/tests/phase4_ai_cache_efficiency.rs with a real six-turn edit → verify → query loop and a measured ≥60% reduction gate.'
           ],
           practicalExamples: [
             {
@@ -735,7 +735,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
                 'Prompt agent: "Refactor PaymentService using SynEvid guardrails".',
                 'Observe real-time Tokens Saved counter incrementing in the cockpit.'
               ],
-              expectedOutcome: 'Agent refactors code with sub-50ms feedback, achieving 91.5% token reduction with zero context overflow.'
+              expectedOutcome: 'Agent refactors code with sub-50ms simulation feedback and a measured six-turn cache reduction that satisfies the ≥60% Phase 4 gate.'
             }
           ]
         }

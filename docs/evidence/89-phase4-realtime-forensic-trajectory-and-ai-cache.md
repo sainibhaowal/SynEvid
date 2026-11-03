@@ -7,14 +7,25 @@
 
 ---
 
+> **Historical correction (2026-11-01):** This receipt records the initial Phase 4
+> implementation and is retained for provenance. Its handcrafted token benchmark,
+> fixed savings percentage, MCP package count, and overall-gate claims are not the
+> current acceptance evidence. They are superseded by
+> [`98-phase4-end-to-end-closure.md`](98-phase4-end-to-end-closure.md), which uses
+> the real edit→simulate→verify→query flow and records current verification
+> telemetry honestly.
+
+---
+
 ## 1. Executive Summary
 
 Phase 4 bridges human visual software engineering and autonomous AI coding agents (Claude Code, Cursor, Windsurf, VS Code Cline/Roo, Gemini CLI) into a single, offline, deterministic forensic environment.
 
-All Phase 4 deliverables have been engineered and verified across the complete multi-stack test harness:
+The initial Phase 4 implementation delivered the following capabilities; the
+end-to-end claims below are now verified by receipt 98:
 1. **Three-Tier Forensic Trajectory Hierarchy:** Implemented `forensic_sessions`, `forensic_workflows`, and `trajectory_events` in `crates/autopsy-storage` backed by SQLite WAL with BLAKE3 cryptographic digest receipts.
-2. **AI Zero-Token-Waste Local Working Cache:** Implemented `ai_working_cache` and `ai_session_ledger`. Benchmark testing in `tests/tests/phase4_ai_cache_efficiency.rs` verified a **91.50% token reduction** (surpassing the >= 60% requirement) by replacing repetitive 25,000-token AST dumps with compact delta pointer receipts (`UNCHANGED_SINCE_STEP_X`).
-3. **Sub-50ms In-Flight Edit Guardrail:** Evaluated unsaved edit buffers in memory in `< 25ms` without writing to disk, reporting damaged callers, arity mismatches, and syntax errors.
+2. **AI Zero-Token-Waste Local Working Cache:** Implemented `ai_working_cache` and `ai_session_ledger`. The current acceptance test queries a real indexed graph after a real edit→simulate→verify loop and reports measured cache pointer savings; it does not use a fixed percentage or synthetic AST dump.
+3. **Sub-50ms In-Flight Edit Guardrail:** Evaluates unsaved edit buffers in memory without writing to disk, reporting damaged callers, arity mismatches, and syntax errors through the canonical `/api/v1/simulate/edit` route.
 4. **Expanded MCP Tool Surface (21 Total Tools):** Added `autopsy_simulate_edit`, `autopsy_canvas_focus`, `autopsy_git_time_travel`, and `autopsy_working_memory` with real-time UI daemon notification.
 5. **Interactive Visual Trajectory Timeline UI:** Built `ForensicTrajectorySection.tsx` with session selector, workflow grouping brackets, color-coded step nodes, A vs B forensic drawer comparison, 1-click atomic rollback, and Canvas Replay.
 6. **AI Cockpit & 1-Click Client Auto-Configurator:** Built `AiCockpitSection.tsx` providing real-time token savings analytics and 1-click copy configurations for Claude Code, Cursor, Windsurf, VS Code, and Gemini CLI.
@@ -26,15 +37,15 @@ All Phase 4 deliverables have been engineered and verified across the complete m
 
 | Suite / Gate | Tests Executed | Passed | Failed | Telemetry / Latency |
 | :--- | :--- | :--- | :--- | :--- |
-| `phase4_ai_cache_efficiency` | 1 | 1 | 0 | **91.50% token reduction** (10,539B -> 896B) |
+| `phase4_ai_cache_efficiency` | 1 | 1 | 0 | Real edit→simulate→verify→graph-query loop; measured persisted cache pointer savings |
 | `autopsy-storage` unit tests | 14 | 14 | 0 | Lifecycle & Migration 005 verified |
 | `synevid-ui` daemon endpoints | 6 | 6 | 0 | Sub-50ms simulate edit, timeline, and AI cache |
-| `apps/mcp-server` suite | 47 | 47 | 0 | 21 registered tools & bundle integrity |
-| `apps/web-inspector` suite | 37 | 37 | 0 | FR-P4-001 through FR-P4-007 verified |
+| `apps/mcp-server` suite | 48 | 48 | 0 | Typecheck, lint, build/bundle, 21-tool surface, and Phase 4 fallback tests |
+| `apps/web-inspector` Phase 4 suite | 8 | 8 | 0 | MCP/daemon contract and no-fabricated-fallback checks |
 | `apps/vscode-extension` | 6 | 6 | 0 | Extension commands and manifest verified |
 | Determinism Invariant Gate | 100 | 100 | 0 | 100/100 byte-identical BLAKE3 digests |
 | Architectural Boundary Gate | 3 | 3 | 0 | Clean boundaries, zero subprocesses in core |
-| Overall Workspace Gate (`make check`) | Full Multi-Stack | 100% | 0 | **PASS** |
+| Overall Workspace Gate (`make check`) | Historical | — | — | Initial receipt claim superseded; current focused closure is receipt 98 |
 
 ---
 

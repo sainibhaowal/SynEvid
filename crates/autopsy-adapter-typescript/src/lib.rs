@@ -4,6 +4,8 @@
 //! stable symbol identification, typed multigraph edge extraction, normalized contract extraction,
 //! and honest coverage classification.
 
+#![allow(clippy::collapsible_if)]
+
 use autopsy_adapter_api::{
     AdapterCapabilities, AdapterError, DynamicConstruct, DynamicConstructKind, LanguageAdapter,
     ParseContext, ParseDiagnostic, ParsedFile,

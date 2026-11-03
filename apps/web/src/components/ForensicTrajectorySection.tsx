@@ -7,6 +7,7 @@ import {
   ForensicWorkflow,
   TrajectoryEvent,
   AiSessionLedger,
+  DaemonLiveEvent,
 } from '@/lib/api';
 import {
   Clock,
@@ -33,12 +34,81 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
+export interface CanvasReplaySelection {
+  targetSymbolOrFile: string;
+  affectedSymbols: string[];
+  affectedFiles: string[];
+  affectedEdges: Array<{ source: string; target: string }>;
+  eventSeq: number;
+}
+
 interface ForensicTrajectorySectionProps {
-  onReplayCanvas?: (targetSymbolOrFile: string) => void;
+  onReplayCanvas?: (selection: CanvasReplaySelection) => void;
+  liveEvents?: DaemonLiveEvent[];
+}
+
+function readEvidence(event: TrajectoryEvent): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(event.evidence_json || '{}');
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function canvasReplaySelection(event: TrajectoryEvent): CanvasReplaySelection {
+  const evidence = readEvidence(event);
+  const replay = evidence.replay && typeof evidence.replay === 'object'
+    ? evidence.replay as Record<string, unknown>
+    : {};
+  const report = evidence.report && typeof evidence.report === 'object'
+    ? evidence.report as Record<string, unknown>
+    : {};
+  const impact = report.impact && typeof report.impact === 'object'
+    ? report.impact as Record<string, unknown>
+    : {};
+  const affectedSymbols = new Set<string>();
+  const affectedFiles = new Set<string>();
+  const affectedEdges: Array<{ source: string; target: string }> = [];
+
+  const addStrings = (value: unknown, target: Set<string>) => {
+    if (!Array.isArray(value)) return;
+    for (const item of value) if (typeof item === 'string' && item.length > 0) target.add(item);
+  };
+  addStrings(replay.affected_symbols, affectedSymbols);
+  addStrings(impact.impacted_entities, affectedSymbols);
+  addStrings(impact.likely_affected, affectedSymbols);
+  addStrings(impact.possibly_affected, affectedSymbols);
+  addStrings(replay.affected_files, affectedFiles);
+  addStrings(replay.files, affectedFiles);
+
+  const paths = [replay.affected_paths, impact.paths].filter(Array.isArray) as unknown[][];
+  for (const path of paths) {
+    for (const item of path) {
+      if (!Array.isArray(item)) continue;
+      const nodes = item.filter((value): value is string => typeof value === 'string' && value.length > 0);
+      nodes.forEach((node) => affectedSymbols.add(node));
+      for (let index = 1; index < nodes.length; index += 1) {
+        affectedEdges.push({ source: nodes[index - 1], target: nodes[index] });
+      }
+    }
+  }
+
+  const target = event.target_symbol || event.target_file || [...affectedSymbols][0] || 'Universe';
+  if (event.target_symbol) affectedSymbols.add(event.target_symbol);
+  if (event.target_file) affectedFiles.add(event.target_file);
+  return {
+    targetSymbolOrFile: target,
+    affectedSymbols: [...affectedSymbols],
+    affectedFiles: [...affectedFiles],
+    affectedEdges,
+    eventSeq: event.event_seq,
+  };
 }
 
 export default function ForensicTrajectorySection({
   onReplayCanvas,
+  liveEvents = [],
 }: ForensicTrajectorySectionProps) {
   const [sessions, setSessions] = useState<ForensicSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
@@ -84,6 +154,24 @@ export default function ForensicTrajectorySection({
   useEffect(() => {
     loadSessionsAndTimeline();
   }, []);
+
+  // The page-level live cursor replays missed daemon sequence IDs.  Refresh the
+  // persisted trajectory when one of those replayed events belongs to the
+  // active session so the timeline is not merely a dashboard notification.
+  useEffect(() => {
+    const latest = liveEvents.find((event) => event.event_type === 'trajectory.step_recorded');
+    const eventSession = latest?.payload.session_id;
+    if (!latest || !activeSessionId || (eventSession && eventSession !== activeSessionId)) return;
+    api.getForensicTimeline(activeSessionId)
+      .then((timeline) => {
+        setWorkflows(timeline.workflows || []);
+        setEvents(timeline.events || []);
+        if (timeline.ledger) setLedger(timeline.ledger);
+      })
+      .catch(() => {
+        // The next replayed event or manual session refresh will retry.
+      });
+  }, [liveEvents, activeSessionId]);
 
   const handleStartNewSession = async () => {
     try {
@@ -176,7 +264,7 @@ export default function ForensicTrajectorySection({
     const totalSaved = events.reduce((acc, e) => acc + (e.tokens_saved || 0), 0);
     const totalTokens = totalSpent + totalSaved;
     const reductionPercent =
-      totalTokens > 0 ? ((totalSaved / totalTokens) * 100).toFixed(1) : '91.5';
+      totalTokens > 0 ? ((totalSaved / totalTokens) * 100).toFixed(1) : '0.0';
     return {
       totalSpent,
       totalSaved,
@@ -418,9 +506,7 @@ export default function ForensicTrajectorySection({
               {onReplayCanvas && (
                 <button
                   onClick={() =>
-                    onReplayCanvas(
-                      selectedEvent.target_symbol || selectedEvent.target_file || 'Universe'
-                    )
+                    onReplayCanvas(canvasReplaySelection(selectedEvent))
                   }
                   className="px-3 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 transition-colors flex items-center space-x-1.5 font-bold"
                   title="Highlight affected symbols and edges in 2D/3D Code Universe"

@@ -19,6 +19,7 @@
 //! file atomically (write + rename), mirroring the engine's storage write.
 
 use crate::{Cli, CliError, EXIT_ANALYSIS_ERROR, EXIT_PASS, OutputFormat, get_storage};
+use autopsy_storage::{ForensicSessionRecord, ForensicWorkflowRecord, TrajectoryEventRecord};
 use blake3::Hasher;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -265,6 +266,111 @@ fn latest_stored_snapshot_id(cli: &Cli) -> Option<String> {
     None
 }
 
+fn forensic_repo_id(cli: &Cli) -> String {
+    format!(
+        "repo_{}",
+        blake3::hash(normalized_root(cli).as_bytes()).to_hex()
+    )
+}
+
+fn sync_cli_session_start(cli: &Cli, session_id: &str, snapshot_id: Option<&str>) {
+    let Ok(storage) = get_storage(cli) else {
+        return;
+    };
+    let repo_id = forensic_repo_id(cli);
+    let snapshot = snapshot_id.unwrap_or("unknown").to_string();
+    let session = ForensicSessionRecord {
+        session_id: session_id.to_string(),
+        repo_id: repo_id.clone(),
+        actor_kind: "CLI".to_string(),
+        actor_name: "autopsy".to_string(),
+        baseline_snap_id: snapshot.clone(),
+        current_snap_id: snapshot,
+        status: "ACTIVE".to_string(),
+    };
+    let _ = storage.create_forensic_session(&session);
+    let workflow = ForensicWorkflowRecord {
+        workflow_id: format!("wf_cli_{}", &session_id[..session_id.len().min(8)]),
+        session_id: session_id.to_string(),
+        name: "CLI forensic verification workflow".to_string(),
+        status: "ACTIVE".to_string(),
+        start_seq: 0,
+        end_seq: None,
+        duration_ms: 0,
+    };
+    let _ = storage.create_forensic_workflow(&workflow);
+    let event = TrajectoryEventRecord {
+        event_seq: 0,
+        session_id: session_id.to_string(),
+        job_id: Some("session_started".to_string()),
+        workflow_id: Some(workflow.workflow_id),
+        event_type: "session_started".to_string(),
+        target_symbol: None,
+        target_file: None,
+        before_snap_id: snapshot_id.map(str::to_string),
+        after_snap_id: snapshot_id.map(str::to_string),
+        verdict: "INFO".to_string(),
+        summary: "CLI forensic session started".to_string(),
+        evidence_json: "{}".to_string(),
+        blake3_receipt: format!("blake3:{}", blake3::hash(session_id.as_bytes()).to_hex()),
+        tokens_spent: 0,
+        tokens_saved: 0,
+    };
+    let _ = storage.record_trajectory_event(&event);
+}
+
+fn sync_cli_session_step(
+    cli: &Cli,
+    session_id: &str,
+    invoked: &[String],
+    exit_code: i32,
+    snapshot_id: Option<&str>,
+    note: Option<&str>,
+) {
+    let Ok(storage) = get_storage(cli) else {
+        return;
+    };
+    let workflow_id = format!("wf_cli_{}", &session_id[..session_id.len().min(8)]);
+    let evidence = serde_json::json!({
+        "invoked": invoked,
+        "exit_code": exit_code,
+        "snapshot_id": snapshot_id,
+        "note": note
+    });
+    let evidence_json = evidence.to_string();
+    let event_type = invoked
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "session_step".to_string());
+    let verdict = match exit_code {
+        0 => "PASS",
+        code if code > 0 => "FAIL",
+        _ => "UNKNOWN",
+    };
+    let receipt_material = format!("{session_id}|{event_type}|{evidence_json}");
+    let event = TrajectoryEventRecord {
+        event_seq: 0,
+        session_id: session_id.to_string(),
+        job_id: Some("session_step".to_string()),
+        workflow_id: Some(workflow_id),
+        event_type,
+        target_symbol: None,
+        target_file: None,
+        before_snap_id: None,
+        after_snap_id: snapshot_id.map(str::to_string),
+        verdict: verdict.to_string(),
+        summary: format!("CLI step completed with exit code {exit_code}"),
+        evidence_json,
+        blake3_receipt: format!(
+            "blake3:{}",
+            blake3::hash(receipt_material.as_bytes()).to_hex()
+        ),
+        tokens_spent: 0,
+        tokens_saved: 0,
+    };
+    let _ = storage.record_trajectory_event(&event);
+}
+
 fn build_forensic_report(cli: &Cli, session: &SessionRecord) -> TaskForensicReport {
     let receipt = session
         .receipt
@@ -446,12 +552,13 @@ pub fn handle_session_start(cli: &Cli) -> Result<i32, CliError> {
     let record = SessionRecord {
         session_id: session_id.clone(),
         status: "open".to_string(),
-        started_snapshot,
+        started_snapshot: started_snapshot.clone(),
         steps: Vec::new(),
         receipt: None,
     };
     store.sessions.insert(session_id.clone(), record);
     save_store(cli, &store)?;
+    sync_cli_session_start(cli, &session_id, started_snapshot.as_deref());
     if cli.format == OutputFormat::Json {
         emit_json(&serde_json::json!({
             "session_id": session_id,
@@ -473,29 +580,39 @@ pub fn handle_session_record(
     note: Option<&str>,
 ) -> Result<i32, CliError> {
     let mut store = load_store(cli)?;
-    let session = store.sessions.get_mut(session_id).ok_or_else(|| {
-        CliError::Analysis(format!(
-            "session '{session_id}' not found; open one with `autopsy session start`"
-        ))
-    })?;
-    if session.status != "open" {
-        return Err(CliError::Analysis(format!(
-            "session '{session_id}' is already closed; open a new one to record further steps"
-        )));
-    }
-    let step = SessionStep {
-        index: session.steps.len(),
-        invoked: cli_args,
-        exit_code,
-        snapshot_id: snapshot_id
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        note: note.map(|n| n.to_string()),
+    let (recorded_index, invoked_for_sync) = {
+        let session = store.sessions.get_mut(session_id).ok_or_else(|| {
+            CliError::Analysis(format!(
+                "session '{session_id}' not found; open one with `autopsy session start`"
+            ))
+        })?;
+        if session.status != "open" {
+            return Err(CliError::Analysis(format!(
+                "session '{session_id}' is already closed; open a new one to record further steps"
+            )));
+        }
+        let step = SessionStep {
+            index: session.steps.len(),
+            invoked: cli_args,
+            exit_code,
+            snapshot_id: snapshot_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            note: note.map(|n| n.to_string()),
+        };
+        let step_index = session.steps.len();
+        session.steps.push(step);
+        (step_index, session.steps[step_index].invoked.clone())
     };
-    let step_index = session.steps.len();
-    session.steps.push(step);
-    let recorded_index = step_index;
     save_store(cli, &store)?;
+    sync_cli_session_step(
+        cli,
+        session_id,
+        &invoked_for_sync,
+        exit_code,
+        snapshot_id,
+        note,
+    );
     if cli.format == OutputFormat::Json {
         emit_json(&serde_json::json!({
             "session_id": session_id,
@@ -560,6 +677,20 @@ pub fn handle_session_close(cli: &Cli, session_id: &str) -> Result<i32, CliError
     session.receipt = Some(receipt.clone());
     let session_snapshot = session.clone();
     save_store(cli, &store)?;
+
+    if let Ok(storage) = get_storage(cli) {
+        let _ = storage.update_forensic_session_status(
+            &session_id,
+            "CLOSED",
+            session_snapshot
+                .steps
+                .iter()
+                .rev()
+                .find_map(|step| step.snapshot_id.as_deref())
+                .or(session_snapshot.started_snapshot.as_deref())
+                .unwrap_or("unknown"),
+        );
+    }
 
     let forensic_report = build_forensic_report(cli, &session_snapshot);
     persist_forensic_report(cli, &forensic_report)?;

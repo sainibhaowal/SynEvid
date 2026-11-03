@@ -6,6 +6,7 @@
 use autopsy_domain::{AnalysisRun, Finding, RepoSnapshot, SnapshotId};
 use autopsy_evidence::EvidenceReceipt;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -60,7 +61,20 @@ fn is_database_corruption(error: &rusqlite::Error) -> bool {
     )
 }
 
-fn preserve_corrupt_database(path: &Path) -> Result<(), StorageError> {
+/// Stable API error code emitted when SQLite recovery preserves a damaged file.
+pub const ERR_STORAGE_CORRUPTION_RECOVERED: &str = "ERR-STORAGE-102";
+
+/// Non-fatal recovery information made available to API layers after a corrupt
+/// database was backed up and rebuilt.  Recovery is successful, but callers
+/// must be told that the previous persisted state was not trusted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageRecoveryNotice {
+    pub error_code: String,
+    pub backup_path: String,
+    pub message: String,
+}
+
+fn preserve_corrupt_database(path: &Path) -> Result<PathBuf, StorageError> {
     let bytes = fs::read(path)?;
     let digest = blake3::hash(&bytes).to_hex().to_string();
     let backup = path.with_extension("db.bak");
@@ -78,7 +92,7 @@ fn preserve_corrupt_database(path: &Path) -> Result<(), StorageError> {
             fs::rename(sidecar, sidecar_backup)?;
         }
     }
-    Ok(())
+    Ok(backup)
 }
 
 /// Thread-safe SQLite storage engine with content-addressed disk cache.
@@ -86,6 +100,7 @@ fn preserve_corrupt_database(path: &Path) -> Result<(), StorageError> {
 pub struct StorageEngine {
     conn: Arc<Mutex<Connection>>,
     cache_dir: Option<PathBuf>,
+    recovery_notice: Option<StorageRecoveryNotice>,
 }
 
 impl StorageEngine {
@@ -124,9 +139,22 @@ impl StorageEngine {
                 Err(StorageError::Sqlite(error)) if is_database_corruption(&error) => {}
                 Err(error) => return Err(error),
             }
-            preserve_corrupt_database(path)?;
+            let backup_path = preserve_corrupt_database(path)?;
+            let mut engine = Self::open(path, options)?;
+            engine.recovery_notice = Some(StorageRecoveryNotice {
+                error_code: ERR_STORAGE_CORRUPTION_RECOVERED.to_string(),
+                backup_path: backup_path.to_string_lossy().replace('\\', "/"),
+                message: "The SQLite database was corrupt; it was preserved and rebuilt."
+                    .to_string(),
+            });
+            return Ok(engine);
         }
         Self::open(path, options)
+    }
+
+    /// Returns a recovery warning when this engine rebuilt a corrupt database.
+    pub fn recovery_notice(&self) -> Option<StorageRecoveryNotice> {
+        self.recovery_notice.clone()
     }
 
     /// Creates an in-memory SQLite database instance (ideal for tests and dry-runs).
@@ -155,6 +183,7 @@ impl StorageEngine {
         let mut engine = Self {
             conn: Arc::new(Mutex::new(conn)),
             cache_dir: options.cache_dir,
+            recovery_notice: None,
         };
 
         engine.run_migrations()?;
@@ -474,12 +503,12 @@ impl StorageEngine {
 
             // Resilient column checks for pre-existing databases
             let has_col = |table: &str, col: &str| -> bool {
-                if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({});", table)) {
-                    if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) {
-                        for name in rows.flatten() {
-                            if name == col {
-                                return true;
-                            }
+                if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({});", table))
+                    && let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1))
+                {
+                    for name in rows.flatten() {
+                        if name == col {
+                            return true;
                         }
                     }
                 }
@@ -1597,6 +1626,17 @@ mod tests {
         let repos = recovered.list_repositories().unwrap();
         assert_eq!(repos.len(), 0); // Recreated clean
         assert!(temp_dir.join("storage.db.bak").exists()); // .bak was preserved!
+        let notice = recovered
+            .recovery_notice()
+            .expect("corruption recovery must be observable to API layers");
+        assert_eq!(notice.error_code, ERR_STORAGE_CORRUPTION_RECOVERED);
+        assert_eq!(
+            notice.backup_path,
+            temp_dir
+                .join("storage.db.bak")
+                .to_string_lossy()
+                .replace('\\', "/")
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

@@ -24,8 +24,12 @@ autopsy-plugin-api = { path = "../crates/autopsy-plugin-api" }
 autopsy-graph-layout = { path = "../crates/autopsy-graph-layout" }
 autopsy-report = { path = "../crates/autopsy-report" }
 autopsy-cli = { path = "../crates/autopsy-cli" }
+autopsy-git-engine = { path = "../crates/autopsy-git-engine" }
+autopsy-temporal = { path = "../crates/autopsy-temporal" }
+synevid-ui = { path = "../apps/synevid-ui" }
 blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 serde_yaml = { workspace = true }
+tiny_http = { workspace = true }

@@ -7,7 +7,6 @@ import {
   Folder,
   FolderOpen,
   ArrowUp,
-  HardDrive,
   CheckCircle2,
   RefreshCw,
   FolderSearch,
@@ -34,6 +33,17 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Browser directory pickers expose only the selected folder name. Reuse the
+  // current browser location without appending the same directory twice.
+  const joinSelectedDirectory = (basePath: string | undefined, directoryName: string) => {
+    const base = normalizeCrossPlatformPath(basePath || '').replace(/\/+$/, '');
+    const currentName = base.split('/').filter(Boolean).pop();
+    if (currentName && currentName.toLowerCase() === directoryName.toLowerCase()) {
+      return base;
+    }
+    return base ? `${base}/${directoryName}` : directoryName;
+  };
+
   // Load initial filesystem roots/workspace when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -47,6 +57,9 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
     try {
       const data = await api.browseFilesystem(targetPath);
       setFsData(data);
+      if (data.error) {
+        setErrorMsg(data.error);
+      }
       // Invariant: NEVER auto-populate rootPath with default paths on open!
       // Keep rootPath strictly controlled by user input or explicit selection.
     } catch (err: any) {
@@ -57,11 +70,12 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
   };
 
   const handleSelectFolder = (path: string, name?: string) => {
-    setRootPath(path);
+    const normalized = normalizeCrossPlatformPath(path);
+    setRootPath(normalized);
     if (name && !displayName) {
       setDisplayName(name);
     }
-    loadDirectory(path);
+    loadDirectory(normalized);
   };
 
   const handleNativePicker = async () => {
@@ -88,9 +102,7 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
         const dirHandle = await (window as any).showDirectoryPicker();
         if (dirHandle && dirHandle.name) {
           // If user picked a directory, query backend for that name under current or parent
-          const prospective = fsData?.current_path
-            ? `${fsData.current_path.replace(/\/+$/, '')}/${dirHandle.name}`
-            : dirHandle.name;
+          const prospective = joinSelectedDirectory(fsData?.current_path, dirHandle.name);
           setRootPath(prospective);
           if (!displayName) setDisplayName(dirHandle.name);
           loadDirectory(prospective);
@@ -115,9 +127,7 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
       const relPath = firstFile.webkitRelativePath || '';
       const topDir = relPath.split('/')[0];
       if (topDir) {
-        const prospective = fsData?.current_path
-          ? `${fsData.current_path.replace(/\/+$/, '')}/${topDir}`
-          : topDir;
+          const prospective = joinSelectedDirectory(fsData?.current_path, topDir);
         setRootPath(prospective);
         if (!displayName) setDisplayName(topDir);
         loadDirectory(prospective);
@@ -223,30 +233,6 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
             </div>
           </div>
 
-          {/* Quick Presets */}
-          {fsData?.quick_presets && fsData.quick_presets.length > 0 && (
-            <div>
-              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-semibold mb-1.5">
-                Quick Shortcuts:
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {fsData.quick_presets
-                  .filter((preset) => !preset.label.toLowerCase().includes('synevid'))
-                  .map((preset, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSelectFolder(preset.path, preset.label)}
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--card-elevated)] border border-[var(--border-subtle)] hover:border-sky-400 dark:hover:border-cyan-500/50 text-[var(--text-secondary)] hover:text-sky-700 dark:hover:text-cyan-400 hover:bg-sky-50/50 dark:hover:bg-cyan-950/20 transition-colors cursor-pointer text-[11px]"
-                    >
-                      <HardDrive className="w-3 h-3 text-sky-600 dark:text-cyan-400/80" />
-                      <span>{preset.label}</span>
-                    </button>
-                  ))}
-              </div>
-            </div>
-          )}
-
           {/* Interactive Filesystem Navigator */}
           <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--card-elevated)] p-3 space-y-2">
             <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-2">
@@ -254,7 +240,7 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
                 <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 shrink-0" />
                 <span className="text-[var(--text-muted)]">Browsing:</span>
                 <span className="text-[var(--text-primary)] truncate font-semibold">
-                  {fsData?.current_path || rootPath || '/'}
+                  {fsData?.error ? 'No valid directory selected' : fsData?.current_path || rootPath || '/'}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -268,7 +254,7 @@ export default function ConnectRepoModal({ isOpen, onClose, onConnected }: Conne
                   <button
                     type="button"
                     onClick={() => {
-                      setRootPath(fsData.current_path);
+                       setRootPath(normalizeCrossPlatformPath(fsData.current_path));
                       const name = fsData.current_path.split(/[/\\]/).filter(Boolean).pop();
                       if (name && !displayName) setDisplayName(name);
                     }}

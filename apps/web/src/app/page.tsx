@@ -30,6 +30,7 @@ import {
   RepoFileItem,
   Capabilities,
   GraphUniverse,
+  TimeTravelVisualFrame,
   EgoNetwork,
   SimulateEditResponse,
   InvariantFinding,
@@ -42,7 +43,7 @@ import DashboardOverview from '@/components/DashboardOverview';
 import LiveEditSimulator from '@/components/LiveEditSimulator';
 import BlastRadiusSection from '@/components/BlastRadiusSection';
 import InvariantVerificationSection from '@/components/InvariantVerificationSection';
-import ForensicTrajectorySection from '@/components/ForensicTrajectorySection';
+import ForensicTrajectorySection, { CanvasReplaySelection } from '@/components/ForensicTrajectorySection';
 import AiCockpitSection from '@/components/AiCockpitSection';
 import TerminalWorkbench from '@/components/TerminalWorkbench';
 import { GitGalaxySection } from '@/components/GitGalaxySection';
@@ -50,6 +51,8 @@ import ConnectRepoModal from '@/components/ConnectRepoModal';
 import CapabilitiesModal from '@/components/CapabilitiesModal';
 import RepoTreeExplorer from '@/components/RepoTreeExplorer';
 import WorkspaceManualModal from '@/components/WorkspaceManualModal';
+import AnalyticsReportsSection from '@/components/AnalyticsReportsSection';
+import WorkspacePresetSection from '@/components/WorkspacePresetSection';
 import { BookOpen } from 'lucide-react';
 
 const CodeUniverse3D = React.lazy(() => import('@/components/CodeUniverse3D'));
@@ -129,11 +132,22 @@ export default function OperationalCockpitPage() {
   const [egoNetwork, setEgoNetwork] = useState<EgoNetwork | null>(null);
   const [invariants, setInvariants] = useState<InvariantFinding[]>([]);
   const [trajectoryRuns, setTrajectoryRuns] = useState<TrajectoryRun[]>([]);
+  const [activeAiActivity, setActiveAiActivity] = useState<{
+    action: string;
+    target: string;
+    eventSeq?: number;
+  } | null>(null);
+  const aiActivityTimerRef = useRef<number | null>(null);
+  const universeRef = useRef<GraphUniverse | null>(null);
 
   // Live SSE Bus State
-  const [liveSeq, setLiveSeq] = useState<number>(100);
+  const [liveSeq, setLiveSeq] = useState<number>(0);
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
   const [recentEvents, setRecentEvents] = useState<DaemonLiveEvent[]>([]);
+
+  useEffect(() => {
+    universeRef.current = universe;
+  }, [universe]);
 
   // Modals
   const [isConnectModalOpen, setIsConnectModalOpen] = useState<boolean>(false);
@@ -299,14 +313,41 @@ export default function OperationalCockpitPage() {
         setIsLiveConnected(true);
         setLiveSeq(evt.seq_id);
         setRecentEvents((prev) => [evt, ...prev.slice(0, 15)]);
+        if (evt.event_type === 'mcp.live_activity' || evt.event_type === 'mcp.canvas_focus') {
+          const focused = evt.payload.target_symbol || evt.payload.target_file || evt.payload.symbol || evt.payload.file;
+          const action = String(evt.payload.action || evt.payload.tool || evt.event_type);
+          if (typeof focused === 'string' && focused.length > 0) {
+            const node = universeRef.current?.nodes.find((candidate) =>
+              candidate.id === focused || candidate.file_path === focused || candidate.label === focused
+            );
+            if (node) setCanvasSelection(node.id);
+            setCurrentSymbol(focused);
+          }
+          setActiveAiActivity({
+            action,
+            target: typeof focused === 'string' && focused.length > 0 ? focused : 'repository',
+            eventSeq: typeof evt.payload.event_seq === 'number' ? evt.payload.event_seq : undefined,
+          });
+          if (aiActivityTimerRef.current !== null) window.clearTimeout(aiActivityTimerRef.current);
+          aiActivityTimerRef.current = window.setTimeout(() => setActiveAiActivity(null), 1600);
+        }
+        if (evt.event_type === 'mcp.canvas_focus') {
+          const focused = evt.payload.target_symbol || evt.payload.target_file;
+          if (typeof focused === 'string' && focused.length > 0) {
+            setCurrentSymbol(focused);
+            setActiveWorkspace('ws-canvas');
+          }
+        }
       },
       () => {
-        // Fallback polling keeps badge active
-        setIsLiveConnected(true);
+        setIsLiveConnected(false);
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (aiActivityTimerRef.current !== null) window.clearTimeout(aiActivityTimerRef.current);
+    };
   }, []);
 
   const displayedFiles = useMemo(() => {
@@ -341,6 +382,18 @@ export default function OperationalCockpitPage() {
     }
     await api.switchRepo(repoId);
     await refreshAll(repoId);
+  };
+
+  const handleRemoveRepo = async (repoId: string) => {
+    const repo = repos.find((candidate) => candidate.repo_id === repoId);
+    if (!repo || typeof window === 'undefined') return;
+    const label = repo.display_name || repo.root_path || 'this repository';
+    if (!window.confirm(`Remove the saved registration for ${label}? Source files will not be deleted.`)) return;
+
+    const result = await api.removeRepo(repoId);
+    if (result.status !== 'removed') return;
+    localStorage.removeItem('synevid_active_repo_id');
+    await refreshAll();
   };
 
   const handleSearchSymbol = async (symbolId: string) => {
@@ -408,6 +461,44 @@ export default function OperationalCockpitPage() {
     setUniverse((prev) => (prev ? { ...prev, dimensions: nextDim } : null));
   };
 
+  // Git Galaxy historical frames use the same canvas data contract as the live
+  // universe. This swaps only the graph data; CodeUniverse3D's renderer,
+  // animation loop, camera, and visual styling remain unchanged.
+  const handleTimeTravelFrame = useCallback((frame: TimeTravelVisualFrame) => {
+    const historicalUniverse: GraphUniverse = {
+      repo_id: activeRepoId,
+      snapshot_id: frame.oid,
+      dimensions: frame.dimensions,
+      coverage_state: frame.coverage_state || 'Unknown',
+      node_count: frame.node_count,
+      edge_count: frame.edge_count,
+      nodes: frame.nodes.map((node) => ({
+        id: node.id,
+        x: node.x,
+        y: node.y,
+        z: node.z,
+        cluster_id: node.cluster_id,
+        file_path: node.file_path,
+        kind: node.kind,
+        start_line: node.start_line,
+        end_line: node.end_line,
+        status: node.diff_status,
+      })),
+      edges: frame.edges.map((edge, index) => ({
+        id: `historical:${frame.oid}:${index}`,
+        source: edge.source,
+        target: edge.target,
+        kind: edge.kind,
+      })),
+    };
+    startTransition(() => setUniverse(historicalUniverse));
+    setSnapshotId(frame.oid);
+    setCoverageState(frame.coverage_state || 'Unknown');
+    setSymbolCount(frame.node_count);
+    setEdgeCount(frame.edge_count);
+    setActiveWorkspace('ws-canvas');
+  }, [activeRepoId]);
+
   const handleOpenVerificationGates = async () => {
     setActiveWorkspace('ws-gates');
     setIsRefreshingGates(true);
@@ -425,7 +516,7 @@ export default function OperationalCockpitPage() {
     const activeRepo = repos.find((repo) => repo.repo_id === activeRepoId);
     const report = {
       schema_version: 'synevid.report.v1',
-      application: { name: 'SynEvid', version: '0.5.0' },
+      application: { name: 'SynEvid', version: '0.6.0' },
       repository: {
         id: activeRepoId || null,
         name: activeRepo?.display_name || null,
@@ -484,6 +575,7 @@ export default function OperationalCockpitPage() {
           repos={repos}
           activeRepoId={activeRepoId}
           onSelectRepo={handleSelectRepo}
+          onRemoveRepo={handleRemoveRepo}
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
           onOpenCapabilitiesModal={() => setIsCapabilitiesModalOpen(true)}
           onOpenTerminal={() => setActiveWorkspace('ws-ai')}
@@ -591,6 +683,20 @@ export default function OperationalCockpitPage() {
                 : 'p-6 overflow-y-auto'
             }`}
           >
+            {activeWorkspace === 'ws-canvas' && activeAiActivity && (
+              <div
+                className="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-cyan-400/60 bg-slate-950/90 px-3 py-2 font-mono text-[11px] text-cyan-200 shadow-lg shadow-cyan-500/10"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
+                <Bot className="h-3.5 w-3.5 text-cyan-300" />
+                <span className="font-bold text-cyan-100">AI Active</span>
+                <span className="max-w-[220px] truncate text-cyan-300">
+                  {activeAiActivity.action} · {activeAiActivity.target}
+                </span>
+              </div>
+            )}
             {activeWorkspace === 'ws-canvas' && universe && universe.nodes.length > 0 && (
               <Suspense fallback={<CanvasLoadingState stage="mounting" progress={99} />}>
                 <CodeUniverse3D
@@ -631,32 +737,81 @@ export default function OperationalCockpitPage() {
             )}
 
             {activeWorkspace === 'ws-repos' && (
-              <DashboardOverview
-                snapshotId={snapshotId}
-                repoRoot={repoRoot}
-                coverageState={coverageState}
-                filesScanned={filesScanned}
-                symbolCount={symbolCount}
-                edgeCount={edgeCount}
-                ruleFindingsCount={invariants.length}
-                failingRulesCount={failingRulesCount}
-                recentEvents={recentEvents}
-                onNavigateTab={(tab) => {
-                  if (tab === 'universe') setActiveWorkspace('ws-canvas');
-                  if (tab === 'verify') setActiveWorkspace('ws-gates');
-                }}
-              />
+              <div className="space-y-6">
+                <DashboardOverview
+                  snapshotId={snapshotId}
+                  repoRoot={repoRoot}
+                  coverageState={coverageState}
+                  filesScanned={filesScanned}
+                  symbolCount={symbolCount}
+                  edgeCount={edgeCount}
+                  ruleFindingsCount={invariants.length}
+                  failingRulesCount={failingRulesCount}
+                  recentEvents={recentEvents}
+                  onNavigateTab={(tab) => {
+                    if (tab === 'universe') setActiveWorkspace('ws-canvas');
+                    if (tab === 'verify') setActiveWorkspace('ws-gates');
+                  }}
+                />
+                <AnalyticsReportsSection />
+              </div>
             )}
 
             {activeWorkspace === 'ws-git' && (
               <GitGalaxySection
+                onTimeTravelFrame={handleTimeTravelFrame}
                 onNavigateUniverse={() => setActiveWorkspace('ws-canvas')}
               />
             )}
 
             {activeWorkspace === 'ws-trajectory' && (
               <ForensicTrajectorySection
-                onReplayCanvas={(target) => {
+                liveEvents={recentEvents}
+                onReplayCanvas={(selection: CanvasReplaySelection) => {
+                  const targetNode = universeRef.current?.nodes.find((node) =>
+                    selection.affectedSymbols.includes(node.id) ||
+                    selection.affectedSymbols.includes(node.label || '') ||
+                    selection.targetSymbolOrFile === node.id ||
+                    selection.targetSymbolOrFile === node.file_path
+                  );
+                  const target = targetNode?.id || selection.targetSymbolOrFile;
+                  const filePath = targetNode?.file_path || selection.affectedFiles[0] ||
+                    (selection.targetSymbolOrFile.includes('/') ? selection.targetSymbolOrFile : null);
+                  const edgeNodeIds = selection.affectedEdges.flatMap((edge) => [edge.source, edge.target]);
+                  const fileNodeIds = universeRef.current?.nodes
+                    .filter((node) => node.file_path && selection.affectedFiles.includes(node.file_path))
+                    .map((node) => node.id) || [];
+                  const affectedIds = [...new Set([
+                    ...selection.affectedSymbols,
+                    ...edgeNodeIds,
+                    ...fileNodeIds,
+                    ...(targetNode ? [targetNode.id] : []),
+                  ])];
+                  const replaySimulation: SimulateEditResponse = {
+                    repo_id: activeRepoId,
+                    verdict: 'INFO',
+                    coverage_state: 'verified',
+                    baseline_snapshot_id: null,
+                    candidate_snapshot_id: null,
+                    impacted_entities: affectedIds,
+                    impact_truncated: false,
+                    damaged_callers: affectedIds.map((stable_id) => ({
+                      stable_id,
+                      file_path: filePath || '',
+                      calling_line: 0,
+                      calling_col: 0,
+                      diagnostic: `Historical event #${selection.eventSeq} affected node`,
+                      severity: 'info',
+                    })),
+                    newly_dead_symbols: [],
+                    broken_imports: [],
+                    syntax_errors: [],
+                    computation_latency_ms: 0,
+                  };
+                  setSimulation(replaySimulation);
+                  setSimulatorFilePath(filePath);
+                  setCanvasSelection(targetNode?.id || null);
+                  setSelectedFile(filePath || null);
                   setCurrentSymbol(target);
                   setActiveWorkspace('ws-canvas');
                 }}
@@ -695,6 +850,10 @@ export default function OperationalCockpitPage() {
                     Dynamic Trait Registries (autopsy-plugin-api) &bull; Zero-LLM Invariant
                   </p>
                 </div>
+                <WorkspacePresetSection onApply={(workspaceId, drawerCollapsed) => {
+                  setActiveWorkspace(workspaceId);
+                  setIsDrawerCollapsed(drawerCollapsed);
+                }} />
                 <BlastRadiusSection
                   onSelectSymbol={(sym) => {
                     handleSearchSymbol(sym);

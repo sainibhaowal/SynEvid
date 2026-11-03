@@ -1,191 +1,240 @@
-//! Phase 4 (v0.5.0) AI Token-Saving Working Cache Benchmark (FR-P4-003).
+//! Phase 4 real edit -> simulate -> verify -> working-memory integration.
 //!
-//! Benchmark asserting that SynEvid's persistent SQLite Working Memory (ai_working_cache)
-//! achieves >= 60% serialized token reduction across a simulated 6-turn AI agent
-//! refactoring session while preserving 100% semantic verification equivalence.
+//! This test intentionally drives the daemon handlers against a temporary
+//! repository. It does not invent AST payloads, caller counts, receipts, or
+//! token savings: the first cache response comes from the persisted graph and
+//! the second response is measured from that stored result.
 
-use autopsy_storage::{AiWorkingCacheEntry, ForensicSessionRecord, StorageEngine};
+use serde_json::Value;
+use std::fs;
+use std::path::PathBuf;
+use synevid_ui::server::DashboardServer;
+
+fn fixture_root() -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "synevid-phase4-real-cache-{}-{}",
+        std::process::id(),
+        blake3::hash(format!("{:?}", std::time::SystemTime::now()).as_bytes()).to_hex()
+    ));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/PaymentService.ts"),
+        "export function chargeCard(amount: number) { return amount; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/OrderController.ts"),
+        "import { chargeCard } from './PaymentService';\nexport function checkout(amount: number) { return chargeCard(amount); }\n",
+    )
+    .unwrap();
+    root
+}
+
+fn json_response(raw: &str) -> Value {
+    serde_json::from_str(raw)
+        .unwrap_or_else(|error| panic!("daemon returned invalid JSON: {error}; {raw}"))
+}
 
 #[test]
-fn test_phase4_ai_cache_efficiency_benchmark() {
-    let engine = StorageEngine::in_memory().expect("in_memory storage engine");
+fn test_phase4_real_edit_simulate_verify_and_working_memory() {
+    let root = fixture_root();
+    let server = DashboardServer::new(root.clone(), "127.0.0.1".to_string(), 0);
 
-    let session_id = "sess_ai_benchmark_001";
-    let session = ForensicSessionRecord {
-        session_id: session_id.to_string(),
-        repo_id: "repo_billing_core".to_string(),
-        actor_kind: "AI_AGENT".to_string(),
-        actor_name: "Claude-Code".to_string(),
-        baseline_snap_id: "blake3:base_snap_abc123".to_string(),
-        current_snap_id: "blake3:base_snap_abc123".to_string(),
-        status: "ACTIVE".to_string(),
-    };
-    engine.create_forensic_session(&session).unwrap();
+    let session = json_response(
+        &server.handle_forensic_sessions_start(
+            &serde_json::json!({
+                "session_id": "sess_phase4_real",
+                "actor_kind": "AI_AGENT",
+                "actor_name": "integration-test"
+            })
+            .to_string(),
+        ),
+    );
+    assert_eq!(session["status"], "ACTIVE");
 
-    // Model full uncompressed responses (the wasteful way AI agents currently work without SynEvid)
-    // In uncompressed mode, each query dumps the full subgraph, full AST, full caller list,
-    // and full file contents into the agent's context window.
-    let full_impact_payload = serde_json::json!({
-        "symbol": "chargeCard",
-        "file": "src/services/PaymentService.ts",
-        "callers": [
-            {"id": "OrderController.checkout", "file": "src/controllers/OrderController.ts", "line": 42, "col": 12, "source_snippet": "paymentService.chargeCard(order.amount, order.currency, customer.cardToken)"},
-            {"id": "SubscriptionManager.renew", "file": "src/billing/SubscriptionManager.ts", "line": 88, "col": 16, "source_snippet": "paymentService.chargeCard(plan.recurringPrice, plan.currency, customer.cardToken)"},
-            {"id": "InvoiceService.payOutstanding", "file": "src/billing/InvoiceService.ts", "line": 134, "col": 8, "source_snippet": "paymentService.chargeCard(invoice.balance, invoice.currency, token)"},
-            {"id": "OneClickPay.execute", "file": "src/checkout/OneClickPay.ts", "line": 56, "col": 14, "source_snippet": "paymentService.chargeCard(payload.total, payload.currency, token)"},
-            {"id": "RefundOrChargeRetry.retry", "file": "src/jobs/RefundOrChargeRetry.ts", "line": 204, "col": 10, "source_snippet": "paymentService.chargeCard(job.amount, job.currency, job.cardToken)"},
-            {"id": "ApiV1ChargesRoute.post", "file": "src/api/routes/charges.ts", "line": 31, "col": 22, "source_snippet": "paymentService.chargeCard(req.body.amount, req.body.currency, req.body.token)"},
-            {"id": "MobileCheckoutHandler.process", "file": "src/mobile/MobileCheckoutHandler.ts", "line": 77, "col": 18, "source_snippet": "paymentService.chargeCard(data.amount, data.currency, data.token)"},
-            {"id": "WebhookPaymentExecutor.handle", "file": "src/webhooks/WebhookPaymentExecutor.ts", "line": 95, "col": 12, "source_snippet": "paymentService.chargeCard(event.amount, event.currency, event.token)"},
-            {"id": "TerminalPointOfSale.swipe", "file": "src/pos/TerminalPointOfSale.ts", "line": 112, "col": 15, "source_snippet": "paymentService.chargeCard(amount, currency, terminalToken)"},
-            {"id": "CorporateBillingJob.runMonthly", "file": "src/enterprise/CorporateBillingJob.ts", "line": 420, "col": 24, "source_snippet": "paymentService.chargeCard(total, \"USD\", corporateCard)"}
-        ],
-        "ast_metadata": {"arity": 3, "visibility": "public", "is_async": true, "effects": ["network_io", "db_write"]},
-        "file_content_slice": "// 150 lines of surrounding code...\nclass PaymentService {\n  async chargeCard(amount: number, currency: string, token: string): Promise<ChargeResult> {}\n}"
-    }).to_string();
-
-    let full_simulate_break_payload = serde_json::json!({
-        "status": "FAIL",
-        "affected_file": "src/services/PaymentService.ts",
-        "broken_callers": [
-            {"caller": "OrderController.checkout", "file": "src/controllers/OrderController.ts", "line": 42, "reason": "Expected 4 arguments but received 3"},
-            {"caller": "SubscriptionManager.renew", "file": "src/billing/SubscriptionManager.ts", "line": 88, "reason": "Expected 4 arguments but received 3"}
-        ],
-        "all_callers_re-evaluated": [
-            {"id": "OrderController.checkout", "status": "BROKEN"},
-            {"id": "SubscriptionManager.renew", "status": "BROKEN"},
-            {"id": "InvoiceService.payOutstanding", "status": "UNCHANGED"},
-            {"id": "OneClickPay.execute", "status": "UNCHANGED"},
-            {"id": "RefundOrChargeRetry.retry", "status": "UNCHANGED"},
-            {"id": "ApiV1ChargesRoute.post", "status": "UNCHANGED"},
-            {"id": "MobileCheckoutHandler.process", "status": "UNCHANGED"},
-            {"id": "WebhookPaymentExecutor.handle", "status": "UNCHANGED"},
-            {"id": "TerminalPointOfSale.swipe", "status": "UNCHANGED"},
-            {"id": "CorporateBillingJob.runMonthly", "status": "UNCHANGED"}
-        ],
-        "full_ast_diff": "diff --git a/src/services/PaymentService.ts b/src/services/PaymentService.ts\n--- a/src/services/PaymentService.ts\n+++ b/src/services/PaymentService.ts\n@@ -24,3 +24,3 @@\n-  async chargeCard(amount: number, currency: string, token: string)\n+  async chargeCard(amount: number, currency: string, token: string, idempotencyKey: string)"
-    }).to_string();
-
-    // Turn 1: First query (chargeCard impact).
-    // Stores in ai_working_cache and issues receipt rcpt_01
-    let turn1_compressed = serde_json::json!({
-        "status": "CACHED_BASELINE",
-        "receipt_token": "rcpt_01",
-        "symbol": "chargeCard",
-        "caller_count": 10,
-        "broken_count": 0,
-        "digest": "blake3:7c9e01"
-    })
-    .to_string();
-
-    let cache_entry = AiWorkingCacheEntry {
-        cache_key: "cache_key_chargeCard_base".to_string(),
-        repo_id: "repo_billing_core".to_string(),
-        snapshot_id: "snap_001".to_string(),
-        query_kind: "impact".to_string(),
-        target_id: "chargeCard".to_string(),
-        compact_payload: turn1_compressed.clone(),
-        token_estimate: (turn1_compressed.len() / 4) as i64,
-        hit_count: 0,
-        last_receipt_token: Some("rcpt_01".to_string()),
-    };
-    engine.set_ai_working_cache(&cache_entry).unwrap();
-
-    // Turn 2: Simulate edit (breaks 2 callers).
-    // Emits ONLY the delta against rcpt_01!
-    let turn2_compressed = serde_json::json!({
-        "status": "DELTA_BREAK",
-        "base_receipt": "rcpt_01",
-        "new_receipt": "rcpt_02",
-        "delta": {
-            "broken_callers": [
-                {"caller": "OrderController.checkout:42", "reason": "missing idempotencyKey"},
-                {"caller": "SubscriptionManager.renew:88", "reason": "missing idempotencyKey"}
-            ],
-            "unaffected_callers_count": 8
-        }
-    })
-    .to_string();
-
-    // Turn 3: Deduplicated follow-up (AI asks about chargeCard again without edits)
-    // SynEvid detects hit_count > 0 on same BLAKE3 state -> returns 20-token pointer!
-    let hit_check = engine
-        .get_ai_working_cache("cache_key_chargeCard_base")
-        .unwrap()
-        .unwrap();
-    assert_eq!(hit_check.hit_count, 0); // was 0 before read, incremented now
-    let turn3_compressed = serde_json::json!({
-        "status": "UNCHANGED_SINCE_STEP_1",
-        "receipt_token": "rcpt_01",
-        "digest": "blake3:7c9e01"
-    })
-    .to_string();
-
-    // Turn 4: Repair edit simulated (fixes both callers)
-    let turn4_compressed = serde_json::json!({
-        "status": "DELTA_REPAIRED",
-        "base_receipt": "rcpt_02",
-        "new_receipt": "rcpt_03",
-        "delta": {
-            "repaired_callers": ["OrderController.checkout:42", "SubscriptionManager.renew:88"],
-            "broken_callers": []
-        }
-    })
-    .to_string();
-
-    // Turn 5: Re-verify unchanged module dependency (Cache hit!)
-    let turn5_compressed = serde_json::json!({
-        "status": "UNCHANGED_SINCE_STEP_1",
-        "receipt_token": "rcpt_01",
-        "digest": "blake3:7c9e01"
-    })
-    .to_string();
-
-    // Turn 6: Verification pass receipt
-    let turn6_compressed = serde_json::json!({
-        "status": "VERIFIED_PASS",
-        "receipt_token": "rcpt_04",
-        "invariants_checked": 14,
-        "broken_count": 0,
-        "digest": "blake3:9f02bb"
-    })
-    .to_string();
-
-    // Compute token bytes
-    let uncompressed_bytes: usize =
-        full_impact_payload.len() * 3 + full_simulate_break_payload.len() * 3;
-    let compressed_bytes: usize = turn1_compressed.len()
-        + turn2_compressed.len()
-        + turn3_compressed.len()
-        + turn4_compressed.len()
-        + turn5_compressed.len()
-        + turn6_compressed.len();
-
-    let token_reduction_ratio = 1.0 - (compressed_bytes as f64 / uncompressed_bytes as f64);
-    let reduction_percentage = token_reduction_ratio * 100.0;
-
-    println!("Uncompressed 6-turn payload bytes: {uncompressed_bytes}");
-    println!("Compressed AI Working Cache bytes : {compressed_bytes}");
-    println!("Token reduction percentage        : {reduction_percentage:.2}%");
-
-    // Acceptance criterion: >= 60% reduction
+    let original = fs::read_to_string(root.join("src/PaymentService.ts")).unwrap();
+    // Warm the real repository/index artifact path before measuring the
+    // steady-state edit guardrail. Cold startup work is not the edit budget.
+    let _warmup = json_response(
+        &server.handle_simulate_edit(
+            &serde_json::json!({
+                "file_path": "src/PaymentService.ts",
+                "unsaved_buffer": original.clone(),
+                "session_id": "sess_phase4_real"
+            })
+            .to_string(),
+        ),
+    );
+    let simulation = json_response(&server.handle_simulate_edit(
+        &serde_json::json!({
+            "file_path": "src/PaymentService.ts",
+            "unsaved_buffer": "export function chargeCard(amount: number, token: string) { return amount; }\n",
+            "session_id": "sess_phase4_real"
+        })
+        .to_string(),
+    ));
+    assert!(simulation["verdict"].is_string());
+    assert!(simulation["candidate_snapshot_id"].is_string());
     assert!(
-        reduction_percentage >= 60.0,
-        "Token reduction must be >= 60%, got {reduction_percentage:.2}%"
+        simulation["computation_latency_ms"]
+            .as_u64()
+            .is_some_and(|latency| latency <= 50),
+        "real in-memory simulation exceeded the 50 ms Phase 4 budget: {}",
+        simulation["computation_latency_ms"]
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("src/PaymentService.ts")).unwrap(),
+        original
     );
 
-    // Verify AI Session Ledger tracks the savings correctly
-    let tokens_uncompressed = (uncompressed_bytes / 4) as i64;
-    let tokens_compressed = (compressed_bytes / 4) as i64;
-    let tokens_saved = tokens_uncompressed - tokens_compressed;
+    // The agent now applies the edit outside the daemon, then the daemon verifies
+    // the real working tree. This proves the benchmark exercises a real loop.
+    let edited = "export function chargeCard(amount: number, token: string) { return amount; }\n";
+    fs::write(root.join("src/PaymentService.ts"), edited).unwrap();
+    let verification = json_response(&server.handle_verify());
+    assert!(verification["status"].is_string());
+    assert!(
+        !verification.get("error").is_some(),
+        "verification must return evidence"
+    );
 
-    engine
-        .record_ai_query(session_id, true, tokens_compressed, tokens_saved)
-        .unwrap();
+    let status = json_response(&server.handle_status());
+    let snapshot_id = status["snapshot_id"].as_str().expect("real snapshot id");
+    let storage = server
+        .get_storage_for_active_repo()
+        .expect("repository storage");
+    let (nodes, _) = storage
+        .graph_rows_for_snapshot(snapshot_id)
+        .expect("indexed graph rows");
+    let target = nodes
+        .iter()
+        .find(|node| node.node_kind != "file" && node.node_kind != "unknown")
+        .expect("fixture must produce a semantic graph node");
 
-    let ledger = engine.get_or_create_ai_ledger(session_id).unwrap();
-    assert_eq!(ledger.total_queries, 1);
-    assert_eq!(ledger.cache_hits, 1);
-    assert!(ledger.tokens_saved > 0);
-    assert!(ledger.cost_saved_microcents > 0);
+    let query = serde_json::json!({
+        "session_id": "sess_phase4_real",
+        "symbol": target.qualified_name.clone(),
+        "query_kind": "full_subgraph",
+        "cache_mode": "read"
+    })
+    .to_string();
+    let first = json_response(&server.handle_ai_cache_query(&query));
+    assert_eq!(first["status"], "CACHED_NEW");
+    assert_eq!(first["compact_pointer"], false);
+    assert!(first["query"]["target_node"].is_object());
+    assert!(first["tokens_spent"].as_i64().unwrap_or(0) > 0);
+
+    let second = json_response(&server.handle_ai_cache_query(&query));
+    assert_eq!(second["status"], "UNCHANGED_SINCE_PREVIOUS_STEP");
+    assert_eq!(second["compact_pointer"], true);
+    assert!(second["tokens_saved"].as_i64().unwrap_or(0) > 0);
+    assert_eq!(first["receipt_token"], second["receipt_token"]);
+
+    let ledger =
+        json_response(&server.handle_ai_ledger("/api/v1/ai/ledger?session_id=sess_phase4_real"));
+    assert_eq!(ledger["ledger"]["total_queries"], 2);
+    assert_eq!(ledger["ledger"]["cache_hits"], 1);
+    assert!(ledger["ledger"]["tokens_saved"].as_i64().unwrap_or(0) > 0);
+
+    let timeline = json_response(
+        &server.handle_forensic_timeline("/api/v1/forensics/timeline?session_id=sess_phase4_real"),
+    );
+    assert!(timeline["events"].as_array().is_some_and(|events| {
+        events
+            .iter()
+            .any(|event| event["event_type"] == "simulate_edit")
+    }));
+
+    // Acceptance benchmark: six real edit -> verify -> graph-query turns. The
+    // uncached arm invalidates the persisted entry before every query; the cached
+    // arm keeps the same snapshot/symbol key and must return one full receipt plus
+    // compact pointers. Both arms execute the same simulator and verifier, so the
+    // reduction is measured on real semantic responses rather than a handcrafted
+    // token constant.
+    let benchmark_query = |session_id: &str| {
+        serde_json::json!({
+            "session_id": session_id,
+            "symbol": target.qualified_name.clone(),
+            "query_kind": "full_subgraph",
+            "cache_mode": "read"
+        })
+        .to_string()
+    };
+    let mut uncached_bytes = 0usize;
+    let mut uncached_semantics: Option<Value> = None;
+    for turn in 0..6 {
+        let simulated = json_response(&server.handle_simulate_edit(
+            &serde_json::json!({
+                "file_path": "src/PaymentService.ts",
+                "unsaved_buffer": format!(
+                    "export function chargeCard(amount: number, token: string) {{ return amount + {}; }}\n",
+                    turn
+                ),
+                "session_id": "sess_phase4_uncached"
+            })
+            .to_string(),
+        ));
+        assert!(simulated["verdict"].is_string());
+        let verified = json_response(&server.handle_verify());
+        assert!(verified["status"].is_string());
+        let query = benchmark_query("sess_phase4_uncached");
+        let _ = json_response(
+            &server.handle_ai_cache_query(
+                &serde_json::json!({
+                    "session_id": "sess_phase4_uncached",
+                    "symbol": target.qualified_name.clone(),
+                    "query_kind": "full_subgraph",
+                    "cache_mode": "invalidate"
+                })
+                .to_string(),
+            ),
+        );
+        let response = json_response(&server.handle_ai_cache_query(&query));
+        assert_eq!(response["status"], "CACHED_NEW");
+        if uncached_semantics.is_none() {
+            uncached_semantics = Some(response["query"].clone());
+        }
+        uncached_bytes += response.to_string().len();
+    }
+
+    let mut cached_bytes = 0usize;
+    let mut cached_semantics: Option<Value> = None;
+    for turn in 0..6 {
+        let simulated = json_response(&server.handle_simulate_edit(
+            &serde_json::json!({
+                "file_path": "src/PaymentService.ts",
+                "unsaved_buffer": format!(
+                    "export function chargeCard(amount: number, token: string) {{ return amount + {}; }}\n",
+                    turn
+                ),
+                "session_id": "sess_phase4_cached"
+            })
+            .to_string(),
+        ));
+        assert!(simulated["verdict"].is_string());
+        let verified = json_response(&server.handle_verify());
+        assert!(verified["status"].is_string());
+        let response =
+            json_response(&server.handle_ai_cache_query(&benchmark_query("sess_phase4_cached")));
+        if turn == 0 {
+            assert_eq!(response["status"], "CACHED_NEW");
+            cached_semantics = Some(response["query"].clone());
+        } else {
+            assert_eq!(response["status"], "UNCHANGED_SINCE_PREVIOUS_STEP");
+            assert_eq!(response["compact_pointer"], true);
+        }
+        cached_bytes += response.to_string().len();
+    }
+    assert_eq!(
+        uncached_semantics, cached_semantics,
+        "cache must preserve semantic query results"
+    );
+    let reduction =
+        (uncached_bytes.saturating_sub(cached_bytes) as f64 / uncached_bytes as f64) * 100.0;
+    assert!(
+        reduction >= 60.0,
+        "six-turn working-memory reduction was only {reduction:.2}% (uncached={uncached_bytes}, cached={cached_bytes})"
+    );
+
+    fs::remove_dir_all(root).ok();
 }

@@ -25,7 +25,7 @@
   <a href="#deterministic-pipeline"><img src="https://img.shields.io/badge/Determinism-100%2F100%20BLAKE3-00f0ff?style=for-the-badge&logo=rust" alt="100/100 Determinism"></a>
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.90%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
-  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-924%2F924%20Tests%20Passing-00e676?style=for-the-badge" alt="Tests Passing"></a>
+  <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-Phase%201%20E2E%20Green-00e676?style=for-the-badge" alt="Phase 1 end-to-end verification"></a>
   <a href="#7-benchmark-harness--empirical-evaluation-architecture"><img src="https://img.shields.io/badge/Gate%20(Ch.12)-PASSED%20on%20recall%20(%2B28.33pp)-00e676?style=for-the-badge" alt="Pre-Registered Gate: PASSED on recall"></a>
 </p>
 
@@ -279,7 +279,7 @@ autopsy session report --format json                     # task-completion foren
 
 ---
 
-## 5. Monorepo Crate Substrate (28 Specialized Crates)
+## 5. Monorepo Crate Substrate
 
 The Synevid engine is organized into 28 modular Rust crates with strict compiler-enforced boundary isolation:
 
@@ -329,7 +329,7 @@ SynEvid/
 ├── benchmarks/                         # Phase 6 Enterprise Benchmark Evaluation Harness
 ├── schemas/                            # Frozen public JSON Schemas (Draft-07)
 ├── scripts/                            # Automated verification, installers (install.sh / install.ps1) & .deb/.rpm builder
-├── docs/                               # 40 Verification Reports, ADRs, and Traceability
+├── docs/                               # Evidence dossiers, ADRs, requirements, and traceability
 └── assets/                             # Visual emblems, diagrams, and identity assets
 ```
 

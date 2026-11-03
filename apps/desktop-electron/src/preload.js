@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('synevidDesktop', {
 
   // Daemon Status Query
   getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),
+  // Synchronous by design: renderer fetch construction must attach the
+  // ephemeral token before the request is sent.
+  getDaemonToken: () => ipcRenderer.sendSync('daemon:token-sync'),
 
   // Electron compositor presentation meter
   startFrameMeter: () => ipcRenderer.invoke('frame-meter:start'),

@@ -2,6 +2,7 @@
 //!
 //! Complies with INV-SANDBOX-003 (Zero sub-process execution) and FR-026 (Read-only analyzer).
 
+use crate::index::{clean_worktree_bytes, index_path, read_index};
 use crate::model::*;
 use autopsy_temporal::git::{GitError, GitObjectStore, ObjectId, flatten_tree};
 use sha1::{Digest, Sha1};
@@ -28,8 +29,10 @@ impl GitStatusScanner {
         // 1. Resolve active branch & HEAD commit
         let (branch_name, head_oid) = self.resolve_head_and_branch(&git_dir, &mut store)?;
 
-        // 2. Read staged files from .autopsy/staged_files.json
-        let staged_paths = self.read_staged_paths();
+        // 2. Read the real Git index. The index, not an Autopsy sidecar,
+        // defines staged state.
+        let has_index = index_path(&git_dir).exists();
+        let index_entries = read_index(&git_dir)?;
 
         // 3. Flatten HEAD tree into map of path -> object_id
         let mut head_files: BTreeMap<String, ObjectId> = BTreeMap::new();
@@ -66,73 +69,82 @@ impl GitStatusScanner {
         for rel_path in &seen_disk_files {
             let full_path = self.repo_root.join(rel_path);
             let file_bytes = fs::read(&full_path).unwrap_or_default();
-            let is_staged = staged_paths.contains(rel_path);
+            let clean_bytes = clean_worktree_bytes(rel_path, &file_bytes);
+            let local_blob_oid = Self::compute_git_blob_id(&clean_bytes);
+            let index_entry = index_entries.get(rel_path);
+            let head_blob_oid = head_files.get(rel_path).copied();
+            let staged_changed = index_entry
+                .map(|entry| Some(entry.oid) != head_blob_oid)
+                .unwrap_or_else(|| head_blob_oid.is_some() && has_index);
+            let worktree_changed = index_entry
+                .map(|entry| local_blob_oid != entry.oid)
+                .unwrap_or_else(|| {
+                    head_blob_oid
+                        .map(|head_oid| local_blob_oid != head_oid)
+                        .unwrap_or(true)
+                });
 
-            if let Some(head_blob_oid) = head_files.get(rel_path) {
-                // Tracked file: compute blob SHA-1 to see if modified
-                let local_blob_oid = Self::compute_git_blob_id(&file_bytes);
-                if local_blob_oid != *head_blob_oid {
-                    let (added, deleted) =
-                        self.count_line_diffs(&mut store, *head_blob_oid, &file_bytes);
-                    if is_staged {
-                        staged.push(FileStatusItem {
-                            path: rel_path.clone(),
-                            status: "staged".to_string(),
-                            added_lines: added,
-                            deleted_lines: deleted,
-                        });
-                    } else {
-                        unstaged.push(FileStatusItem {
-                            path: rel_path.clone(),
-                            status: "modified".to_string(),
-                            added_lines: added,
-                            deleted_lines: deleted,
-                        });
-                    }
-                } else if is_staged {
-                    staged.push(FileStatusItem {
-                        path: rel_path.clone(),
-                        status: "staged".to_string(),
-                        added_lines: 0,
-                        deleted_lines: 0,
-                    });
-                }
-            } else {
-                // Untracked file
-                let lines = String::from_utf8_lossy(&file_bytes).lines().count();
-                if is_staged {
-                    staged.push(FileStatusItem {
-                        path: rel_path.clone(),
-                        status: "staged".to_string(),
-                        added_lines: lines,
-                        deleted_lines: 0,
-                    });
+            if staged_changed {
+                let (added, deleted) = if let Some(head_oid) = head_blob_oid {
+                    self.count_line_diffs(&mut store, head_oid, &file_bytes)
                 } else {
+                    (String::from_utf8_lossy(&file_bytes).lines().count(), 0)
+                };
+                staged.push(FileStatusItem {
+                    path: rel_path.clone(),
+                    status: "staged".to_string(),
+                    added_lines: added,
+                    deleted_lines: deleted,
+                });
+            }
+            if worktree_changed {
+                let (added, deleted) = if let Some(entry) = index_entry {
+                    self.count_line_diffs(&mut store, entry.oid, &file_bytes)
+                } else {
+                    (String::from_utf8_lossy(&file_bytes).lines().count(), 0)
+                };
+                if index_entry.is_none() && head_blob_oid.is_none() {
                     untracked.push(FileStatusItem {
                         path: rel_path.clone(),
                         status: "untracked".to_string(),
-                        added_lines: lines,
-                        deleted_lines: 0,
+                        added_lines: added,
+                        deleted_lines: deleted,
+                    });
+                } else {
+                    unstaged.push(FileStatusItem {
+                        path: rel_path.clone(),
+                        status: "modified".to_string(),
+                        added_lines: added,
+                        deleted_lines: deleted,
                     });
                 }
             }
         }
 
-        // 6. Check for deleted files (in HEAD but not on disk)
+        // 6. Check for deleted files in the working tree and/or index.
         let mut deleted = Vec::new();
-        for (head_path, _oid) in &head_files {
-            if !seen_disk_files.contains(head_path) {
-                let is_staged = staged_paths.contains(head_path);
-                let item = FileStatusItem {
-                    path: head_path.clone(),
-                    status: "deleted".to_string(),
-                    added_lines: 0,
-                    deleted_lines: 1,
-                };
-                if is_staged {
-                    staged.push(item);
-                } else {
-                    deleted.push(item);
+        let mut all_tracked = BTreeSet::new();
+        all_tracked.extend(head_files.keys().cloned());
+        all_tracked.extend(index_entries.keys().cloned());
+        for head_path in all_tracked {
+            let head_oid = head_files.get(&head_path).copied();
+            let index_oid = index_entries.get(&head_path).map(|entry| entry.oid);
+            if !seen_disk_files.contains(&head_path) {
+                if has_index && index_oid != head_oid {
+                    staged.push(FileStatusItem {
+                        path: head_path.clone(),
+                        status: "staged".to_string(),
+                        added_lines: 0,
+                        deleted_lines: 1,
+                    });
+                }
+                if index_oid.is_some() || (!has_index && head_oid.is_some()) {
+                    deleted.push(FileStatusItem {
+                        path: head_path,
+                        status: "deleted".to_string(),
+                        added_lines: 0,
+                        deleted_lines: 1,
+                    });
                 }
             }
         }
@@ -223,16 +235,6 @@ impl GitStatusScanner {
 
         let head_oid = store.resolve_ref("HEAD")?.map(|o| o.to_hex());
         Ok((branch, head_oid))
-    }
-
-    fn read_staged_paths(&self) -> BTreeSet<String> {
-        let stage_file = self.repo_root.join(".autopsy").join("staged_files.json");
-        if let Ok(content) = fs::read_to_string(stage_file) {
-            if let Ok(paths) = serde_json::from_str::<Vec<String>>(&content) {
-                return paths.into_iter().collect();
-            }
-        }
-        BTreeSet::new()
     }
 
     fn load_ignore_patterns(&self) -> Vec<String> {

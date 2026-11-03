@@ -9,6 +9,10 @@ Resolves the repository onboarding deficiency where users were required to manua
 
 ---
 
+## Current-state correction (2026-11-01)
+
+This receipt documents the original folder-browser implementation. The current implementation keeps the native picker and deterministic directory browser, but removes persistent quick shortcuts and all user/project-specific defaults. The current `/api/v1/fs/browse` response is `quick_presets: []`; users explicitly choose the returned native path.
+
 ## Architecture & Implementation Details
 
 ### 1. Host Filesystem REST Endpoint (`/api/v1/fs/browse`)
@@ -22,7 +26,7 @@ Resolves the repository onboarding deficiency where users were required to manua
     - `parent_path`: String | null
     - `is_git_repo`: Boolean (checks for `.git`)
     - `directories`: Alphabetically sorted list of subdirectories (`NFR-001` determinism), filtering out internal caches (`node_modules`, `target`, `.next`, `.git`).
-    - `quick_presets`: Workspace root, User Home, Root filesystem.
+    - `quick_presets`: Empty array. No workspace, home, root-filesystem, or project-specific shortcut is injected.
 
 ### 2. Client API & Types
 - **Location**: [`apps/web/src/lib/api.ts`](file:///home/ravi/Projects%20Beta/SynEvid/apps/web/src/lib/api.ts)
@@ -48,7 +52,7 @@ Resolves the repository onboarding deficiency where users were required to manua
 - **Location**: [`apps/web/src/components/ConnectRepoModal.tsx`](file:///home/ravi/Projects%20Beta/SynEvid/apps/web/src/components/ConnectRepoModal.tsx)
 - **Components**:
   - **Open OS Explorer Picker Button**: Calls `window.showDirectoryPicker()` to launch the operating system's native directory chooser dialog, with automatic fallback to `<input type="file" webkitdirectory />`.
-  - **Quick Shortcuts**: One-click pills for Workspace root, Home, and Root directories.
+  - **Repository selection**: The user explicitly selects the currently browsed directory; no fixed shortcut pills are injected.
   - **Interactive Directory Tree**: In-modal visual folder browser with parent (`..`) drill-up, subfolder listing, and `[GIT REPO]` status badge.
   - **Squircle Styling**: `rounded-2xl` modal container, `rounded-xl` inputs/buttons, `rounded-lg` preset badges.
 

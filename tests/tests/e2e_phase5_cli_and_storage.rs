@@ -292,10 +292,12 @@ export function runDynamic(code: string): any {
 #[test]
 fn test_cli_analysis_error_on_invalid_input() {
     // Non-existent directory should return exit code 3 (analysis error)
+    let temp = TempTestDir::new("invalid_input");
+    let missing_root = temp.path.join("missing-repository");
     let args = vec![
         "autopsy".to_string(),
         "--repo-root".to_string(),
-        "/non/existent/path/for/autopsy/test".to_string(),
+        missing_root.display().to_string(),
         "doctor".to_string(),
     ];
     let exit_code = run_cli(&args);

@@ -5,7 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Electron Shell Recovery & Cockpit Actions (2026-10-29)
+## [Unreleased] - Native Live Electron Runtime & Accurate Repository Selection (2026-11-01)
+
+### Phase 1 literal PRD closure
+
+- Added deterministic, no-host-capability WASM policy loading from `.autopsy/plugins/` with fixed fuel/memory limits and explicit ABI validation.
+- Added `ERR-STORAGE-102` recovery notices with preserved backup paths, HTTP-level randomized edit/revert determinism coverage, and the `/api/v1/graph/ego/:id` route while retaining `?id=` compatibility.
+- Added a real WebSocket upgrade on `/api/v1/live` with ordered sequence IDs and bidirectional event commands; SSE, replay polling, and same-path POST compatibility remain available.
+- No canvas animation, renderer design, or UI visual treatment was changed by this closure.
+
+### Phase 3 end-to-end correction
+
+- Replaced the Phase 3 file-level Git staging/diff path with real .git/index staging, selected hunk staging, semantic historical frames, symbol/edge/contract diffs, guarded checkout/revert, semantic bisect, line blame, and trajectory receipts. Added bounded parallel prefetching for large loose and packed object stores; the indexed packed 5,000-commit path now measures about 140–161 ms in optimized Windows runs, and first packed historical frames measure 12–18 ms. The history budget is not yet stable below 150 ms and the loose-object cold-start path remains above it, so traceability and evidence 97 remain explicitly PARTIAL.
+- Added real packed-repository acceptance coverage for packed refs/tags, merge parents, delta chains, dirty Windows CRLF worktrees, mtime-preserving snapshots, and the complete explicit mutation/recovery flow. Native status and staging now use the Git-clean LF representation for recognized text files, preventing false dirty-worktree refusals under `core.autocrlf=true`.
+- Accepted ADR-0010 formalizing read-only analysis versus the named POST Git mutation surface, and added a source-Electron browser behavior test for Git Galaxy range comparison and timeline scrubbing.
+- Wired historical frames into the existing canvas graph data without changing the canvas renderer, animation, camera, or UI design.
+- Added focused Rust, daemon, integration, web, and TypeScript verification. The older Phase 3 completion receipts are superseded by evidence 97; packed-history and historical-frame budgets are now measured, while the loose-object cold-start limit remains open.
+- Follow-up packed-reader optimization orders prefetch by physical pack offset. Isolated release measurements reached 136.89-147.40 ms, but one normal-scheduling run reached 172.27 ms; the literal `<150 ms` history claim remains explicitly partial. No canvas renderer, animation, camera, WebGL, or styling code was changed.
+- The packed warm-up now uses each indexed object's known physical offset directly, removing a repeated OID lookup/pack scan. The strict `<150 ms` acceptance test passed at 63.42 ms, 78.39 ms, and 88.94 ms; the loose-object cold-start limitation remains documented separately.
+- Packaged Electron smoke mode now avoids a teardown-time splash/cockpit navigation race; refreshed Windows NSIS, portable, MSI, and unpacked artifacts report both daemon and cockpit healthy without the prior navigation warning.
+- Extended packaged Electron smoke discovery to macOS `.app` and Linux unpacked executables, and made the native release workflow run the health gate on every OS runner.
+- Added a platform-aware Electron artifact verifier requiring NSIS/portable/MSI on Windows, DMG/ZIP on macOS, and AppImage/DEB/RPM on Linux before packaged smoke tests.
+- Rebuilt the Windows release after the verifier change; artifact verification and packaged daemon/cockpit smoke both pass on the refreshed bundle.
+- Added Linux package metadata and native CI installation of `fpm`, fixing the DEB/RPM release prerequisites; AppImage remains intentionally native-Linux because its `mksquashfs` helper cannot run on Windows.
+- Added native Electron packaged-smoke gates to pull-request CI for Windows, macOS, and Linux; Linux uses `xvfb-run` for headless health checks, artifact verification rejects zero-byte outputs, and free SHA-256/Sigstore/SBOM provenance remains available without paid OS signing.
+- Added a required native Ubuntu GitHub Actions Phase 3 gate that preserves the 5,000-object loose Git fixture and verifies the literal `<150 ms` history budget; the Windows packed gate remains a separate local diagnostic.
 
 ### Added
 - **Photorealistic Sci-Fi 3D Code Universe Engine (`apps/web`):**
@@ -21,12 +45,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Bundled 100% offline with zero outbound HTTP calls, zero telemetry, and zero LLM calls.
 
 ### Fixed
+- **Native live development runtime:** Added `apps/desktop-electron/scripts/dev.js` with Node/npm checks, cleared `ELECTRON_RUN_AS_NODE`, source Electron startup, and forced Next.js development mode. `scripts/run-desktop.ps1` and `.bat` now resolve the repository from their own location instead of a user-specific launcher path.
+- **Dedicated live dev cockpit:** `npm run dev` uses `http://127.0.0.1:3001` for the source Next.js runtime by default, so an already-running production service on port 3000 cannot silently replace the live Electron development session; the dev CSP permits only the local loopback origins.
+- **Repository path integrity:** Native Windows paths remain native until the daemon normalizes them; canonical paths strip Windows extended prefixes, directory selection no longer appends the selected folder twice, repeated connections activate an existing registration, and stale saved registrations can be removed without deleting source files.
+- **Invalid-root diagnostics:** autopsy doctor now validates the repository root before initializing SQLite/cache state, returning the analysis-error code without creating misleading .autopsy directories for mistyped paths.
+- **Live source sidecar:** Electron development now starts synevid-ui through Cargo instead of reusing a stale release binary, while packaged startup retains release/debug executable selection.
+- **Filesystem shortcuts:** Removed fixed `User Home`/`Root Filesystem` quick presets and user-specific path examples from the runtime/manual data.
 - **Electron Production Startup:** Keep the branded splash visible and retry until the cockpit responds instead of navigating to Chromium's load-error page after a fixed timeout. Start the production Next.js build when available, clear inherited `ELECTRON_RUN_AS_NODE`, and remove duplicate WSL service prestarts from desktop launchers.
 - **Cockpit Quick Actions:** Wire the repository drawer action to open Gates & Policy and refresh current findings; rename it to avoid implying that the current stub endpoint executes verification. Wire Export Report to download a JSON snapshot of the current repository telemetry and findings.
-- **Renderer Security:** Preserve the Electron sandbox and restrictive content security policy without `unsafe-eval`.
+- **Renderer Security:** Preserve the Electron sandbox and restrictive production content security policy without `unsafe-eval`.
+- **Live Renderer Security:** Allow React's `unsafe-eval` callstack helper only in the source development runtime; packaged/production Electron keeps the restrictive CSP and no longer raises the development console error.
+- **Next.js freshness:** Upgrade the web cockpit from Next.js 16.4.2 to the current stable 16.4.3 patch so the development overlay no longer reports the framework as stale.
 - **Shell Developer Tools:** Enable docked Electron DevTools with F12 or Ctrl/Cmd+Shift+I; either shortcut toggles the pane.
 - **Forensic Timeline Rendering:** Unwrap the daemon's `{ sessions: [...] }` response at the API boundary; guard malformed payloads instead of crashing the whole cockpit on `.find()`.
 - **App-Wide Icon Tooltips:** Replace inconsistent native hover labels with a shared rounded, pointer-notched tooltip across titled controls; add accessible labels to previously unlabeled icon actions.
+
+### Phase 5 end-to-end closure (`v0.6.0`)
+
+- Built the standalone Electron runtime from source: the packaged application now contains the Next.js standalone cockpit, the optimized Rust `synevid-ui` sidecar, the bundled MCP bridge, and its standalone Node dependency tree.
+- Added Windows NSIS, portable, and MSI targets plus macOS DMG/ZIP and Linux AppImage/DEB/RPM target definitions. `npm run dev` remains the live source runtime; packaging is isolated behind `npm run dist:*`.
+- Verified Windows release outputs: `SynEvid-0.6.0-win-x64-setup.exe`, `SynEvid-0.6.0-win-x64-portable.exe`, and `SynEvid-0.6.0-win-x64.msi`.
+- Added an ephemeral loopback bearer token, hardened preload bridge, daemon watchdog restart with `ERR-DAEMON-301`, application menu/tray lifecycle, and production smoke launch coverage.
+- Added a daemon-backed Analytics & Reports center with deterministic structural-health, dead-code, Git-risk, and AI-session reports in JSON, Markdown, HTML, and SARIF formats. Report digests are BLAKE3-derived from canonical persisted data and contain no timestamps.
+- Added persistent Architect, Live Coding, Git Forensics, and AI Supervisor workspace presets. These affect navigation state only; the existing 2D/3D canvas renderer, animation, camera, WebGL, and styling were not changed.
+- Raised the release metadata to `v0.6.0` across the workspace and added focused package/runtime, analytics determinism, browser E2E, and MCP integration tests. The browser E2E test now isolates its Next/Turbopack cache so it remains reliable alongside the live Electron runtime. The final serial Rust workspace gate, Rust doc-tests, Python benchmark suite, and available Git-for-Windows Bash determinism/architecture gates pass; the installer self-test skips Linux/macOS-only checks on Windows. Phase 3 first-frame timing is verified, while the repeated 5,000-commit history budget remains explicitly open in evidence 97.
+- Added a native-runner Electron release matrix to the post-merge workflow for Windows NSIS/portable/MSI, macOS DMG/ZIP, and Linux AppImage/DEB/RPM artifacts, with the packaged Windows smoke test attached to the Windows job.
 
 ### Phase 2 Live Canvas Validation
 
@@ -57,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace 200 ms SSE polling with condition-variable event wakeups; bound filesystem Git-marker checks to four workers while preserving sorted directory results.
 - Verify release-profile Phase 1 targets on WSL2/i5-12450H: 2,000-file polyglot edit p95 42.943 ms, 1,000-directory browse p95 10.738 ms, live-event wake p95 2.316 ms, and 1,000-node/5,000-edge ego lookup p95 3.351 ms.
 - Verify 100 overlay-vs-cold results, 100/100 snapshot/layout determinism, SQLite corruption recovery, persisted event replay, and a workspace-resolution invalidation regression test.
+- Remove the remaining fabricated output from the legacy `autopsy ui` surface: repository registration starts unindexed, graph/ego/live routes use analyzed or persisted data only, and simulator edits run real overlay analysis or return explicit `UNKNOWN` errors. TUI startup likewise begins with no synthetic findings; selected CLI/TUI UI tests pass 10/10.
 
 ### Phase 2 Canvas & Simulator Integration
 
@@ -86,10 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Step / Job Nodes:** Sequential atomic operations with cryptographic BLAKE3 receipts and token metrics.
 - **AI Agent Zero-Token-Waste Working Memory (`FR-P4-003`, Receipt 89):**
   - **Local SQLite Subgraph Cache (`ai_working_cache`):** Caches symbol impact and verification query states keyed by `(repo_id, snapshot_blake3, symbol_id)`.
-  - **91.50% Token Reduction Benchmark:** Verified in `tests/tests/phase4_ai_cache_efficiency.rs` (10,539B -> 896B), slashing AI context token consumption by returning compact pointer receipts (`UNCHANGED_SINCE_STEP_X`) and delta subgraphs instead of repetitive AST dumps.
+  - Returns compact pointer receipts (`UNCHANGED_SINCE_STEP_X`) from real snapshot/session-keyed graph queries. The old handcrafted 91.50% benchmark claim is superseded by `docs/evidence/98-phase4-end-to-end-closure.md`.
   - **AI Session Ledger:** Tracks real-time token savings and cost avoidance.
 - **Sub-50ms In-Flight Edit Guardrail (`FR-P4-002`, Receipt 89):**
-  - In-memory AST evaluation in `< 25ms` (`/api/v1/verify/simulate-edit`) without writing to disk or polluting git history.
+  - In-memory AST evaluation through the canonical `/api/v1/simulate/edit` route without writing to disk or polluting git history.
   - Evaluates damaged callers, contract drift, and syntax errors with cryptographic BLAKE3 receipt.
 - **Expanded MCP Server Surface to 21 Tools (`FR-P4-004`, Receipt 89):**
   - Registered 4 new MCP tools: `autopsy_simulate_edit`, `autopsy_canvas_focus`, `autopsy_git_time_travel`, `autopsy_working_memory`.
@@ -107,6 +151,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deterministic Trace Bundle Import/Export (`FR-P4-007`):**
   - Implemented `/api/v1/forensics/export` and `/api/v1/forensics/import` with content-addressed BLAKE3 digest verification.
 
+### Phase 4 closure (`2026-11-01`, Receipt 98)
+
+- Replaced fabricated MCP simulator/cache fallbacks with authoritative daemon responses and truthful non-actionable outage envelopes.
+- Persisted MCP, UI, and CLI trajectory events in the selected repository’s SQLite store; explicit repository roots are canonicalized and never silently redirected to another repository.
+- Added real edit→simulate→verify→working-memory integration coverage, MCP→daemon HTTP coverage, live-event cursor replay, and daemon-restart replay.
+- Standard MCP `impact` and `verify` actions now publish an active canvas signal and persist complete `impact_queried`/`verify_run` trajectory receipts with replay metadata.
+- The web client prefers the ordered `/api/v1/live` WebSocket, uses a cursor heartbeat for the embedded daemon, falls back to SSE, and renders an additive `AI Active` overlay without changing the 3D renderer.
+- The cache acceptance test now runs six real edit→verify→query turns with uncached versus cached serialized-response measurement and enforces the ≥60% reduction gate.
+- Added a connected-WebSocket integration test proving an external daemon broadcast reaches the existing connection in sequence order.
+- Expanded that integration test to eight live samples: timeline delivery p95 measured 3.90 ms and the shared `mcp.live_activity` route delivered the AI activity frame within 25 ms.
+- Removed the UI’s fixed token-savings display; empty ledgers now show 0.0% until real persisted cache metrics exist.
+- Phase 4 changes did not modify the 3D canvas renderer, animation loop, camera/orbit behavior, WebGL buffers, or canvas styling. See `docs/evidence/98-phase4-end-to-end-closure.md`.
+
+### Verification toolchain repair (`2026-11-01`, Receipt 99)
+
+- Installed a user-scoped Python 3.12 runtime for the benchmark harness after the machine's `python3` alias was found pointing at a deleted `LYNWIRE\\.python311` runtime.
+- Made `e2e_phase6_benchmarks` resolve `PYTHON`, `python3`, `python`, or Windows `py -3` by probing `--version`, so benchmark execution never depends on a user-specific virtualenv path.
+- Re-ran the Phase 6 benchmark harness: the pre-registered recall-lift gate passed and the end-to-end test completed successfully.
+
 ## [0.4.0] - Native .git Engine, Visual Time-Travel Galaxy & Full Git Control UI (2026-10-28)
 
 ### Added
@@ -119,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero Default Repository Registration & Active Repository Lock (Receipt 87):**
   - **Eliminated Auto-Registration of SynEvid:** Stopped `DashboardServer::new` from auto-registering the daemon's own install directory into SQLite. Purged legacy SynEvid entries from `storage.db`.
   - **Active Repository Lock Across Refetches:** `refreshAll()` preserves the user's currently selected repository in React state and `localStorage`, preventing resets to SynEvid or fallback defaults upon clicking the Refresh button.
-  - **Filtered Repository Selector:** The header repository dropdown filters out any internal daemon paths, only displaying genuine user repositories (`rea-rea-agents-6.8.0`) or showing `"No repository connected"` if none are registered.
+  - **Filtered Repository Selector:** The header repository dropdown filters internal daemon paths and displays only repositories explicitly connected by the user, or `"No repository connected"` when none are registered. No repository name or user path is hardcoded.
 - **Electron Standalone Desktop Cross-Environment Orchestration (Receipt 86):**
   - **Cross-Platform WSL Service Watchdog:** When Electron launches on Windows against a WSL workspace, `main.js` automatically spawns both the Linux `synevid-ui` daemon and Next.js cockpit via `wsl.exe`, resolving `spawn ENOENT` and eliminating `ERR_CONNECTION_REFUSED`.
   - **Embedded Splash Screen & Zero-Flicker Transition:** Window mounts immediately with an inline SynEvid dark theme splash screen (`#090A0F`), polling service readiness and transitioning cleanly once port 3000 responds.

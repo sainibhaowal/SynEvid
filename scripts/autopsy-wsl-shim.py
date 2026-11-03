@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 import hashlib
 import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
-EXE = "/mnt/c/Users/Ravin/AppData/Local/Temp/synevid-target/debug/autopsy.exe"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXE = os.environ.get(
+    "SYNEVID_AUTOPSY_EXE",
+    str(REPO_ROOT / "target" / "debug" / "autopsy.exe"),
+)
 PATH_FLAGS = {
     "-r",
     "--repo-root",
@@ -24,8 +30,12 @@ PATH_FLAGS = {
 def to_win(p: str, is_db_or_cache: bool = False) -> str:
     if is_db_or_cache and p.startswith("/tmp/"):
         rel = p[5:].replace("/", "\\")
-        target = f"C:\\Users\\Ravin\\AppData\\Local\\Temp\\{rel}"
-        os.makedirs(os.path.dirname(f"/mnt/c/Users/Ravin/AppData/Local/Temp/{p[5:]}"), exist_ok=True)
+        windows_temp = os.environ.get("TEMP") or os.environ.get("TMP")
+        if windows_temp and (":" in windows_temp or "\\" in windows_temp):
+            target = str(Path(windows_temp) / rel)
+            os.makedirs(os.path.dirname(p) or tempfile.gettempdir(), exist_ok=True)
+        else:
+            target = to_win(tempfile.gettempdir()) + "\\" + rel
         return target
     if p.startswith("/"):
         try:
@@ -57,8 +67,9 @@ for a in sys.argv[1:]:
 
 if not has_db_path:
     h = hashlib.sha256(repo_root.encode()).hexdigest()[:16]
-    win_db = f"C:\\Users\\Ravin\\AppData\\Local\\Temp\\synevid-wsl-dbs\\{h}\\storage.db"
-    win_cache = f"C:\\Users\\Ravin\\AppData\\Local\\Temp\\synevid-wsl-dbs\\{h}\\cache"
+    temp_root = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+    win_db = str(Path(temp_root) / "synevid-wsl-dbs" / h / "storage.db")
+    win_cache = str(Path(temp_root) / "synevid-wsl-dbs" / h / "cache")
     args = ["--db-path", win_db, "--cache-dir", win_cache, *args]
 
 res = subprocess.run([EXE, *args])

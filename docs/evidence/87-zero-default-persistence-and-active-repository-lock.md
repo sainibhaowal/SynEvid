@@ -1,8 +1,10 @@
 # Production Evidence 87: Zero Default Repository Registration & Active Repository Lock
 
-**Date:** 2026-10-28  
-**Status:** VERIFIED & PASSING  
+**Date:** 2026-10-28 (historical receipt; current behavior corrected 2026-11-01)
+**Status:** SUPERSEDED BY CURRENT PATH-SELECTION CONTRACT
 **Invariants Enforced:** INV-CROSS-001, FR-P1-003, FR-026  
+
+> Current-state correction (2026-11-01): The repository names and paths shown in the historical examples below are fixture data from the original investigation, not defaults. Current startup and selector state is empty until the user explicitly connects a directory, and filesystem browsing returns `quick_presets: []`.
 
 ---
 
@@ -29,14 +31,14 @@ The root cause was traced to three distinct mechanisms:
 
 ### 2.1 Complete Removal of Daemon Root Auto-Registration (`apps/synevid-ui/src/server.rs`)
 - **No Self-Registration:** `DashboardServer::new` no longer calls `st.register_repository(&repo)` for `self.repo_root`. SynEvid is never added as a user repository.
-- **Dynamic Startup State:** On startup, the server scans SQLite storage for genuine user repositories. If existing user repos exist (e.g. `rea-rea-agents-6.8.0`), it sets `initial_active_id` to that repo. If no user repos exist, `initial_active_id` is empty (`""`).
+- **Dynamic Startup State:** On startup, the server scans SQLite storage for genuine user repositories. If existing user repos exist, it restores the selected registration; if no user repos exist, `initial_active_id` is empty (`""`).
 - **Filtered Repositories Endpoint:** `handle_list_repos()` filters out any record whose `root_path` ends with `"SynEvid"` or whose `display_name` contains `"synevid"`.
 - **Status Endpoint Sanitization:** If no user repo is active, `handle_status()` returns `repo_root: ""`, `repo_name: ""`, `active_repo_id: ""`, and `coverage_state: "Unconnected"`.
 
 ### 2.2 Header UI Filter & Sanitization (`apps/web/src/components/CockpitHeader.tsx`)
 - In `CockpitHeader.tsx`, `userRepos` filters out any repository whose `root_path` ends with `"SynEvid"` or `display_name` contains `"synevid"`.
 - If no user repos are registered, the selector displays `"No repository connected"` (disabled).
-- Only genuine user repositories (e.g. `rea-rea-agents-6.8.0`) appear in the selector.
+- Only explicitly connected user repositories appear in the selector; no example repository is hardcoded.
 
 ### 2.3 User Active Repo Locking & `localStorage` Persistence (`apps/web/src/app/page.tsx`)
 - **Active Repo Lock:** `refreshAll()` now prioritizes:
@@ -49,7 +51,7 @@ The root cause was traced to three distinct mechanisms:
 - **Connection Switch:** When a new repository is connected via `ConnectRepoModal`, `onConnected` invokes `handleSelectRepo(newRepoId)` immediately.
 
 ### 2.4 Database Sanitization
-- Purged previous legacy `fa550c78...` record from SQLite table `repositories`. Only genuine user-connected repositories (`rea-rea-agents-6.8.0`) remain.
+- Purged the previous legacy daemon registration from SQLite table `repositories`. The current database contains only explicitly user-connected repositories.
 
 ---
 
@@ -60,8 +62,8 @@ The root cause was traced to three distinct mechanisms:
    [
      {
        "repo_id": "6770a2f6c98a9081ca9a61b926cb02048ae70f4ee97fb855b9e6d9becfa98b14",
-       "root_path": "/home/ravi/Projects Alpha/rea-rea-agents-6.8.0/rea-rea-agents-6.8.0",
-       "display_name": "rea-rea-agents-6.8.0"
+       "root_path": "<canonical-selected-path>",
+       "display_name": "<selected-repository>"
      }
    ]
    ```
@@ -70,8 +72,8 @@ The root cause was traced to three distinct mechanisms:
    ```json
    {
      "active_repo_id": "6770a2f6c98a9081ca9a61b926cb02048ae70f4ee97fb855b9e6d9becfa98b14",
-     "repo_name": "rea-rea-agents-6.8.0",
-     "repo_root": "/home/ravi/Projects Alpha/rea-rea-agents-6.8.0/rea-rea-agents-6.8.0"
+     "repo_name": "<selected-repository>",
+     "repo_root": "<canonical-selected-path>"
    }
    ```
 3. **Web Inspector Tests:** 30/30 passed (`npm test` in `apps/web-inspector`).

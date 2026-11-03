@@ -10,6 +10,8 @@
 //! `Activator.CreateInstance`, `[DllImport]`, `unsafe`) degrade to `CoverageState::Partial`
 //! or `Unknown`, never collapsing to `Verified`.
 
+#![allow(clippy::collapsible_if, clippy::too_many_arguments)]
+
 use autopsy_adapter_api::{
     AdapterCapabilities, AdapterError, DynamicConstruct, DynamicConstructKind, LanguageAdapter,
     ParseContext, ParseDiagnostic, ParsedFile,

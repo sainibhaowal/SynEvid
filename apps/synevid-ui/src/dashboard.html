@@ -1103,7 +1103,7 @@ export class PaymentService {
     const symbolId = document.getElementById('egoInput').value.trim() || 'PaymentService.chargeCard';
     const t0 = performance.now();
     try {
-      const res = await fetch(`/api/v1/graph/ego?id=${encodeURIComponent(symbolId)}`);
+      const res = await fetch(`/api/v1/graph/ego/${encodeURIComponent(symbolId)}`);
       const ego = await res.json();
       const elapsed = Math.round(performance.now() - t0);
       document.getElementById('egoQueryLatency').innerText = `Latency: ${elapsed}ms (<5ms SQLite WAL)`;

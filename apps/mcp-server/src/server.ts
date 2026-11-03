@@ -13,7 +13,151 @@ import { asText, evidenceEnvelope, refusedEnvelope } from './evidence.js';
  * place, POSIX-normalized, before they ever reach the CLI.
  */
 export function resolveAgainstRepoRoot(input: string, repoRoot: string): string {
-  return path.isAbsolute(input) ? input : path.resolve(repoRoot, input).split(path.sep).join('/');
+  const normalizedInput = input.replaceAll('\\', '/');
+  const normalizedRoot = repoRoot.replaceAll('\\', '/');
+  // Preserve POSIX/WSL roots even when the MCP host itself is Windows. Using
+  // node:path.resolve('/work/app', ...) on Windows silently adds the current
+  // drive (for example C:/work/app), changing the repository-relative target.
+  if (path.posix.isAbsolute(normalizedInput)) return path.posix.normalize(normalizedInput);
+  if (path.posix.isAbsolute(normalizedRoot) && !/^[A-Za-z]:\//.test(normalizedRoot)) {
+    return path.posix.resolve(normalizedRoot, normalizedInput);
+  }
+  return path.resolve(repoRoot, input).split(path.sep).join('/');
+}
+
+type DaemonResult = Record<string, any>;
+
+async function postDaemonJson(
+  route: string,
+  body: Record<string, unknown>,
+  timeoutMs = 1500
+): Promise<DaemonResult> {
+  const response = await fetch(`http://127.0.0.1:3333${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await response.text();
+  let data: DaemonResult;
+  try {
+    data = JSON.parse(text) as DaemonResult;
+  } catch {
+    throw new Error(`daemon returned invalid JSON for ${route}`);
+  }
+  if (!response.ok || data.status === 'ERROR' || data.error) {
+    throw new Error(String(data.error || `daemon rejected ${route}`));
+  }
+  return data;
+}
+
+async function publishMcpActivity(
+  tool: string,
+  payload: Record<string, unknown>
+): Promise<{ live_published: boolean; live_seq?: number; live_error?: string }> {
+  try {
+    const result = await postDaemonJson(
+      '/api/v1/live/broadcast',
+      {
+        event: 'mcp.live_activity',
+        data: {
+          tool,
+          status: 'active',
+          ...payload,
+        },
+      },
+      200
+    );
+    return { live_published: true, live_seq: Number(result.seq_id) };
+  } catch (error) {
+    return {
+      live_published: false,
+      live_error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function impactReplayEvidence(report: any): Record<string, unknown> {
+  const impact = report?.impact;
+  const symbols = Array.isArray(impact?.impacted_entities)
+    ? impact.impacted_entities
+    : [
+        ...(Array.isArray(impact?.likely_affected) ? impact.likely_affected : []),
+        ...(Array.isArray(impact?.possibly_affected) ? impact.possibly_affected : []),
+      ];
+  const paths = Array.isArray(impact?.paths) ? impact.paths : [];
+  return {
+    affected_symbols: [...new Set(symbols.filter((value: unknown) => typeof value === 'string'))],
+    affected_paths: paths,
+    truncated: impact?.truncated === true,
+  };
+}
+
+function verifyReplayEvidence(report: any): Record<string, unknown> {
+  const findings = Array.isArray(report?.findings) ? report.findings : [];
+  const symbols: string[] = [];
+  const files: string[] = [];
+  for (const finding of findings) {
+    if (Array.isArray(finding?.entities)) {
+      for (const entity of finding.entities) {
+        if (typeof entity === 'string') symbols.push(entity);
+      }
+    }
+    if (Array.isArray(finding?.locations)) {
+      for (const location of finding.locations) {
+        if (typeof location?.path === 'string') files.push(location.path);
+      }
+    }
+  }
+  return {
+    affected_symbols: [...new Set(symbols)],
+    affected_files: [...new Set(files)],
+  };
+}
+
+async function persistMcpAnalysisEvent(options: {
+  repoRoot: string;
+  sessionId?: string;
+  eventType: 'impact_queried' | 'verify_run';
+  targetSymbol?: string;
+  verdict: string;
+  summary: string;
+  evidence: Record<string, unknown>;
+}): Promise<{ trajectory_persisted: boolean; event_seq?: number; trajectory_error?: string }> {
+  try {
+    const result = await postDaemonJson('/api/v1/forensics/event', {
+      repo_root: options.repoRoot,
+      session_id: options.sessionId,
+      job_id: `mcp_${options.eventType}`,
+      workflow_id: 'wf_mcp_analysis',
+      event_type: options.eventType,
+      target_symbol: options.targetSymbol,
+      verdict: options.verdict,
+      summary: options.summary,
+      evidence: options.evidence,
+    });
+    return { trajectory_persisted: true, event_seq: Number(result.event_seq) };
+  } catch (error) {
+    return {
+      trajectory_persisted: false,
+      trajectory_error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function daemonFailureEnvelope(command: string, error: unknown, nextAction: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    command,
+    exit_code: 1,
+    actionable: false,
+    repair: {
+      what_failed: 'daemon_unavailable',
+      why: message,
+      next_action: nextAction,
+    },
+    report: { error: message },
+  };
 }
 
 /**
@@ -29,7 +173,7 @@ export function resolveAgainstRepoRoot(input: string, repoRoot: string): string 
 export function createAutopsyMcpServer(): McpServer {
   const server = new McpServer({
     name: 'code-autopsy',
-    version: '0.1.0',
+    version: '0.6.0',
   });
 
   // 1. autopsy_status: repo/root -> index state, capabilities, snapshot ID
@@ -120,6 +264,10 @@ export function createAutopsyMcpServer(): McpServer {
               'settable for the whole session via the AUTOPSY_SNAPSHOT environment variable; ' +
               'an explicit argument always wins over the pin)'
           ),
+        session_id: z
+          .string()
+          .optional()
+          .describe('Optional forensic session that receives the persisted impact event'),
         detail: z
           .enum(['summary', 'full'])
           .optional()
@@ -154,10 +302,58 @@ export function createAutopsyMcpServer(): McpServer {
       const detail = args.detail || 'summary';
       cliArgs.push('--detail', detail);
 
+      const liveActivity = await publishMcpActivity('autopsy_impact', {
+        action: 'impact',
+        target_symbol: args.symbol,
+        session_id: args.session_id || null,
+        summary: `AI impact analysis started for ${args.symbol}`,
+      });
+
       const result = await runAutopsy('impact', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
 
+      // Persist the complete evidence needed for a deterministic canvas replay.
+      // Summary mode remains compact for the agent response; the trajectory stores
+      // a full impact report when the summary intentionally omits lower-ranked nodes.
+      let replayReport = result.data;
+      if (
+        result.data?.impact?.summary?.counts?.total >
+        result.data?.impact?.impacted_entities?.length
+      ) {
+        const fullArgs = cliArgs.filter((value, index) => {
+          if (value === '--detail') return false;
+          return cliArgs[index - 1] !== '--detail';
+        });
+        fullArgs.push('--detail', 'full');
+        const fullResult = await runAutopsy('impact', fullArgs, {
+          repoRoot,
+          snapshotId: args.snapshot_id,
+        });
+        if (fullResult.success && fullResult.data?.impact) replayReport = fullResult.data;
+      }
+      const trajectory = await persistMcpAnalysisEvent({
+        repoRoot,
+        sessionId: args.session_id,
+        eventType: 'impact_queried',
+        targetSymbol: args.symbol,
+        verdict: result.exitCode === 0 ? 'INFO' : result.exitCode === 4 ? 'WARN' : 'FAIL',
+        summary: `Impact analysis for ${args.symbol}`,
+        evidence: {
+          tool: 'autopsy_impact',
+          report: result.data,
+          replay: impactReplayEvidence(replayReport),
+        },
+      });
+
       return {
-        content: [{ type: 'text', text: asText(evidenceEnvelope('impact', result)) }],
+        content: [
+          {
+            type: 'text',
+            text: asText({
+              ...evidenceEnvelope('impact', result),
+              trajectory: { ...liveActivity, ...trajectory },
+            }),
+          },
+        ],
       };
     }
   );
@@ -244,6 +440,10 @@ export function createAutopsyMcpServer(): McpServer {
           .boolean()
           .optional()
           .describe('Strict mode: reject unknown constructs with exit code 4'),
+        session_id: z
+          .string()
+          .optional()
+          .describe('Optional forensic session that receives the persisted verification event'),
       }),
     },
     async (args) => {
@@ -261,10 +461,37 @@ export function createAutopsyMcpServer(): McpServer {
         cliArgs.push('--strict');
       }
 
+      const liveActivity = await publishMcpActivity('autopsy_verify', {
+        action: 'verify',
+        target_symbol: null,
+        session_id: args.session_id || null,
+        summary: 'AI verification started',
+      });
+
       const result = await runAutopsy('verify', cliArgs, { repoRoot, snapshotId: base });
+      const trajectory = await persistMcpAnalysisEvent({
+        repoRoot,
+        sessionId: args.session_id,
+        eventType: 'verify_run',
+        verdict: result.exitCode === 0 ? 'PASS' : result.exitCode === 4 ? 'WARN' : 'FAIL',
+        summary: `Verification ${result.exitCode === 0 ? 'passed' : 'completed'}`,
+        evidence: {
+          tool: 'autopsy_verify',
+          report: result.data,
+          replay: verifyReplayEvidence(result.data),
+        },
+      });
 
       return {
-        content: [{ type: 'text', text: asText(evidenceEnvelope('verify', result)) }],
+        content: [
+          {
+            type: 'text',
+            text: asText({
+              ...evidenceEnvelope('verify', result),
+              trajectory: { ...liveActivity, ...trajectory },
+            }),
+          },
+        ],
       };
     }
   );
@@ -975,89 +1202,63 @@ export function createAutopsyMcpServer(): McpServer {
       }),
     },
     async (args) => {
-      const repoRoot = args.repo_root || '.';
       // Notify live visual canvas
       try {
-        await fetch('http://127.0.0.1:3333/api/v1/live/broadcast', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event_type: 'mcp.live_activity',
-            data: {
-              tool: 'autopsy_simulate_edit',
-              file: args.file_path,
-              status: 'simulating',
-              summary: `Simulating in-memory edit on ${args.file_path}`,
-            },
-          }),
-          signal: AbortSignal.timeout(200),
-        });
+        await postDaemonJson('/api/v1/live/broadcast', {
+          event: 'mcp.live_activity',
+          data: {
+            tool: 'autopsy_simulate_edit',
+            file: args.file_path,
+            status: 'simulating',
+            summary: `Simulating in-memory edit on ${args.file_path}`,
+          },
+        }, 200);
       } catch {
         // UI daemon offline - headless run
       }
 
-      // Try hitting synevid-ui daemon for sub-50ms AST evaluation if running
+      // The daemon is the only authoritative in-memory simulator.  Never turn an
+      // unavailable or unverified edit into a fabricated PASS response.
       try {
-        const resp = await fetch('http://127.0.0.1:3333/api/v1/verify/simulate-edit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            file_path: args.file_path,
-            unsaved_buffer: args.unsaved_buffer,
-          }),
-          signal: AbortSignal.timeout(1500),
+        const data = await postDaemonJson('/api/v1/simulate/edit', {
+          repo_root: args.repo_root,
+          file_path: args.file_path,
+          unsaved_buffer: args.unsaved_buffer,
+          session_id: args.session_id,
         });
-        if (resp.ok) {
-          const data = (await resp.json()) as any;
-          return {
-            content: [
-              {
-                type: 'text',
-                text: asText(
-                  evidenceEnvelope('simulate-edit', {
-                    success: data.verdict === 'PASS',
-                    exitCode: data.verdict === 'PASS' ? 0 : 2,
-                    data,
-                    rawStdout: JSON.stringify(data, null, 2),
-                    rawStderr: '',
-                  })
-                ),
-              },
-            ],
-          };
-        }
+        const verified = data.verdict === 'PASS';
+        return {
+          content: [
+            {
+              type: 'text',
+              text: asText(
+                evidenceEnvelope('simulate-edit', {
+                  success: verified,
+                  exitCode: verified ? 0 : 2,
+                  data,
+                  rawStdout: JSON.stringify(data, null, 2),
+                  rawStderr: '',
+                })
+              ),
+            },
+          ],
+        };
       } catch {
-        // Daemon offline: fallback to deterministic CLI-backed evaluation
+        return {
+          content: [
+            {
+              type: 'text',
+              text: asText(
+                daemonFailureEnvelope(
+                  'simulate-edit',
+                  'the synevid-ui simulator did not return an authoritative result',
+                  'start the source daemon on 127.0.0.1:3333 and retry the edit simulation'
+                )
+              ),
+            },
+          ],
+        };
       }
-
-      // Fallback deterministic simulation
-      const result = await runAutopsy('diff', [], { repoRoot });
-      const simulatedData = {
-        verdict: 'PASS',
-        file_path: args.file_path,
-        damaged_callers: [],
-        syntax_errors: [],
-        computation_latency_ms: 18,
-        receipt: 'blake3:simulated',
-        summary: `Simulated edit verified in memory for ${args.file_path}`,
-        diff_context: result.data || {},
-      };
-      return {
-        content: [
-          {
-            type: 'text',
-            text: asText(
-              evidenceEnvelope('simulate-edit', {
-                success: true,
-                exitCode: 0,
-                data: simulatedData,
-                rawStdout: JSON.stringify(simulatedData, null, 2),
-                rawStderr: '',
-              })
-            ),
-          },
-        ],
-      };
     }
   );
 
@@ -1073,54 +1274,64 @@ export function createAutopsyMcpServer(): McpServer {
         zoom_level: z.number().optional().describe('Camera zoom factor (e.g. 1.0, 1.5, 2.5)'),
         highlight_nodes: z.array(z.string()).optional().describe('Array of symbol names to highlight simultaneously'),
         annotation: z.string().optional().describe('Human-visible HUD banner text displayed over the canvas'),
+        session_id: z.string().optional().describe('Forensic session that receives the persisted focus event'),
+        repo_root: z.string().optional().describe('Target repository root directory'),
       }),
     },
     async (args) => {
       try {
-        await fetch('http://127.0.0.1:3333/api/v1/live/broadcast', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event_type: 'mcp.canvas_focus',
-            data: {
-              symbol: args.symbol,
-              file_path: args.file_path,
-              zoom_level: args.zoom_level || 1.2,
-              highlight_nodes: args.highlight_nodes || [],
-              annotation: args.annotation || 'AI agent focused canvas',
-            },
-          }),
-          signal: AbortSignal.timeout(200),
+        const focusData = {
+          focused: true,
+          symbol: args.symbol || null,
+          file_path: args.file_path || null,
+          zoom_level: args.zoom_level || 1.2,
+          highlight_nodes: args.highlight_nodes || [],
+          annotation: args.annotation || 'AI agent focused canvas',
+        };
+        const event = await postDaemonJson('/api/v1/forensics/event', {
+          session_id: args.session_id,
+          repo_root: args.repo_root,
+          job_id: 'mcp_canvas_focus',
+          event_type: 'canvas_focus',
+          target_symbol: args.symbol,
+          target_file: args.file_path,
+          verdict: 'INFO',
+          summary: args.annotation || 'AI agent focused canvas',
+          evidence: focusData,
         });
-      } catch {
-        // Headless run
+        const report = { ...focusData, trajectory_persisted: true, event_seq: event.event_seq };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: asText(
+                evidenceEnvelope('canvas-focus', {
+                  success: true,
+                  exitCode: 0,
+                  data: report,
+                  rawStdout: JSON.stringify(report, null, 2),
+                  rawStderr: '',
+                })
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: asText(
+                daemonFailureEnvelope(
+                  'canvas-focus',
+                  error,
+                  'start the source daemon on 127.0.0.1:3333 and retry the canvas focus action'
+                )
+              ),
+            },
+          ],
+        };
       }
-
-      const focusData = {
-        focused: true,
-        symbol: args.symbol || null,
-        file_path: args.file_path || null,
-        highlight_nodes: args.highlight_nodes || [],
-        annotation: args.annotation || null,
-        timestamp: 'reproducible',
-      };
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: asText(
-              evidenceEnvelope('canvas-focus', {
-                success: true,
-                exitCode: 0,
-                data: focusData,
-                rawStdout: JSON.stringify(focusData, null, 2),
-                rawStderr: '',
-              })
-            ),
-          },
-        ],
-      };
     }
   );
 
@@ -1135,6 +1346,7 @@ export function createAutopsyMcpServer(): McpServer {
         branch: z.string().optional().describe('Optional target branch name'),
         preview_only: z.boolean().optional().describe('If true, previews changes and diff without modifying worktree (default: true)'),
         repo_root: z.string().optional().describe('Target repository root directory'),
+        session_id: z.string().optional().describe('Forensic session that receives the persisted time-travel event'),
       }),
     },
     async (args) => {
@@ -1142,34 +1354,49 @@ export function createAutopsyMcpServer(): McpServer {
       const isPreview = args.preview_only !== false;
 
       // Broadcast time-travel warp event to Visual Galaxy
-      try {
-        await fetch('http://127.0.0.1:3333/api/v1/live/broadcast', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event_type: 'mcp.time_travel',
-            data: {
-              target_commit: args.commit_oid,
-              branch: args.branch,
-              preview_only: isPreview,
-            },
-          }),
-          signal: AbortSignal.timeout(200),
-        });
-      } catch {
-        // Headless run
-      }
-
       // Compute semantic diff between requested commit and HEAD
       const diffResult = await runAutopsy('git', ['diff', '--base', args.commit_oid, '--head', 'HEAD'], {
         repoRoot,
       });
 
+      let trajectoryPersisted = false;
+      let eventSeq: number | undefined;
+      try {
+        const event = await postDaemonJson('/api/v1/forensics/event', {
+          session_id: args.session_id,
+          repo_root: repoRoot,
+          job_id: 'mcp_git_time_travel',
+          event_type: 'git_time_travel',
+          verdict: diffResult.exitCode === 0 ? 'PASS' : 'FAIL',
+          summary: `Inspected historical commit ${args.commit_oid}`,
+          evidence: {
+            target_commit: args.commit_oid,
+            branch: args.branch || null,
+            preview_only: isPreview,
+            analysis: diffResult.data || null,
+          },
+        });
+        trajectoryPersisted = true;
+        eventSeq = event.event_seq;
+      } catch {
+        // The diff remains valid evidence, but the response records that the
+        // optional live trajectory write did not complete.
+      }
+
       return {
         content: [
           {
             type: 'text',
-            text: asText(evidenceEnvelope('git time-travel', diffResult)),
+            text: asText(
+              evidenceEnvelope('git time-travel', {
+                ...diffResult,
+                data: {
+                  ...(diffResult.data || {}),
+                  trajectory_persisted: trajectoryPersisted,
+                  ...(eventSeq === undefined ? {} : { event_seq: eventSeq }),
+                },
+              })
+            ),
           },
         ],
       };
@@ -1202,11 +1429,16 @@ export function createAutopsyMcpServer(): McpServer {
             session_id: args.session_id,
             symbol: args.symbol,
             query_kind: queryKind,
+            cache_mode: args.cache_mode || 'read',
+            repo_root: args.repo_root,
           }),
           signal: AbortSignal.timeout(1500),
         });
         if (resp.ok) {
           const cacheData = (await resp.json()) as any;
+          if (cacheData.status === 'ERROR' || cacheData.error) {
+            throw new Error(String(cacheData.error || 'daemon rejected working-memory query'));
+          }
           return {
             content: [
               {
@@ -1225,32 +1457,19 @@ export function createAutopsyMcpServer(): McpServer {
           };
         }
       } catch {
-        // Daemon offline fallback
+        // Fall through to a truthful unavailable response; a cache miss or
+        // daemon outage must never be reported as a cache hit.
       }
 
-      // Offline deterministic zero-waste response
-      const fallbackData = {
-        session_id: args.session_id,
-        symbol: args.symbol,
-        query_kind: queryKind,
-        status: 'CACHE_POINTER_HIT',
-        receipt_token: `rcpt_${args.symbol}_cached`,
-        unchanged_since_baseline: true,
-        estimated_token_savings: '82%',
-      };
       return {
         content: [
           {
             type: 'text',
-            text: asText(
-              evidenceEnvelope('ai-working-memory', {
-                success: true,
-                exitCode: 0,
-                data: fallbackData,
-                rawStdout: JSON.stringify(fallbackData, null, 2),
-                rawStderr: '',
-              })
-            ),
+            text: asText(daemonFailureEnvelope(
+              'ai-working-memory',
+              'the synevid-ui working-memory query did not return an authoritative result',
+              'start the source daemon on 127.0.0.1:3333 and retry the working-memory query'
+            )),
           },
         ],
       };

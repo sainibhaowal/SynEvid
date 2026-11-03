@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Terminal,
   BookOpen,
+  Trash2,
 } from 'lucide-react';
 import { useTheme } from '@/context/ThemeContext';
 import { RepoRecord } from '@/lib/api';
@@ -24,6 +25,7 @@ interface CockpitHeaderProps {
   repos: RepoRecord[];
   activeRepoId: string;
   onSelectRepo: (id: string) => void;
+  onRemoveRepo: (id: string) => void;
   onOpenConnectModal: () => void;
   onOpenCapabilitiesModal: () => void;
   onOpenTerminal?: () => void;
@@ -40,6 +42,7 @@ export default function CockpitHeader({
   repos,
   activeRepoId,
   onSelectRepo,
+  onRemoveRepo,
   onOpenConnectModal,
   onOpenCapabilitiesModal,
   onOpenTerminal,
@@ -78,7 +81,7 @@ export default function CockpitHeader({
                 SYNEVID
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 font-semibold border border-sky-200 dark:border-cyan-500/30">
-                v0.5.0
+                v0.6.0
               </span>
             </div>
             <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-mono font-medium">
@@ -120,6 +123,15 @@ export default function CockpitHeader({
               </select>
             );
           })()}
+          <button
+            onClick={() => onRemoveRepo(activeRepoId)}
+            disabled={!activeRepoId}
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-rose-500 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-muted)] cursor-pointer disabled:cursor-not-allowed"
+            title="Remove saved repository registration (does not delete files)"
+            aria-label="Remove saved repository registration"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={onOpenConnectModal}
             className="text-xs font-semibold px-2.5 py-1.5 rounded-xl bg-[var(--card-elevated)] hover:bg-sky-50 dark:hover:bg-cyan-500/10 text-[var(--text-secondary)] hover:text-sky-700 dark:hover:text-cyan-400 border border-[var(--border-subtle)] transition-colors flex items-center space-x-1 cursor-pointer"

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 #[command(
     name = "synevid-ui",
     author = "Synevid Core Team",
-    version = "0.1.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Embedded Local Web Dashboard for SynEvid change-impact and forensic trajectory analysis"
 )]
 struct Args {

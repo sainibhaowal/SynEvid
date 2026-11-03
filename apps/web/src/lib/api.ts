@@ -1,4 +1,4 @@
-// SynEvid Reactive Engine & Daemon API Client (v0.2.1)
+// SynEvid Reactive Engine & Daemon API Client (v0.6.0)
 // Connects to local daemon on http://127.0.0.1:3333 (synevid-ui or autopsy ui)
 
 export interface GitMutationResult {
@@ -61,6 +61,10 @@ export interface TimeTravelNode {
   z: number;
   cluster_id: number;
   diff_status: 'added' | 'modified' | 'unchanged' | 'deleted';
+  file_path?: string;
+  kind?: string;
+  start_line?: number;
+  end_line?: number;
 }
 
 export interface TimeTravelEdge {
@@ -82,6 +86,8 @@ export interface TimeTravelVisualFrame {
   added_files: string[];
   modified_files: string[];
   deleted_files: string[];
+  coverage_state?: string;
+  result_digest?: string;
 }
 
 export interface SemanticDiffReport {
@@ -92,8 +98,32 @@ export interface SemanticDiffReport {
   deleted_files: string[];
   total_changed_files: number;
   blast_radius_score: number;
-  verdict: 'PASS' | 'WARN' | 'BREAKING';
+  verdict: 'PASS' | 'WARN' | 'BREAKING' | 'UNKNOWN';
   drifted_contracts: string[];
+  result_digest?: string;
+  direct_symbols?: string[];
+  impacted_boundary?: string[];
+  symbol_deltas?: unknown[];
+  contract_deltas?: unknown[];
+  edge_deltas?: unknown[];
+  coverage_state?: string;
+}
+
+export interface BlameLine {
+  line: number;
+  text: string;
+  commit_oid: string;
+  author: string;
+  timestamp: number;
+  sequence: number;
+  blast_radius_score: number;
+}
+
+export interface BlameReport {
+  path: string;
+  lines: BlameLine[];
+  coverage_state: string;
+  result_digest: string;
 }
 
 export interface FileStatusItem {
@@ -187,6 +217,17 @@ export interface AiConfigSnippetResponse {
   file_name: string;
   config_json: string;
   instruction: string;
+}
+
+export type AnalyticsReportFormat = 'json' | 'markdown' | 'html' | 'sarif';
+
+export interface AnalyticsReportEnvelope {
+  format: AnalyticsReportFormat;
+  filename: string;
+  content_type: string;
+  digest: string;
+  content: string;
+  report?: Record<string, unknown>;
 }
 
 export interface FileDiffReport {
@@ -293,6 +334,9 @@ export interface FsBrowseResponse {
   is_git_repo: boolean;
   directories: FsDirectoryEntry[];
   quick_presets: FsPreset[];
+  error_code?: string;
+  error?: string;
+  requested_path?: string;
 }
 
 export interface UniverseNode {
@@ -439,6 +483,9 @@ export interface DaemonLiveEvent {
   timestamp_epoch_ms: number;
   repo_id: string;
   payload: Record<string, unknown>;
+  /** Wire aliases accepted from the daemon's SSE/JSON replay contract. */
+  event?: string;
+  data?: Record<string, unknown>;
 }
 
 export function normalizeCrossPlatformPath(rawPath: string): string {
@@ -448,22 +495,11 @@ export function normalizeCrossPlatformPath(rawPath: string): string {
     p = p.slice(1, -1).trim();
   }
 
-  const normalized = p.replace(/\\/g, '/');
-
-  // Convert Windows WSL UNC paths: //wsl.localhost/<distro>/... or //wsl$/<distro>/...
-  const wslMatch = normalized.match(/^\/\/(?:wsl\.localhost|wsl\$)\/[^/]+(\/.*)$/i);
-  if (wslMatch) {
-    return wslMatch[1];
-  }
-
-  // Convert Windows drive letters C:/... to /mnt/c/...
-  const driveMatch = normalized.match(/^([a-zA-Z]):(\/.*)$/);
-  if (driveMatch) {
-    const driveLetter = driveMatch[1].toLowerCase();
-    return `/mnt/${driveLetter}${driveMatch[2]}`;
-  }
-
-  return normalized;
+  // Keep the user's OS path intact. The daemon is authoritative for translating
+  // Windows, WSL, and POSIX paths because the correct representation depends on
+  // where the daemon is running. Converting C:\\... to /mnt/c/... in the web
+  // client breaks native Windows Electron launches.
+  return p.replace(/\\/g, '/');
 }
 
 // Fallback Mock Data for offline testing (Zero hardcoded repository paths)
@@ -501,6 +537,13 @@ export class SynevidApiClient {
     }
   }
 
+  private getLoopbackToken(): string | undefined {
+    if (typeof window === 'undefined') return undefined;
+    const bridge = (window as any).synevidDesktop;
+    const token = bridge?.getDaemonToken?.();
+    return typeof token === 'string' ? token : undefined;
+  }
+
   private async fetchWithTimeout<T>(path: string, options?: RequestInit, timeoutMs = 15000): Promise<T> {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -511,6 +554,10 @@ export class SynevidApiClient {
     }
     if (options?.headers) {
       Object.assign(headers, options.headers);
+    }
+    const token = this.getLoopbackToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = `Bearer ${token}`;
     }
 
     try {
@@ -595,6 +642,16 @@ export class SynevidApiClient {
     );
   }
 
+  public async removeRepo(repoId: string) {
+    return await this.fetchWithTimeout<{ status: string; repo_id?: string; error?: string }>(
+      '/api/v1/repos/remove',
+      {
+        method: 'POST',
+        body: JSON.stringify({ repo_id: repoId }),
+      }
+    );
+  }
+
   public async getFiles(): Promise<RepoFilesResponse> {
     try {
       return await this.fetchWithTimeout<RepoFilesResponse>('/api/v1/files');
@@ -614,14 +671,16 @@ export class SynevidApiClient {
       return await this.fetchWithTimeout<FsBrowseResponse>(`/api/v1/fs/browse${q}`);
     } catch {
       return {
-        current_path: targetPath || '',
-        parent_path: '',
+        current_path: '',
+        parent_path: null,
         is_git_repo: false,
         directories: [],
-        quick_presets: [
-          { label: 'User Home', path: '~' },
-          { label: 'Root Filesystem', path: '/' },
-        ],
+        quick_presets: [],
+        error_code: 'ERR-FS-002',
+        error: targetPath
+          ? 'Unable to browse the selected directory: ' + targetPath
+          : 'Unable to browse the selected directory.',
+        requested_path: targetPath || '',
       };
     }
   }
@@ -682,7 +741,7 @@ export class SynevidApiClient {
 
   public async getEgoNetwork(symbolId: string): Promise<EgoNetwork> {
     const raw = await this.fetchWithTimeout<EgoNetwork & { error?: string; error_code?: string }>(
-      `/api/v1/graph/ego?id=${encodeURIComponent(symbolId)}`
+      `/api/v1/graph/ego/${encodeURIComponent(symbolId)}`
     );
     if (raw.error_code || raw.error) throw new Error(String(raw.error || raw.error_code));
     return {
@@ -793,48 +852,50 @@ export class SynevidApiClient {
 
   public async getTimeTravelFrame(oid: string, dim: '2d' | '3d' = '3d'): Promise<TimeTravelVisualFrame> {
     try {
-      return await this.fetchWithTimeout<TimeTravelVisualFrame>(`/api/v1/git/time-travel?oid=${oid}&dim=${dim}`);
+      return await this.fetchWithTimeout<TimeTravelVisualFrame>(`/api/v1/git/time-travel/${encodeURIComponent(oid)}?dim=${dim}`);
     } catch {
       return {
         oid,
         short_oid: oid.slice(0, 7),
-        summary: 'Historical commit frame',
-        timestamp: Math.floor(Date.now() / 1000),
+        summary: 'Historical commit frame unavailable',
+        timestamp: 0,
         dimensions: dim === '3d' ? '3D' : '2D',
-        node_count: 3,
-        edge_count: 2,
-        nodes: [
-          { id: 'src/index.ts', x: 0, y: 0, z: 0, cluster_id: 0, diff_status: 'unchanged' },
-          { id: 'src/engine.ts', x: 50, y: 20, z: 10, cluster_id: 1, diff_status: 'modified' },
-          { id: 'src/utils.ts', x: -40, y: 30, z: -10, cluster_id: 2, diff_status: 'added' },
-        ],
-        edges: [
-          { source: 'src/index.ts', target: 'src/engine.ts', kind: 'calls' },
-          { source: 'src/engine.ts', target: 'src/utils.ts', kind: 'imports' },
-        ],
-        added_files: ['src/utils.ts'],
-        modified_files: ['src/engine.ts'],
+        node_count: 0,
+        edge_count: 0,
+        nodes: [],
+        edges: [],
+        added_files: [],
+        modified_files: [],
         deleted_files: [],
+        coverage_state: 'Unknown',
+        result_digest: '',
       };
     }
   }
 
   public async getGitDiff(baseOid: string, headOid: string): Promise<SemanticDiffReport> {
     try {
-      return await this.fetchWithTimeout<SemanticDiffReport>(`/api/v1/git/diff?base=${baseOid}&head=${headOid}`);
+      return await this.fetchWithTimeout<SemanticDiffReport>(`/api/v1/git/diff/${encodeURIComponent(baseOid)}/${encodeURIComponent(headOid)}`);
     } catch {
       return {
         base_oid: baseOid,
         head_oid: headOid,
         added_files: [],
-        modified_files: ['src/engine.ts'],
+        modified_files: [],
         deleted_files: [],
-        total_changed_files: 1,
-        blast_radius_score: 2,
-        verdict: 'PASS',
+        total_changed_files: 0,
+        blast_radius_score: 0,
+        verdict: 'UNKNOWN',
         drifted_contracts: [],
+        coverage_state: 'Unknown',
       };
     }
+  }
+
+  public async getGitBlame(path: string, oid = 'HEAD'): Promise<BlameReport> {
+    return await this.fetchWithTimeout<BlameReport>(
+      `/api/v1/git/blame?path=${encodeURIComponent(path)}&oid=${encodeURIComponent(oid)}`
+    );
   }
 
   public async stageGit(paths: string[]): Promise<GitMutationResult> {
@@ -1011,35 +1072,182 @@ export class SynevidApiClient {
     return await this.fetchWithTimeout<AiSessionLedger>(`/api/v1/ai/ledger?session_id=${encodeURIComponent(sessionId)}`);
   }
 
+  public async queryAiCache(request: {
+    session_id: string;
+    symbol: string;
+    query_kind: string;
+    snapshot_id?: string;
+    cache_mode?: string;
+  }): Promise<Record<string, any>> {
+    return await this.fetchWithTimeout<Record<string, any>>('/api/v1/ai/cache/query', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
   public async getAiConfigSnippet(client: string): Promise<AiConfigSnippetResponse> {
     return await this.fetchWithTimeout<AiConfigSnippetResponse>(`/api/v1/ai/config-snippet?client=${encodeURIComponent(client)}`);
   }
 
-  public subscribeLiveEvents(onEvent: (event: DaemonLiveEvent) => void, onError?: () => void): () => void {
+  public async getAnalyticsReport(format: AnalyticsReportFormat = 'json'): Promise<AnalyticsReportEnvelope> {
+    return await this.fetchWithTimeout<AnalyticsReportEnvelope>(
+      `/api/v1/analytics/report?format=${encodeURIComponent(format)}`,
+      undefined,
+      30_000,
+    );
+  }
+
+  public async getLiveEventsSince(sinceSeq: number): Promise<DaemonLiveEvent[]> {
+    const response = await this.fetchWithTimeout<{ events: Array<Record<string, unknown>> }>(
+      `/api/v1/live/poll?since_seq=${encodeURIComponent(String(sinceSeq))}`
+    );
+    return (response.events || []).map((event) => this.normalizeLiveEvent(event));
+  }
+
+  private normalizeLiveEvent(raw: Record<string, unknown>): DaemonLiveEvent {
+    const payload = (raw.payload || raw.data || {}) as Record<string, unknown>;
+    return {
+      seq_id: Number(raw.seq_id || 0),
+      event_type: String(raw.event_type || raw.event || 'daemon.event'),
+      timestamp_epoch_ms: Number(raw.timestamp_epoch_ms || Date.now()),
+      repo_id: String(raw.repo_id || payload.repo_id || ''),
+      payload,
+      event: typeof raw.event === 'string' ? raw.event : undefined,
+      data: typeof raw.data === 'object' && raw.data !== null
+        ? (raw.data as Record<string, unknown>)
+        : undefined,
+    };
+  }
+
+  public subscribeLiveEvents(
+    onEvent: (event: DaemonLiveEvent) => void,
+    onError?: () => void,
+    initialSeq = 0
+  ): () => void {
     if (typeof window === 'undefined') return () => {};
 
+    let socket: WebSocket | null = null;
     let evtSource: EventSource | null = null;
+    let heartbeat: number | null = null;
+    let reconnectTimer: number | null = null;
     let cancelled = false;
+    let lastSeq = initialSeq;
 
-    try {
-      evtSource = new EventSource(`${this.baseUrl}/api/v1/live`);
-      evtSource.onmessage = (e) => {
-        try {
-          const parsed = JSON.parse(e.data) as DaemonLiveEvent;
-          onEvent(parsed);
-        } catch {
-          // Ignore parse errors on ping
-        }
-      };
-      evtSource.onerror = () => {
+    const deliver = (raw: Record<string, unknown>) => {
+      const parsed = this.normalizeLiveEvent(raw);
+      // SSE sends a named protocol event and a browser-default message for
+      // compatibility.  Replays can also overlap a reconnect boundary.
+      if (!parsed.seq_id || parsed.seq_id <= lastSeq) return;
+      lastSeq = parsed.seq_id;
+      onEvent(parsed);
+    };
+
+    const stopHeartbeat = () => {
+      if (heartbeat !== null) {
+        window.clearInterval(heartbeat);
+        heartbeat = null;
+      }
+    };
+
+    const scheduleReconnect = (connect: () => void) => {
+      if (cancelled || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 250);
+    };
+
+    const connectSse = () => {
+      if (cancelled) return;
+      try {
+        const sseUrl = new URL(`${this.baseUrl}/api/v1/live`);
+        sseUrl.searchParams.set('since', String(lastSeq));
+        const token = this.getLoopbackToken();
+        if (token) sseUrl.searchParams.set('token', token);
+        evtSource = new EventSource(sseUrl.toString());
+        evtSource.onmessage = (e) => {
+          try {
+            deliver(JSON.parse(e.data) as Record<string, unknown>);
+          } catch {
+            // Ignore malformed keep-alive frames; the connection remains usable.
+          }
+        };
+        evtSource.onerror = () => {
+          if (onError) onError();
+          // EventSource performs its own reconnect and sends Last-Event-ID;
+          // closing here makes the explicit cursor URL authoritative as well.
+          if (!cancelled) {
+            evtSource?.close();
+            scheduleReconnect(connectSse);
+          }
+        };
+      } catch {
         if (onError) onError();
-      };
-    } catch {
-      if (onError) onError();
-    }
+        scheduleReconnect(connectSse);
+      }
+    };
+
+    const connectWebSocket = () => {
+      if (cancelled || typeof WebSocket === 'undefined') {
+        connectSse();
+        return;
+      }
+      try {
+        const url = new URL(`${this.baseUrl}/api/v1/live`);
+        url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        url.searchParams.set('since', String(lastSeq));
+        const token = this.getLoopbackToken();
+        if (token) url.searchParams.set('token', token);
+        socket = new WebSocket(url.toString());
+        socket.onopen = () => {
+          stopHeartbeat();
+          // tiny_http keeps a bidirectional WebSocket without a background
+          // reactor. A lightweight protocol poll lets the daemon flush events
+          // created by MCP/CLI callers while preserving the single WebSocket
+          // connection and its ordered sequence cursor.
+          const poll = () => {
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ event: 'live.poll', data: { since_seq: lastSeq } }));
+            }
+          };
+          poll();
+          heartbeat = window.setInterval(poll, 10);
+        };
+        socket.onmessage = (event) => {
+          try {
+            deliver(JSON.parse(String(event.data)) as Record<string, unknown>);
+          } catch {
+            // Ignore malformed frames; the cursor remains authoritative.
+          }
+        };
+        socket.onerror = () => {
+          if (onError) onError();
+          stopHeartbeat();
+          socket?.close();
+          socket = null;
+          if (!cancelled) scheduleReconnect(connectSse);
+        };
+        socket.onclose = () => {
+          stopHeartbeat();
+          socket = null;
+          if (!cancelled) scheduleReconnect(connectWebSocket);
+        };
+      } catch {
+        if (onError) onError();
+        scheduleReconnect(connectSse);
+      }
+    };
+
+    connectWebSocket();
 
     return () => {
       cancelled = true;
+      stopHeartbeat();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      socket?.close();
       if (evtSource) {
         evtSource.close();
       }

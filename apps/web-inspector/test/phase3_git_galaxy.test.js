@@ -12,7 +12,12 @@ test('FR-P3-001: Pure-Rust Git Object Reader Zero Sub-Process Invariant (INV-SAN
   const gitEngineDir = path.join(REPO_ROOT, 'crates/autopsy-git-engine/src');
   assert.ok(fs.existsSync(gitEngineDir), 'crates/autopsy-git-engine/src must exist');
 
-  const files = fs.readdirSync(gitEngineDir).filter((f) => f.endsWith('.rs'));
+  // The production engine must not spawn subprocesses. Unit-test fixtures may
+  // use the local Git executable to create packed repositories, so exclude the
+  // test module from this production-source invariant.
+  const files = fs
+    .readdirSync(gitEngineDir)
+    .filter((f) => f.endsWith('.rs') && f !== 'tests.rs');
   assert.ok(files.length >= 5, 'Must contain at least 5 rust modules');
 
   for (const f of files) {

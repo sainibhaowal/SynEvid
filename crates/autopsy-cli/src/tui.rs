@@ -115,15 +115,15 @@ impl TuiApp {
             selected_tab: 0,
             findings: Vec::new(),
             findings_selected: 0,
-            impact_seed: "apps/mcp-server/src/cli.ts#fn:runAutopsy".to_string(),
+            impact_seed: String::new(),
             likely_affected: Vec::new(),
             possibly_affected: Vec::new(),
             blast_column: 0,
             blast_selected: 0,
             runs: Vec::new(),
             runs_selected: 0,
-            snapshot_id: "active-worktree".to_string(),
-            coverage_state: "Verified".to_string(),
+            snapshot_id: "unindexed".to_string(),
+            coverage_state: "Unknown".to_string(),
             symbol_count: 0,
             edge_count: 0,
             search_active: false,
@@ -136,146 +136,100 @@ impl TuiApp {
 
     pub fn load_fast(&mut self) {
         self.load_runs();
-        self.findings = vec![
-            FindingItem {
-                rule_id: "no-circular-deps".to_string(),
-                status: "PASS".to_string(),
-                severity: "ERROR".to_string(),
-                message: "Module dependency graph acyclic invariant".to_string(),
-                location: "crates/".to_string(),
-                repair_action: "None needed".to_string(),
-            },
-            FindingItem {
-                rule_id: "api-compatibility".to_string(),
-                status: "PASS".to_string(),
-                severity: "ERROR".to_string(),
-                message: "Public API contract compatibility verified".to_string(),
-                location: "index.ts".to_string(),
-                repair_action: "None needed".to_string(),
-            },
-            FindingItem {
-                rule_id: "layering".to_string(),
-                status: "PASS".to_string(),
-                severity: "WARNING".to_string(),
-                message: "Architectural layering respected across crates".to_string(),
-                location: "crates/*".to_string(),
-                repair_action: "None needed".to_string(),
-            },
-        ];
-
-        self.likely_affected = vec![
-            ("apps/mcp-server/src/server.ts#fn:serveMcp".to_string(), 1),
-            (
-                "apps/mcp-server/src/evidence.ts#fn:handleEvidence".to_string(),
-                1,
-            ),
-        ];
-
-        self.possibly_affected = vec![
-            (
-                "apps/web-inspector/src/index.html".to_string(),
-                2,
-                "file_import".to_string(),
-            ),
-            (
-                "apps/vscode-extension/src/extension.ts".to_string(),
-                2,
-                "call_expression".to_string(),
-            ),
-        ];
+        // The first frame must never invent findings or blast-radius rows.
+        // `refresh` replaces these collections with repository-derived data;
+        // before that completes, the TUI shows an empty/unknown state.
+        self.findings.clear();
+        self.likely_affected.clear();
+        self.possibly_affected.clear();
     }
 
     pub fn refresh(&mut self) {
         let config = load_or_default_config(&self.repo_root).unwrap_or_default();
 
-        if let Ok(artifacts) = build_snapshot_and_graph(&self.repo_root, &config, None, None) {
-            self.snapshot_id = artifacts.snapshot.snapshot_id.to_string();
-            self.coverage_state = format!("{:?}", artifacts.coverage_state);
-            self.symbol_count = artifacts.graph.node_count();
-            self.edge_count = artifacts.graph.edge_count();
+        match build_snapshot_and_graph(&self.repo_root, &config, None, None) {
+            Ok(artifacts) => {
+                self.snapshot_id = artifacts.snapshot.snapshot_id.to_string();
+                self.coverage_state = format!("{:?}", artifacts.coverage_state);
+                self.symbol_count = artifacts.graph.node_count();
+                self.edge_count = artifacts.graph.edge_count();
 
-            // Evaluate invariants
-            let inv_path = self.repo_root.join(".autopsy").join("invariants.yml");
-            let invariants_config = if inv_path.exists() {
-                InvariantsConfig::load_from_file(&inv_path).unwrap_or_else(|_| InvariantsConfig {
-                    version: "0.0.1".to_string(),
-                    invariants: vec![],
-                })
-            } else {
-                InvariantsConfig {
-                    version: "0.0.1".to_string(),
-                    invariants: vec![
-                        autopsy_invariants::InvariantRule {
-                            id: "no-circular-deps".to_string(),
-                            description: "No circular dependencies introduced".to_string(),
-                            kind: "no_new_cycle".to_string(),
-                            severity: "error".to_string(),
-                            scope: None,
-                            rule: None,
+                // Evaluate invariants from the repository configuration only.
+                // An absent configuration means no configured findings, not
+                // synthetic PASS results.
+                let inv_path = self.repo_root.join(".autopsy").join("invariants.yml");
+                let invariants_config = if inv_path.exists() {
+                    InvariantsConfig::load_from_file(&inv_path).unwrap_or_else(|_| {
+                        InvariantsConfig {
+                            version: "0.0.1".to_string(),
+                            invariants: vec![],
+                        }
+                    })
+                } else {
+                    InvariantsConfig {
+                        version: "0.0.1".to_string(),
+                        invariants: vec![],
+                    }
+                };
+
+                let eval_ctx = EvaluationContext {
+                    snapshot_id: artifacts.snapshot.snapshot_id.clone(),
+                    analyzer_version: ANALYZER_VERSION,
+                    graph: &artifacts.graph,
+                    baseline_graph: None,
+                    diff: None,
+                    contracts_before: &std::collections::BTreeMap::new(),
+                    contracts_after: &std::collections::BTreeMap::new(),
+                    coverage_state: artifacts.coverage_state,
+                };
+
+                let evaluator = InvariantEvaluator::new();
+                let pairs = evaluator
+                    .evaluate(&invariants_config, &eval_ctx)
+                    .unwrap_or_default();
+
+                self.findings = pairs
+                    .into_iter()
+                    .map(|(f, _)| FindingItem {
+                        rule_id: f.rule_id,
+                        status: match f.status {
+                            FindingStatus::Pass => "PASS".to_string(),
+                            FindingStatus::Fail => "FAIL".to_string(),
+                            FindingStatus::Unknown => "UNKNOWN".to_string(),
                         },
-                        autopsy_invariants::InvariantRule {
-                            id: "api-compatibility".to_string(),
-                            description: "Public API contract compatibility".to_string(),
-                            kind: "api_compatibility".to_string(),
-                            severity: "error".to_string(),
-                            scope: None,
-                            rule: None,
+                        severity: format!("{:?}", f.severity).to_uppercase(),
+                        message: f.message,
+                        location: if !f.entities.is_empty() {
+                            f.entities[0].clone()
+                        } else {
+                            "src/".to_string()
                         },
-                        autopsy_invariants::InvariantRule {
-                            id: "layering".to_string(),
-                            description: "Architectural layering respected".to_string(),
-                            kind: "layering".to_string(),
-                            severity: "warning".to_string(),
-                            scope: None,
-                            rule: None,
-                        },
-                    ],
-                }
-            };
+                        repair_action: "Review dependent imports and re-run `autopsy verify`"
+                            .to_string(),
+                    })
+                    .collect();
 
-            let eval_ctx = EvaluationContext {
-                snapshot_id: artifacts.snapshot.snapshot_id.clone(),
-                analyzer_version: ANALYZER_VERSION,
-                graph: &artifacts.graph,
-                baseline_graph: None,
-                diff: None,
-                contracts_before: &std::collections::BTreeMap::new(),
-                contracts_after: &std::collections::BTreeMap::new(),
-                coverage_state: artifacts.coverage_state,
-            };
-
-            let evaluator = InvariantEvaluator::new();
-            let pairs = evaluator
-                .evaluate(&invariants_config, &eval_ctx)
-                .unwrap_or_default();
-
-            self.findings = pairs
-                .into_iter()
-                .map(|(f, _)| FindingItem {
-                    rule_id: f.rule_id,
-                    status: match f.status {
-                        FindingStatus::Pass => "PASS".to_string(),
-                        FindingStatus::Fail => "FAIL".to_string(),
-                        FindingStatus::Unknown => "UNKNOWN".to_string(),
-                    },
-                    severity: format!("{:?}", f.severity).to_uppercase(),
-                    message: f.message,
-                    location: if !f.entities.is_empty() {
-                        f.entities[0].clone()
-                    } else {
-                        "src/".to_string()
-                    },
-                    repair_action: "Review dependent imports and re-run `autopsy verify`"
-                        .to_string(),
-                })
-                .collect();
-
-            // Run blast radius on active seed
-            self.recompute_blast(&artifacts.graph);
-        } else {
-            self.snapshot_id = blake3::hash(self.repo_root.to_string_lossy().as_bytes()).to_hex()
-                [..16]
-                .to_string();
+                // Run blast radius on the user-selected seed, if any.
+                self.recompute_blast(&artifacts.graph);
+            }
+            Err(error) => {
+                self.snapshot_id = "unavailable".to_string();
+                self.coverage_state = "Unknown".to_string();
+                self.symbol_count = 0;
+                self.edge_count = 0;
+                self.findings = vec![FindingItem {
+                    rule_id: "analysis-unavailable".to_string(),
+                    status: "UNKNOWN".to_string(),
+                    severity: "ERROR".to_string(),
+                    message: format!("Repository analysis could not be completed: {error}"),
+                    location: self.repo_root.display().to_string(),
+                    repair_action:
+                        "Check the repository path and configuration, then press r to retry"
+                            .to_string(),
+                }];
+                self.likely_affected.clear();
+                self.possibly_affected.clear();
+            }
         }
 
         self.load_runs();
@@ -286,8 +240,9 @@ impl TuiApp {
         let runs_dir = self.repo_root.join(".autopsy").join("runs");
         if runs_dir.is_dir() {
             if let Ok(entries) = fs::read_dir(runs_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
+                let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+                paths.sort();
+                for p in paths {
                     if p.extension().is_some_and(|e| e == "json") && !p.ends_with("latest.json") {
                         if let Ok(c) = fs::read_to_string(&p) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&c) {
@@ -1586,6 +1541,24 @@ mod tests {
 
         app.on_key(KeyCode::Char('q'));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_tui_initial_state_has_no_fabricated_analysis_results() {
+        let root =
+            std::env::temp_dir().join(format!("synevid-tui-empty-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let app = TuiApp::new(root.clone());
+        assert!(app.impact_seed.is_empty());
+        assert!(app.findings.is_empty());
+        assert!(app.likely_affected.is_empty());
+        assert!(app.possibly_affected.is_empty());
+        assert_eq!(app.snapshot_id, "unindexed");
+        assert_eq!(app.coverage_state, "Unknown");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

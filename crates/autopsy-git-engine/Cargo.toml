@@ -7,6 +7,16 @@ license.workspace = true
 [dependencies]
 autopsy-temporal = { path = "../autopsy-temporal" }
 autopsy-domain = { path = "../autopsy-domain" }
+autopsy-adapter-api = { path = "../autopsy-adapter-api" }
+autopsy-adapter-typescript = { path = "../autopsy-adapter-typescript" }
+autopsy-adapter-python = { path = "../autopsy-adapter-python" }
+autopsy-adapter-go = { path = "../autopsy-adapter-go" }
+autopsy-adapter-rust = { path = "../autopsy-adapter-rust" }
+autopsy-adapter-java = { path = "../autopsy-adapter-java" }
+autopsy-adapter-csharp = { path = "../autopsy-adapter-csharp" }
+autopsy-repo = { path = "../autopsy-repo" }
+autopsy-graph = { path = "../autopsy-graph" }
+autopsy-diff = { path = "../autopsy-diff" }
 autopsy-storage = { path = "../autopsy-storage" }
 autopsy-graph-layout = { path = "../autopsy-graph-layout" }
 autopsy-plugin-api = { path = "../autopsy-plugin-api" }

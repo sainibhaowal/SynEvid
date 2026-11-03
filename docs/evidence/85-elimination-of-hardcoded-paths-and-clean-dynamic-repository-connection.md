@@ -1,7 +1,7 @@
 # Production Evidence 85: Elimination of Hardcoded Repository Defaults & Universal Cross-Platform Path Connection
 
-**Date:** 2026-10-28  
-**Status:** VERIFIED & PASSING  
+**Date:** 2026-10-28 (historical receipt; current behavior corrected 2026-11-01)
+**Status:** SUPERSEDED BY CURRENT PATH-SELECTION CONTRACT
 **Invariants Enforced:** INV-CROSS-001, INV-SANDBOX-001..004, FR-P1-003, FR-P1-007, FR-026  
 
 ---
@@ -31,7 +31,7 @@ The objectives of this release:
 - **Dynamic In-Memory Registry:** Added `active_repo_path: Arc<Mutex<PathBuf>>` and `connected_repos: Arc<Mutex<HashMap<String, RepoRecord>>>` to `DashboardServer`.
 - **Sanitized `handle_fs_browse`:**
   - When no path parameter is provided, defaults to the user's home directory (`$HOME` / `$USERPROFILE`), NOT the daemon's internal install directory.
-  - Quick presets strictly include `"User Home"`, `"Root Filesystem"`, and genuine user-connected repositories from storage.
+  - Current quick presets are always `[]`; the browser does not inject `"User Home"`, `"Root Filesystem"`, `"Eraser"`, or any project-specific repository.
   - Automatically filters out the daemon's own working directory and any entries named `"synevid"`.
 - **Dynamic `handle_status`:** Extracts `repo_name` directly from the connected repository record or path basename, with generic `"Repository"` fallback instead of `"SynEvid"`.
 
@@ -42,7 +42,7 @@ The objectives of this release:
 ### 2.4 Frontend API Fallback Sanitization (`apps/web/src/lib/api.ts`)
 - `FALLBACK_REPOS` emptied (`[]`).
 - `getStatus()` fallback returns `repo_root: ''`, `repo_name: ''`, `coverage_state: 'Unconnected'`, and `files_scanned: 0`.
-- `browseFilesystem()` fallback returns `current_path: ''`, `directories: []`, and generic OS root presets.
+- `browseFilesystem()` fallback returns `current_path: ''`, `directories: []`, and `quick_presets: []`.
 
 ### 2.5 Header & Overview Sanitization (`CockpitHeader.tsx`, `page.tsx`)
 - Updated `CockpitHeader.tsx` to handle empty repository lists gracefully with a disabled `"No repository connected"` option.
@@ -79,18 +79,14 @@ cd apps/web-inspector && npm test
 - `apps/desktop-electron`: `npm test` passed 3/3.
 
 ### 3.4 Live Server Endpoint Verification
-`curl -s http://127.0.0.1:3333/api/v1/fs/browse`
+`curl -s http://127.0.0.1:3333/api/v1/fs/browse?path=<selected-directory>`
 ```json
 {
-  "current_path": "/home/ravi",
+  "current_path": "<selected-directory>",
   "directories": [ ... ],
   "is_git_repo": false,
-  "parent_path": "/home",
-  "quick_presets": [
-    {"label": "User Home", "path": "/home/ravi"},
-    {"label": "Root Filesystem", "path": "/"},
-    {"label": "rea-rea-agents-6.8.0", "path": "/home/ravi/Projects Alpha/rea-rea-agents-6.8.0/rea-rea-agents-6.8.0"}
-  ]
+  "parent_path": "<parent-directory>",
+  "quick_presets": []
 }
 ```
-*Zero default SynEvid paths present.*
+The current contract contains no fixed repository path or repository-name shortcut. The exact selected path is canonicalized and stored only after explicit user selection.

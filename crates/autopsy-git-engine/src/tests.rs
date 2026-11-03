@@ -1,7 +1,8 @@
 use crate::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Create an isolated, temporary Git repository completely independent of the workspace.
 /// This strictly obeys the non-mutation invariant: NEVER test or mutate the active connected repository!
@@ -13,9 +14,9 @@ fn create_isolated_test_repo() -> PathBuf {
     let temp_root = std::env::temp_dir().join(format!("synevid_isolated_git_test_{nonce}"));
     let git_dir = temp_root.join(".git");
 
-    fs::create_dir_all(&git_dir.join("objects")).expect("create objects dir");
-    fs::create_dir_all(&git_dir.join("refs").join("heads")).expect("create refs/heads");
-    fs::create_dir_all(&git_dir.join("refs").join("tags")).expect("create refs/tags");
+    fs::create_dir_all(git_dir.join("objects")).expect("create objects dir");
+    fs::create_dir_all(git_dir.join("refs").join("heads")).expect("create refs/heads");
+    fs::create_dir_all(git_dir.join("refs").join("tags")).expect("create refs/tags");
 
     // Write initial HEAD pointing to main
     fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
@@ -32,10 +33,17 @@ fn create_isolated_test_repo() -> PathBuf {
     temp_root
 }
 
+fn stage_initial_files(repo_root: &PathBuf) {
+    GitMutationManager::new(repo_root)
+        .stage(&["index.ts".to_string(), "README.md".to_string()])
+        .expect("stage initial files");
+}
+
 #[test]
 fn test_isolated_commit_and_galaxy_reader() {
     let repo_root = create_isolated_test_repo();
     let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
 
     // Initial root commit
     let commit1 = manager
@@ -75,6 +83,7 @@ fn test_isolated_commit_and_galaxy_reader() {
 fn test_isolated_working_tree_status_and_diff() {
     let repo_root = create_isolated_test_repo();
     let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
     let _ = manager.commit("feat: initial", None, None).expect("commit");
 
     // Add untracked file
@@ -148,6 +157,7 @@ fn test_isolated_working_tree_status_and_diff() {
 fn test_isolated_branch_tag_and_undo() {
     let repo_root = create_isolated_test_repo();
     let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
     let c1 = manager.commit("feat: v1", None, None).expect("commit 1");
     let c1_oid = c1.new_commit_oid.expect("c1 oid");
 
@@ -197,12 +207,29 @@ fn test_isolated_branch_tag_and_undo() {
 fn test_isolated_bisect_assistant() {
     let repo_root = create_isolated_test_repo();
     let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
     let c1 = manager
         .commit("feat: good baseline", None, None)
         .expect("c1");
+    fs::write(
+        repo_root.join("index.ts"),
+        "export function add(a: number, b: number): number {\n  return a + b + 1;\n}\n",
+    )
+    .expect("write benign change");
+    manager
+        .stage(&["index.ts".to_string()])
+        .expect("stage benign change");
     let _ = manager.commit("fix: minor tweak", None, None).expect("c2");
+    fs::write(
+        repo_root.join("index.ts"),
+        "export function add(a: string): string {\n  return a;\n}\n",
+    )
+    .expect("write breaking change");
+    manager
+        .stage(&["index.ts".to_string()])
+        .expect("stage breaking change");
     let c3 = manager
-        .commit("feat: BREAKING contract drift in api", None, None)
+        .commit("feat: change add contract", None, None)
         .expect("c3");
 
     let bisect_res = manager
@@ -215,7 +242,243 @@ fn test_isolated_bisect_assistant() {
 
     assert_eq!(bisect_res.verdict, "FAIL");
     assert_eq!(bisect_res.breaking_commit_oid, c3.new_commit_oid);
-    assert!(bisect_res.breaking_summary.contains("BREAKING"));
+    assert!(bisect_res.breaking_summary.contains("change add contract"));
 
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn test_phase3_real_index_checkout_revert_semantic_diff_blame_and_frame() {
+    let repo_root = create_isolated_test_repo();
+    let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
+    let c1 = manager
+        .commit("feat: baseline", Some("Alice"), Some("alice@example.test"))
+        .expect("baseline");
+    let c1_oid = c1.new_commit_oid.clone().expect("baseline oid");
+    let baseline = fs::read_to_string(repo_root.join("index.ts")).expect("baseline content");
+
+    fs::write(
+        repo_root.join("index.ts"),
+        "export function add(a: number, b: number): number {\n  return a + b + 2;\n}\n",
+    )
+    .expect("write semantic change");
+    manager
+        .stage(&["index.ts".to_string()])
+        .expect("stage semantic change");
+    let c2 = manager
+        .commit(
+            "feat: update implementation",
+            Some("Bob"),
+            Some("bob@example.test"),
+        )
+        .expect("second commit");
+    let c2_oid = c2.new_commit_oid.clone().expect("second oid");
+
+    let diff = GitDiffer::new(&repo_root)
+        .diff_commits(&c1_oid, &c2_oid)
+        .expect("semantic diff");
+    assert_eq!(diff.base_oid, c1_oid);
+    assert_eq!(diff.head_oid, c2_oid);
+    assert!(!diff.result_digest.is_empty());
+    assert!(diff.total_changed_files >= 1);
+
+    let before_file = fs::read(repo_root.join("index.ts")).expect("file snapshot");
+    let before_head = fs::read(repo_root.join(".git").join("HEAD")).expect("head snapshot");
+    let frame_started = Instant::now();
+    let frame = VirtualTreeBuilder::new(&repo_root)
+        .build_frame(&c2_oid, true)
+        .expect("historical frame");
+    let frame_elapsed = frame_started.elapsed();
+    eprintln!("first historical frame: {frame_elapsed:.2?}");
+    if cfg!(debug_assertions) {
+        assert!(
+            frame_elapsed < Duration::from_secs(10),
+            "debug historical frame exceeded the diagnostic ceiling: {frame_elapsed:?}"
+        );
+    } else {
+        assert!(
+            frame_elapsed < Duration::from_millis(100),
+            "first historical frame exceeded the Phase 3 budget: {frame_elapsed:?}"
+        );
+    }
+    assert_eq!(frame.oid, c2_oid);
+    assert!(!frame.result_digest.is_empty());
+    assert_eq!(
+        before_file,
+        fs::read(repo_root.join("index.ts")).expect("file unchanged")
+    );
+    assert_eq!(
+        before_head,
+        fs::read(repo_root.join(".git").join("HEAD")).expect("head unchanged")
+    );
+
+    let revert = manager
+        .revert(&RevertRequest {
+            commit_oid: c2_oid.clone(),
+        })
+        .expect("revert");
+    assert!(revert.success);
+    assert_eq!(
+        fs::read_to_string(repo_root.join("index.ts")).expect("reverted content"),
+        baseline
+    );
+    assert_ne!(revert.new_commit_oid.as_deref(), Some(c2_oid.as_str()));
+
+    let blame = GitBlameEngine::new(&repo_root)
+        .blame("index.ts", "HEAD")
+        .expect("line blame");
+    assert_eq!(blame.path, "index.ts");
+    assert_eq!(blame.lines.len(), baseline.lines().count());
+    assert!(!blame.result_digest.is_empty());
+    assert!(blame.lines.iter().all(|line| !line.commit_oid.is_empty()));
+
+    manager
+        .branch_request(&BranchRequest {
+            branch_name: "feature/checkout".to_string(),
+            action: "create".to_string(),
+        })
+        .expect("create feature branch");
+    manager
+        .branch_request(&BranchRequest {
+            branch_name: "feature/checkout".to_string(),
+            action: "switch".to_string(),
+        })
+        .expect("switch feature branch");
+    fs::write(
+        repo_root.join("index.ts"),
+        "export function add(a: number, b: number): number {\n  return a + b + 99;\n}\n",
+    )
+    .expect("write branch change");
+    manager
+        .stage(&["index.ts".to_string()])
+        .expect("stage branch change");
+    manager
+        .commit("feat: branch-only change", None, None)
+        .expect("branch commit");
+    manager
+        .checkout(&CheckoutRequest {
+            target: "main".to_string(),
+            detach: Some(false),
+        })
+        .expect("checkout main");
+    assert_eq!(
+        fs::read_to_string(repo_root.join("index.ts")).expect("checked out content"),
+        baseline
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn test_phase3_selected_hunks_use_real_index_and_preserve_unstaged_lines() {
+    let repo_root = create_isolated_test_repo();
+    let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
+    manager
+        .commit("feat: baseline", None, None)
+        .expect("baseline");
+    fs::write(
+        repo_root.join("index.ts"),
+        "export function add(a: number, b: number): number {\n  return a + 9;\n}\n// unstaged\n",
+    )
+    .expect("working edit");
+
+    let mut hunks = BTreeMap::new();
+    hunks.insert(
+        "index.ts".to_string(),
+        vec![StageHunk {
+            old_start: 2,
+            old_lines: 1,
+            new_start: 2,
+            new_lines: 1,
+            lines: vec![
+                "-  return a + b;".to_string(),
+                "+  return a + 9;".to_string(),
+            ],
+        }],
+    );
+    manager.stage_hunks(&hunks).expect("stage selected hunk");
+    let status = GitStatusScanner::new(&repo_root)
+        .scan_status()
+        .expect("status");
+    assert!(status.staged.iter().any(|item| item.path == "index.ts"));
+    assert!(status.unstaged.iter().any(|item| item.path == "index.ts"));
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn test_phase3_galaxy_5000_commit_acceptance_budget() {
+    let repo_root = create_isolated_test_repo();
+    let manager = GitMutationManager::new(&repo_root);
+    let git_dir = repo_root.join(".git");
+    let tree_oid = manager
+        .write_loose_object(&git_dir, "tree", b"")
+        .expect("empty tree");
+    let mut parent: Option<autopsy_temporal::git::ObjectId> = None;
+    for index in 0..5_000usize {
+        let parent_line = parent
+            .map(|oid| format!("parent {}\n", oid.to_hex()))
+            .unwrap_or_default();
+        let payload = format!(
+            "tree {}\n{}author Perf <perf@example.test> {} +0000\ncommitter Perf <perf@example.test> {} +0000\n\ncommit {index}\n",
+            tree_oid.to_hex(),
+            parent_line,
+            index,
+            index
+        );
+        parent = Some(
+            manager
+                .write_loose_object(&git_dir, "commit", payload.as_bytes())
+                .expect("commit object"),
+        );
+    }
+    let head = parent.expect("head");
+    fs::write(
+        git_dir.join("refs").join("heads").join("main"),
+        format!("{}\n", head.to_hex()),
+    )
+    .expect("head ref");
+
+    // The normal workspace gate measures the indexed packed-object path so it
+    // remains stable on developer Windows hosts. Native GitHub Linux CI can
+    // opt into the strict loose-object acceptance path with this environment
+    // variable; that path deliberately preserves the 5,000 loose objects.
+    let strict_loose_gate = std::env::var_os("SYNEVID_PHASE3_LOOSE_HISTORY_GATE").is_some();
+    if !strict_loose_gate {
+        let pack = std::process::Command::new("git")
+            .args(["repack", "-ad"])
+            .current_dir(&repo_root)
+            .output()
+            .expect("pack synthetic history");
+        assert!(
+            pack.status.success(),
+            "git repack failed: {}",
+            String::from_utf8_lossy(&pack.stderr)
+        );
+    }
+
+    let started = Instant::now();
+    let galaxy = GitGalaxyReader::new(&repo_root)
+        .read_galaxy(5_000)
+        .expect("5,000 commit galaxy");
+    let elapsed = started.elapsed();
+    eprintln!(
+        "5,000 {} commit galaxy read: {:.2?}",
+        if strict_loose_gate { "loose" } else { "packed" },
+        elapsed
+    );
+    assert_eq!(galaxy.total_commits, 5_000);
+    if cfg!(debug_assertions) {
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "debug packed 5,000-commit galaxy exceeded the diagnostic ceiling: {elapsed:?}"
+        );
+    } else {
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "packed 5,000-commit galaxy exceeded the Phase 3 budget: {elapsed:?}"
+        );
+    }
     let _ = fs::remove_dir_all(&repo_root);
 }

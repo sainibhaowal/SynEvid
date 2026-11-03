@@ -54,6 +54,14 @@ pub struct TimeTravelNode {
     pub z: f64,
     pub cluster_id: u32,
     pub diff_status: String, // "added" | "modified" | "unchanged" | "deleted"
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    #[serde(default)]
+    pub end_line: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +85,10 @@ pub struct TimeTravelVisualFrame {
     pub added_files: Vec<String>,
     pub modified_files: Vec<String>,
     pub deleted_files: Vec<String>,
+    #[serde(default)]
+    pub coverage_state: String,
+    #[serde(default)]
+    pub result_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,6 +102,20 @@ pub struct SemanticDiffReport {
     pub blast_radius_score: usize,
     pub verdict: String,
     pub drifted_contracts: Vec<String>,
+    #[serde(default)]
+    pub result_digest: String,
+    #[serde(default)]
+    pub direct_symbols: Vec<String>,
+    #[serde(default)]
+    pub impacted_boundary: Vec<String>,
+    #[serde(default)]
+    pub symbol_deltas: Vec<autopsy_diff::SymbolDelta>,
+    #[serde(default)]
+    pub contract_deltas: Vec<autopsy_diff::ContractDelta>,
+    #[serde(default)]
+    pub edge_deltas: Vec<autopsy_diff::EdgeDelta>,
+    #[serde(default)]
+    pub coverage_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,8 +130,20 @@ pub struct GitMutationResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageHunk {
+    pub old_start: usize,
+    pub old_lines: usize,
+    pub new_start: usize,
+    pub new_lines: usize,
+    /// Unified hunk lines, including their leading ` `, `+`, or `-` marker.
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageRequest {
     pub paths: Vec<String>,
+    #[serde(default)]
+    pub hunks: std::collections::BTreeMap<String, Vec<StageHunk>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +197,25 @@ pub struct FileDiffReport {
     pub diff_lines: Vec<DiffLine>,
     pub total_additions: usize,
     pub total_deletions: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlameLine {
+    pub line: usize,
+    pub text: String,
+    pub commit_oid: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub sequence: usize,
+    pub blast_radius_score: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlameReport {
+    pub path: String,
+    pub lines: Vec<BlameLine>,
+    pub coverage_state: String,
+    pub result_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

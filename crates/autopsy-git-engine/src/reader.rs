@@ -24,6 +24,19 @@ impl GitGalaxyReader {
         let mut store = GitObjectStore::discover(&self.repo_root)?;
         let git_dir = store.git_dir().to_path_buf();
 
+        // A large packed history is dominated by independent object
+        // decompression. Warm only bounded packs so the normal small-history
+        // path remains cheap and repositories with large binary asset packs
+        // are not scanned just to render a commit galaxy.
+        if max_commits >= 1_000 {
+            let preload_bound = max_commits.saturating_mul(4);
+            if store.packed_object_count() > 0 {
+                store.preload_packed_objects(preload_bound);
+            } else {
+                store.preload_loose_objects(preload_bound);
+            }
+        }
+
         // 1. Identify active branch & HEAD commit
         let (active_branch, head_oid) = Self::read_head_info(&git_dir, &mut store)?;
 
@@ -87,11 +100,58 @@ impl GitGalaxyReader {
             }
         }
 
-        // 5. Build topological DAG nodes with branch lanes and forensic impact
-        let mut commits = Vec::with_capacity(raw_commits.len());
+        // 5. Build topological DAG nodes with branch lanes and forensic impact.
+        // Cache decoded commits and trees so long linear histories are read once.
+        // The common single-parent case is already emitted newest-first by the
+        // history walk; avoid rebuilding a 5,000-entry ordered set for it.
+        let linear_history = raw_commits.windows(2).all(|pair| {
+            pair[0].1.parents.len() <= 1 && pair[0].1.parents.first() == Some(&pair[1].0)
+        });
+        let commit_cache: BTreeMap<ObjectId, autopsy_temporal::git::Commit> = raw_commits
+            .iter()
+            .map(|(oid, commit)| (*oid, commit.clone()))
+            .collect();
+        let ordered_commits = if linear_history {
+            raw_commits
+        } else {
+            let mut child_counts: BTreeMap<ObjectId, usize> =
+                commit_cache.keys().map(|oid| (*oid, 0)).collect();
+            for commit in commit_cache.values() {
+                for parent in &commit.parents {
+                    if let Some(count) = child_counts.get_mut(parent) {
+                        *count += 1;
+                    }
+                }
+            }
+            let mut ready: BTreeSet<ObjectId> = child_counts
+                .iter()
+                .filter_map(|(oid, children)| (*children == 0).then_some(*oid))
+                .collect();
+            let mut topological_oids = Vec::with_capacity(commit_cache.len());
+            while let Some(oid) = ready.iter().next().copied() {
+                ready.remove(&oid);
+                topological_oids.push(oid);
+                if let Some(commit) = commit_cache.get(&oid) {
+                    for parent in &commit.parents {
+                        if let Some(count) = child_counts.get_mut(parent) {
+                            *count -= 1;
+                            if *count == 0 {
+                                ready.insert(*parent);
+                            }
+                        }
+                    }
+                }
+            }
+            topological_oids
+                .into_iter()
+                .filter_map(|oid| commit_cache.get(&oid).cloned().map(|commit| (oid, commit)))
+                .collect()
+        };
+        let mut tree_cache = BTreeMap::new();
+        let mut commits = Vec::with_capacity(ordered_commits.len());
         let head_hex = head_oid.clone().unwrap_or_default();
 
-        for (idx, (oid, commit)) in raw_commits.iter().enumerate() {
+        for (idx, (oid, commit)) in ordered_commits.iter().enumerate() {
             let oid_hex = oid.to_hex();
             let short_oid = oid_hex[..7.min(oid_hex.len())].to_string();
             let is_head = oid_hex == head_hex;
@@ -104,8 +164,12 @@ impl GitGalaxyReader {
             };
 
             // Lightweight per-commit tree differ to extract modified symbols & blast radius
+            let parent = commit
+                .parents
+                .first()
+                .and_then(|parent_oid| commit_cache.get(parent_oid));
             let (sym_mod, sym_add, sym_del, blast_score, verdict) =
-                Self::evaluate_commit_forensics(&store, commit);
+                Self::evaluate_commit_forensics(&store, commit, parent, &mut tree_cache);
 
             commits.push(CommitGalaxyNode {
                 oid: oid_hex.clone(),
@@ -279,21 +343,22 @@ impl GitGalaxyReader {
     fn evaluate_commit_forensics(
         store: &GitObjectStore,
         commit: &autopsy_temporal::git::Commit,
+        parent: Option<&autopsy_temporal::git::Commit>,
+        tree_cache: &mut BTreeMap<ObjectId, BTreeMap<String, (u32, ObjectId)>>,
     ) -> (usize, usize, usize, usize, String) {
-        let tree_curr = match flatten_tree(store, commit.tree) {
+        if let Some(parent) = parent
+            && parent.tree == commit.tree
+        {
+            return (0, 0, 0, 0, "PASS".to_string());
+        }
+        let tree_curr = match Self::cached_tree(store, commit.tree, tree_cache) {
             Ok(t) => t,
             Err(_) => return (0, 0, 0, 0, "PASS".to_string()),
         };
 
-        let tree_prev = if let Some(parent_oid) = commit.parents.first() {
-            if let Ok(p_commit) = store.commit(*parent_oid) {
-                flatten_tree(store, p_commit.tree).unwrap_or_default()
-            } else {
-                BTreeMap::new()
-            }
-        } else {
-            BTreeMap::new()
-        };
+        let tree_prev = parent
+            .and_then(|parent| Self::cached_tree(store, parent.tree, tree_cache).ok())
+            .unwrap_or_default();
 
         let mut added = 0;
         let mut modified = 0;
@@ -317,15 +382,26 @@ impl GitGalaxyReader {
         }
 
         let blast_score = modified * 2 + added + deleted * 3;
-        let verdict = if deleted > 2 {
-            "WARN"
-        } else if modified > 10 {
+        let verdict = if deleted > 2 || modified > 10 {
             "WARN"
         } else {
             "PASS"
         };
 
         (modified, added, deleted, blast_score, verdict.to_string())
+    }
+
+    fn cached_tree(
+        store: &GitObjectStore,
+        tree_oid: ObjectId,
+        tree_cache: &mut BTreeMap<ObjectId, BTreeMap<String, (u32, ObjectId)>>,
+    ) -> Result<BTreeMap<String, (u32, ObjectId)>, GitError> {
+        if let Some(tree) = tree_cache.get(&tree_oid) {
+            return Ok(tree.clone());
+        }
+        let tree = flatten_tree(store, tree_oid)?;
+        tree_cache.insert(tree_oid, tree.clone());
+        Ok(tree)
     }
 }
 

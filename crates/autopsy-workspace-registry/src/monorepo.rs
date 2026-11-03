@@ -178,12 +178,12 @@ impl MonorepoWorkspace {
                     globs.push(s.to_string());
                 }
             }
-        } else if let Some(obj) = workspaces_val.and_then(|w| w.as_object()) {
-            if let Some(arr) = obj.get("packages").and_then(|p| p.as_array()) {
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        globs.push(s.to_string());
-                    }
+        } else if let Some(obj) = workspaces_val.and_then(|w| w.as_object())
+            && let Some(arr) = obj.get("packages").and_then(|p| p.as_array())
+        {
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    globs.push(s.to_string());
                 }
             }
         }
@@ -338,11 +338,13 @@ impl MonorepoWorkspace {
                 in_pkg = true;
             } else if trimmed.starts_with('[') {
                 in_pkg = false;
-            } else if in_pkg && trimmed.starts_with("name") && trimmed.contains('=') {
-                if let Some((_, val)) = trimmed.split_once('=') {
-                    name = Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
-                    break;
-                }
+            } else if in_pkg
+                && trimmed.starts_with("name")
+                && trimmed.contains('=')
+                && let Some((_, val)) = trimmed.split_once('=')
+            {
+                name = Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                break;
             }
         }
 
@@ -384,11 +386,8 @@ impl MonorepoWorkspace {
                             .to_string(),
                     );
                 }
-            } else if trimmed.starts_with("use ") {
-                let dir = trimmed["use ".len()..]
-                    .trim()
-                    .trim_start_matches("./")
-                    .trim_matches('"');
+            } else if let Some(stripped) = trimmed.strip_prefix("use ") {
+                let dir = stripped.trim().trim_start_matches("./").trim_matches('"');
                 if !dir.is_empty() {
                     dirs.push(dir.to_string());
                 }
@@ -402,8 +401,8 @@ impl MonorepoWorkspace {
             if let Ok(c) = fs::read_to_string(&gomod) {
                 for l in c.lines() {
                     let lt = l.trim();
-                    if lt.starts_with("module ") {
-                        mod_name = lt["module ".len()..].trim().to_string();
+                    if let Some(stripped) = lt.strip_prefix("module ") {
+                        mod_name = stripped.trim().to_string();
                         break;
                     }
                 }
@@ -466,8 +465,8 @@ impl MonorepoWorkspace {
 
         for line in content.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with("include") {
-                let rest = trimmed["include".len()..].trim();
+            if let Some(stripped) = trimmed.strip_prefix("include") {
+                let rest = stripped.trim();
                 for proj in rest.split(',') {
                     let clean = proj
                         .trim()

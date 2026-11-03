@@ -85,6 +85,23 @@ test('Startup follows the daemon active repository before stale browser preferen
   assert.ok(!source.includes('refreshAll(saved || undefined)'));
 });
 
+test('Repository selection preserves native paths and does not fabricate duplicate folders', () => {
+  const api = fs.readFileSync(path.join(repoRoot, 'apps/web/src/lib/api.ts'), 'utf8');
+  const modal = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/ConnectRepoModal.tsx'), 'utf8');
+  const header = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/CockpitHeader.tsx'), 'utf8');
+  const daemon = fs.readFileSync(path.join(repoRoot, 'apps/synevid-ui/src/server.rs'), 'utf8');
+
+  assert.ok(api.includes("return p.replace(/\\\\/g, '/');"));
+  assert.doesNotMatch(api, /return `\/mnt\/\$\{driveLetter\}/);
+  assert.ok(modal.includes('joinSelectedDirectory'));
+  assert.ok(modal.includes('currentName.toLowerCase() === directoryName.toLowerCase()'));
+  assert.doesNotMatch(modal, /Quick Shortcuts:/);
+  assert.ok(api.includes("'/api/v1/repos/remove'"));
+  assert.ok(header.includes('Remove saved repository registration'));
+  assert.ok(daemon.includes('"quick_presets": []'));
+  assert.ok(daemon.includes('normalize_existing_repository_record'));
+});
+
 test('Phase 2 canvas controls are actionable and accessible', () => {
   const sourceFile = readSource('apps/web/src/components/CodeUniverse3D.tsx');
   const buttons = findJsxElements(sourceFile, 'button');
@@ -148,16 +165,16 @@ test('Large graph responses stay bounded and dense rendering uses GPU batches', 
   assert.ok(renderer.includes('DENSE_FILE_SIZE_PX = 68'));
   assert.ok(renderer.includes('HOVER FOR PATH'));
   assert.ok(renderer.includes('buildDenseMindMapPositions'));
-  assert.ok(renderer.includes('const clusterColumns = 4'));
-  assert.ok(renderer.includes('const fileRowsPerLayer = 10'));
-  assert.ok(renderer.includes('const clustersPerShelf = clusterColumns * 3'));
-  assert.ok(renderer.includes('(column % 2) * 110 + row * 65'));
-  assert.ok(renderer.includes('* 112'));
-  assert.ok(renderer.includes('* 88'));
-  assert.ok(renderer.includes('* 142'));
+  assert.ok(renderer.includes('const clusterColumns = 3'));
+  assert.ok(renderer.includes('const fileRowsPerLayer = 6'));
+  assert.ok(renderer.includes('const clustersPerShelf = clusterColumns * 2'));
+  assert.ok(renderer.includes('(column % 2) * 160 + row * 90'));
+  assert.ok(renderer.includes('* 175 + staggerY'));
+  assert.ok(renderer.includes('* 240'));
+  assert.ok(renderer.includes('shelfIndex * 900 + (column % 2) * 160 + row * 90'));
   assert.ok(component.includes('universe.node_count >= DENSE_GRAPH_RENDER_THRESHOLD ? 1500'));
   assert.ok(component.includes('const denseTargetZ = universe.node_count >= DENSE_GRAPH_RENDER_THRESHOLD ? 560 : 0'));
-  assert.ok(renderer.includes('toLinearRgb(hex, dark ? 0.08 : 0.38)'));
+  assert.ok(renderer.includes('toLinearRgb(hex, dark ? 0.04 : 0.28)'));
   assert.ok(renderer.includes('new THREE.LineSegments('));
   assert.ok(renderer.includes('MAX_RENDER_PIXEL_RATIO = 2'));
   assert.ok(renderer.includes('canvas.width = 512'));
@@ -287,6 +304,15 @@ test('Canvas meter reports presented FPS in Electron and render calls in browser
   assert.ok(component.includes('(fpsFrameCountRef.current * 1000) / elapsed'));
   assert.ok(renderer.includes('(frameCount * 1000) / elapsed'));
   assert.ok(component.includes('document.hidden ? 0 : null'));
+});
+
+test('Canvas HUD keeps controls in one non-overlapping row without tile borders', () => {
+  const component = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/CodeUniverse3D.tsx'), 'utf8');
+  assert.ok(component.includes('max-w-[250px] flex-row flex-wrap items-center'));
+  assert.ok(component.includes('left-[270px] right-4 z-20 flex items-center'));
+  assert.ok(component.includes('overflow-x-auto px-0 py-0 scrollbar-none'));
+  assert.ok(component.includes('focus-within:bg-[var(--card-elevated)]'));
+  assert.ok(!component.includes('left-1/2 -translate-x-1/2 flex items-center space-x-2 bg-[var(--card)]/95'));
 });
 
 test('Dense theme refresh precomputes palettes and time-slices color buffers', () => {

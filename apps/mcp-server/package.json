@@ -1,6 +1,6 @@
 {
   "name": "@synevid/mcp",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Zero-install Model Context Protocol (MCP) server for SynEvid (Code Autopsy)",
   "homepage": "https://github.com/sainibhaowal/SynEvid",
   "license": "Apache-2.0",

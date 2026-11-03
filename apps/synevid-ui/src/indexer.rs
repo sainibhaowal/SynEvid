@@ -425,6 +425,7 @@ fn to_graph_edge_row(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn edge_digest(
     snapshot_id: &str,
     source_id: &str,

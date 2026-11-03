@@ -3,7 +3,14 @@
 //! Complies with FR-P3-005: Every mutating git operation snapshots the previous state
 //! into `refs/autopsy/undo/<blake3>` for zero-loss recovery (Cmd+Z).
 
+use crate::index::{
+    IndexEntry, clean_worktree_bytes, index_digest, index_path, is_safe_index_path, read_index,
+    write_index,
+};
 use crate::model::*;
+use crate::semantic;
+use crate::status::GitStatusScanner;
+use autopsy_diff::{DiffEngine, DiffInput};
 use autopsy_temporal::git::{GitError, GitObjectStore, ObjectId, compute_object_id, flatten_tree};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
@@ -11,11 +18,27 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 enum GitTreeNode {
     Blob(u32, ObjectId),
     Tree(BTreeMap<String, GitTreeNode>),
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct UndoCheckpoint {
+    target_oid: String,
+    head_ref: Option<String>,
+    #[serde(default)]
+    branch_path: Option<String>,
+    #[serde(default)]
+    branch_oid: Option<String>,
+}
+
+#[derive(Clone)]
+struct BisectEvaluation {
+    is_bad: bool,
+    unknown: bool,
+    drifted_symbols: Vec<String>,
 }
 
 pub struct GitMutationManager {
@@ -34,20 +57,242 @@ impl GitMutationManager {
         Ok(store.git_dir().to_path_buf())
     }
 
+    fn validate_ref_name(name: &str, kind: &str) -> Result<(), GitError> {
+        let valid = !name.is_empty()
+            && !name.contains('\\')
+            && !name.starts_with('/')
+            && !name.contains('\0')
+            && name
+                .split('/')
+                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+        if valid {
+            Ok(())
+        } else {
+            Err(GitError::Malformed(format!(
+                "unsafe {kind} ref name: {name}"
+            )))
+        }
+    }
+
+    fn head_index_entries(
+        &self,
+        store: &mut GitObjectStore,
+    ) -> Result<BTreeMap<String, IndexEntry>, GitError> {
+        let Some(head_oid) = store.resolve_ref("HEAD")? else {
+            return Ok(BTreeMap::new());
+        };
+        let commit = store.commit(head_oid)?;
+        let tree = flatten_tree(store, commit.tree)?;
+        Ok(tree
+            .into_iter()
+            .map(|(path, (mode, oid))| {
+                let size = store.blob(oid).map(|bytes| bytes.len() as u32).unwrap_or(0);
+                (
+                    path.clone(),
+                    IndexEntry {
+                        mode,
+                        oid,
+                        path,
+                        size,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    fn ensure_clean_worktree(&self) -> Result<(), GitError> {
+        let status = GitStatusScanner::new(&self.repo_root).scan_status()?;
+        if !status.is_clean {
+            return Err(GitError::Malformed(
+                "ERR-GIT-204: working tree has uncommitted changes; commit, stage, or undo them before checkout".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn semantic_preflight(
+        &self,
+        store: &GitObjectStore,
+        before_tree: ObjectId,
+        after_tree: ObjectId,
+    ) -> Result<(String, String, String), GitError> {
+        let before = semantic::analyze_tree(
+            &self.repo_root,
+            store,
+            before_tree,
+            &format!("git:preflight:{}", before_tree.to_hex()),
+        )?;
+        let after = semantic::analyze_tree(
+            &self.repo_root,
+            store,
+            after_tree,
+            &format!("git:preflight:{}", after_tree.to_hex()),
+        )?;
+        let diff = DiffEngine::compute_diff(DiffInput {
+            before_snapshot_id: before.snapshot_id.clone(),
+            after_snapshot_id: after.snapshot_id.clone(),
+            before_files: &before.files,
+            after_files: &after.files,
+            before_graph: &before.graph,
+            after_graph: &after.graph,
+            before_contracts: &before.contracts,
+            after_contracts: &after.contracts,
+        });
+        let verdict = if before.coverage_state != autopsy_domain::CoverageState::Verified
+            || after.coverage_state != autopsy_domain::CoverageState::Verified
+        {
+            "UNKNOWN"
+        } else if diff.summary.breaking_contract_changes > 0 {
+            "WARN"
+        } else {
+            "PASS"
+        };
+        Ok((
+            verdict.to_string(),
+            format!(
+                "{} broken contracts; {} impacted symbols",
+                diff.summary.breaking_contract_changes,
+                diff.frontier.impacted_boundary.len() + diff.frontier.direct_symbols.len()
+            ),
+            diff.diff_digest,
+        ))
+    }
+
+    fn checkout_tree(
+        &self,
+        git_dir: &Path,
+        store: &mut GitObjectStore,
+        target_tree: ObjectId,
+    ) -> Result<(), GitError> {
+        let current_entries = store
+            .resolve_ref("HEAD")?
+            .and_then(|head| store.commit(head).ok())
+            .and_then(|commit| flatten_tree(store, commit.tree).ok())
+            .unwrap_or_default();
+        let target_entries = flatten_tree(store, target_tree)?;
+
+        for path in current_entries.keys() {
+            if !target_entries.contains_key(path) {
+                let full_path = self.repo_root.join(path);
+                if full_path.exists() {
+                    fs::remove_file(&full_path).map_err(|e| GitError::Io {
+                        path: full_path,
+                        source: e,
+                    })?;
+                }
+            }
+        }
+
+        for (path, (mode, oid)) in &target_entries {
+            if !is_safe_index_path(path) {
+                return Err(GitError::Malformed(format!(
+                    "unsafe historical tree path: {path}"
+                )));
+            }
+            let full_path = self.repo_root.join(path);
+            if let Some(parent) = full_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| GitError::Io {
+                    path: parent.to_path_buf(),
+                    source: e,
+                })?;
+            }
+            let bytes = store.blob(*oid)?;
+            fs::write(&full_path, &bytes).map_err(|e| GitError::Io {
+                path: full_path.clone(),
+                source: e,
+            })?;
+            let _ = mode;
+        }
+
+        let index_entries: BTreeMap<String, IndexEntry> = target_entries
+            .into_iter()
+            .map(|(path, (mode, oid))| {
+                let size = store.blob(oid).map(|bytes| bytes.len() as u32).unwrap_or(0);
+                (
+                    path.clone(),
+                    IndexEntry {
+                        mode,
+                        oid,
+                        path,
+                        size,
+                    },
+                )
+            })
+            .collect();
+        write_index(git_dir, &index_entries)
+    }
+
+    fn update_head(
+        &self,
+        git_dir: &Path,
+        target_oid: ObjectId,
+        branch_ref: Option<&str>,
+    ) -> Result<(), GitError> {
+        let head_path = git_dir.join("HEAD");
+        let target_path = if let Some(branch_ref) = branch_ref {
+            fs::write(&head_path, format!("ref: {branch_ref}\n")).map_err(|e| GitError::Io {
+                path: head_path,
+                source: e,
+            })?;
+            git_dir.join(branch_ref)
+        } else {
+            head_path
+        };
+        fs::write(&target_path, format!("{}\n", target_oid.to_hex())).map_err(|e| GitError::Io {
+            path: target_path,
+            source: e,
+        })
+    }
+
     /// Stage specific files for pre-commit verification.
     pub fn stage(&self, paths: &[String]) -> Result<GitMutationResult, GitError> {
-        let autopsy_dir = self.repo_root.join(".autopsy");
-        fs::create_dir_all(&autopsy_dir).map_err(|e| GitError::Io {
-            path: autopsy_dir.clone(),
-            source: e,
-        })?;
+        let git_dir = self.git_dir()?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let mut entries = read_index(&git_dir)?;
+        if entries.is_empty() {
+            entries = self.head_index_entries(&mut store)?;
+        }
 
-        let stage_file = autopsy_dir.join("staged_files.json");
-        let payload = serde_json::to_string_pretty(&paths).unwrap_or_else(|_| "[]".to_string());
-        fs::write(&stage_file, payload).map_err(|e| GitError::Io {
-            path: stage_file,
-            source: e,
-        })?;
+        for path in paths {
+            if !is_safe_index_path(path) {
+                return Err(GitError::Malformed(format!(
+                    "unsafe repository-relative stage path: {path}"
+                )));
+            }
+            let full_path = self.repo_root.join(path);
+            if full_path.is_file() {
+                let bytes = fs::read(&full_path).map_err(|e| GitError::Io {
+                    path: full_path.clone(),
+                    source: e,
+                })?;
+                let clean_bytes = clean_worktree_bytes(path, &bytes);
+                let mode = entries
+                    .get(path)
+                    .map(|entry| entry.mode)
+                    .unwrap_or(0o100644);
+                // A real index entry must point at an object that exists in the
+                // object database. Computing the OID alone would make status
+                // appear staged while a later commit could not read the blob.
+                let oid = self.write_loose_object(&git_dir, "blob", &clean_bytes)?;
+                entries.insert(
+                    path.clone(),
+                    IndexEntry {
+                        mode,
+                        oid,
+                        path: path.clone(),
+                        size: bytes.len() as u32,
+                    },
+                );
+            } else if !full_path.exists() {
+                // A staged path that disappeared represents a staged deletion.
+                entries.remove(path);
+            } else {
+                return Err(GitError::Malformed(format!(
+                    "cannot stage non-file path: {path}"
+                )));
+            }
+        }
+        write_index(&git_dir, &entries)?;
 
         Ok(GitMutationResult {
             success: true,
@@ -60,28 +305,156 @@ impl GitMutationManager {
         })
     }
 
+    /// Stage selected unified hunks into the real Git index without staging
+    /// unrelated working-tree lines.
+    pub fn stage_hunks(
+        &self,
+        hunks_by_path: &BTreeMap<String, Vec<StageHunk>>,
+    ) -> Result<GitMutationResult, GitError> {
+        let git_dir = self.git_dir()?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let mut entries = read_index(&git_dir)?;
+        if entries.is_empty() {
+            entries = self.head_index_entries(&mut store)?;
+        }
+
+        for (path, hunks) in hunks_by_path {
+            if !is_safe_index_path(path) {
+                return Err(GitError::Malformed(format!(
+                    "unsafe repository-relative hunk path: {path}"
+                )));
+            }
+            let base = entries
+                .get(path)
+                .and_then(|entry| store.blob(entry.oid).ok())
+                .unwrap_or_default();
+            let base_text = String::from_utf8(base).map_err(|_| {
+                GitError::Malformed(format!("cannot hunk-stage binary file: {path}"))
+            })?;
+            let staged_text = Self::apply_stage_hunks(&base_text, hunks)?;
+            let bytes = staged_text.as_bytes();
+            let mode = entries
+                .get(path)
+                .map(|entry| entry.mode)
+                .unwrap_or(0o100644);
+            let oid = self.write_loose_object(&git_dir, "blob", bytes)?;
+            entries.insert(
+                path.clone(),
+                IndexEntry {
+                    mode,
+                    oid,
+                    path: path.clone(),
+                    size: bytes.len() as u32,
+                },
+            );
+        }
+        write_index(&git_dir, &entries)?;
+        Ok(GitMutationResult {
+            success: true,
+            status: "success".to_string(),
+            action: "stage_hunks".to_string(),
+            new_commit_oid: None,
+            undo_checkpoint_id: None,
+            message: format!("Staged hunks for {} file(s)", hunks_by_path.len()),
+            error: None,
+        })
+    }
+
+    fn apply_stage_hunks(base_text: &str, hunks: &[StageHunk]) -> Result<String, GitError> {
+        let base_lines = base_text
+            .lines()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let trailing_newline = base_text.ends_with('\n');
+        let mut ordered = hunks.to_vec();
+        ordered.sort_by_key(|hunk| (hunk.old_start, hunk.new_start));
+        let mut cursor = 0usize;
+        let mut output = Vec::new();
+
+        for hunk in &ordered {
+            let start = hunk.old_start.saturating_sub(1);
+            if start < cursor || start > base_lines.len() {
+                return Err(GitError::Malformed(
+                    "ERR-GIT-209: hunk does not match the staged base".to_string(),
+                ));
+            }
+            output.extend(base_lines[cursor..start].iter().cloned());
+            cursor = start;
+            let mut old_seen = 0usize;
+            let mut new_seen = 0usize;
+            for line in &hunk.lines {
+                if line.is_empty() {
+                    return Err(GitError::Malformed(
+                        "ERR-GIT-209: invalid empty hunk line".to_string(),
+                    ));
+                }
+                let (marker, content) = line.split_at(1);
+                match marker {
+                    " " => {
+                        if base_lines.get(cursor).map(String::as_str) != Some(content) {
+                            return Err(GitError::Malformed(
+                                "ERR-GIT-209: hunk context does not match staged base".to_string(),
+                            ));
+                        }
+                        output.push(content.to_string());
+                        cursor += 1;
+                        old_seen += 1;
+                        new_seen += 1;
+                    }
+                    "-" => {
+                        if base_lines.get(cursor).map(String::as_str) != Some(content) {
+                            return Err(GitError::Malformed(
+                                "ERR-GIT-209: hunk deletion does not match staged base".to_string(),
+                            ));
+                        }
+                        cursor += 1;
+                        old_seen += 1;
+                    }
+                    "+" => {
+                        output.push(content.to_string());
+                        new_seen += 1;
+                    }
+                    _ => {
+                        return Err(GitError::Malformed(
+                            "ERR-GIT-209: hunk lines must begin with space, plus, or minus"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+            if old_seen != hunk.old_lines || new_seen != hunk.new_lines {
+                return Err(GitError::Malformed(
+                    "ERR-GIT-209: hunk line counts do not match header".to_string(),
+                ));
+            }
+        }
+        output.extend(base_lines[cursor..].iter().cloned());
+        let mut result = output.join("\n");
+        if trailing_newline {
+            result.push('\n');
+        }
+        Ok(result)
+    }
+
     /// Unstage specific files from pre-commit verification.
     pub fn unstage(&self, paths: &[String]) -> Result<GitMutationResult, GitError> {
-        let autopsy_dir = self.repo_root.join(".autopsy");
-        let stage_file = autopsy_dir.join("staged_files.json");
-
-        let mut current_paths: Vec<String> = if stage_file.exists() {
-            fs::read_to_string(&stage_file)
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        current_paths.retain(|p| !paths.contains(p));
-
-        let payload =
-            serde_json::to_string_pretty(&current_paths).unwrap_or_else(|_| "[]".to_string());
-        fs::write(&stage_file, payload).map_err(|e| GitError::Io {
-            path: stage_file,
-            source: e,
-        })?;
+        let git_dir = self.git_dir()?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let mut entries = read_index(&git_dir)?;
+        let head_entries = self.head_index_entries(&mut store)?;
+        for path in paths {
+            if !is_safe_index_path(path) {
+                return Err(GitError::Malformed(format!(
+                    "unsafe repository-relative unstage path: {path}"
+                )));
+            }
+            if let Some(entry) = head_entries.get(path) {
+                entries.insert(path.clone(), entry.clone());
+            } else {
+                entries.remove(path);
+            }
+        }
+        write_index(&git_dir, &entries)?;
 
         Ok(GitMutationResult {
             success: true,
@@ -96,10 +469,10 @@ impl GitMutationManager {
 
     /// Unstage all files.
     pub fn unstage_all(&self) -> Result<GitMutationResult, GitError> {
-        let stage_file = self.repo_root.join(".autopsy").join("staged_files.json");
-        if stage_file.exists() {
-            let _ = fs::write(&stage_file, "[]");
-        }
+        let git_dir = self.git_dir()?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let entries = self.head_index_entries(&mut store)?;
+        write_index(&git_dir, &entries)?;
         Ok(GitMutationResult {
             success: true,
             status: "success".to_string(),
@@ -121,9 +494,25 @@ impl GitMutationManager {
         })?;
 
         let clean_name = req.tag_name.trim().trim_start_matches("refs/tags/");
+        Self::validate_ref_name(clean_name, "tag")?;
         let tag_file = tags_dir.join(clean_name);
+        let tag_ref_name = format!("refs/tags/{clean_name}");
+        let previous_tag_oid = fs::read_to_string(&tag_file)
+            .ok()
+            .and_then(|value| ObjectId::from_hex(value.trim()).ok());
 
         if req.action.as_deref() == Some("delete") {
+            let undo_id = if let Some(head_oid) =
+                GitObjectStore::discover(&self.repo_root)?.resolve_ref("HEAD")?
+            {
+                Some(self.create_undo_checkpoint_with_branch(
+                    &git_dir,
+                    head_oid,
+                    Some((&tag_ref_name, previous_tag_oid)),
+                )?)
+            } else {
+                None
+            };
             if tag_file.exists() {
                 let _ = fs::remove_file(&tag_file);
             }
@@ -132,13 +521,22 @@ impl GitMutationManager {
                 status: "success".to_string(),
                 action: "tag_delete".to_string(),
                 new_commit_oid: None,
-                undo_checkpoint_id: None,
+                undo_checkpoint_id: undo_id,
                 message: format!("Deleted tag '{clean_name}'"),
                 error: None,
             });
         }
 
         let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let undo_id = if let Some(head_oid) = store.resolve_ref("HEAD")? {
+            Some(self.create_undo_checkpoint_with_branch(
+                &git_dir,
+                head_oid,
+                Some((&tag_ref_name, previous_tag_oid)),
+            )?)
+        } else {
+            None
+        };
         let target_oid_hex = if let Some(ref o) = req.target_oid {
             o.clone()
         } else if let Some(head_oid) = store.resolve_ref("HEAD")? {
@@ -154,6 +552,19 @@ impl GitMutationManager {
                 error: Some("ERR-GIT-TAG-001: No target commit for tag".to_string()),
             });
         };
+        let target_oid = ObjectId::from_hex(&target_oid_hex).map_err(|_| {
+            GitError::Malformed(format!(
+                "ERR-GIT-TAG-002: invalid target object '{target_oid_hex}'"
+            ))
+        })?;
+        if !matches!(
+            store.object(target_oid)?,
+            autopsy_temporal::git::GitObject::Commit(_)
+        ) {
+            return Err(GitError::Malformed(format!(
+                "ERR-GIT-TAG-003: target '{target_oid_hex}' is not a commit"
+            )));
+        }
 
         fs::write(&tag_file, format!("{target_oid_hex}\n")).map_err(|e| GitError::Io {
             path: tag_file,
@@ -165,7 +576,7 @@ impl GitMutationManager {
             status: "success".to_string(),
             action: "tag_create".to_string(),
             new_commit_oid: Some(target_oid_hex.clone()),
-            undo_checkpoint_id: None,
+            undo_checkpoint_id: undo_id,
             message: format!(
                 "Created tag '{clean_name}' pointing to {}",
                 &target_oid_hex[..7.min(target_oid_hex.len())]
@@ -231,13 +642,30 @@ impl GitMutationManager {
         let undo_id = self.create_undo_checkpoint(&git_dir, head_oid)?;
 
         // Create merge commit with 2 parents: HEAD and source_oid
+        self.ensure_clean_worktree()?;
         let head_commit = store.commit(head_oid)?;
-        let tree_oid = head_commit.tree;
+        let source_commit = store.commit(source_oid)?;
+        let head_tree = flatten_tree(&store, head_commit.tree)?;
+        let source_tree = flatten_tree(&store, source_commit.tree)?;
+        let mut merged_tree = head_tree.clone();
+        for (path, source_entry) in source_tree {
+            if let Some(head_entry) = merged_tree.get(&path)
+                && head_entry.1 != source_entry.1
+            {
+                return Err(GitError::Malformed(format!(
+                    "ERR-GIT-MERGE-003: merge conflict at {path}"
+                )));
+            }
+            merged_tree.insert(path, source_entry);
+        }
+        let tree_oid = self.build_git_tree(&git_dir, &merged_tree)?;
+        let (merge_verdict, merge_summary, merge_digest) =
+            self.semantic_preflight(&store, head_commit.tree, tree_oid)?;
 
         let snap_digest = blake3::hash(
             format!(
                 "{}_{}_{}",
-                self.repo_root.display(),
+                tree_oid.to_hex(),
                 head_oid.to_hex(),
                 source_oid.to_hex()
             )
@@ -246,13 +674,10 @@ impl GitMutationManager {
         .to_hex()[..16]
             .to_string();
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = head_commit.committer_timestamp().unwrap_or(0);
         let full_message = format!(
-            "Merge branch '{}'\n\nSynevid-Snapshot: blake3:{}\nSynevid-Verdict: PASS (0 broken callers)\n",
-            clean_source, snap_digest
+            "Merge branch '{}'\n\nSynevid-Snapshot: blake3:{}\nSynevid-Diff: blake3:{}\nSynevid-Verdict: {} ({})\n",
+            clean_source, snap_digest, merge_digest, merge_verdict, merge_summary
         );
 
         let commit_content = format!(
@@ -276,6 +701,7 @@ impl GitMutationManager {
             git_dir.join("HEAD")
         };
 
+        self.checkout_tree(&git_dir, &mut store, tree_oid)?;
         fs::write(&target_ref_path, format!("{}\n", new_commit_oid.to_hex())).map_err(|e| {
             GitError::Io {
                 path: target_ref_path,
@@ -298,84 +724,67 @@ impl GitMutationManager {
     pub fn checkout(&self, req: &CheckoutRequest) -> Result<GitMutationResult, GitError> {
         let git_dir = self.git_dir()?;
         let mut store = GitObjectStore::discover(&self.repo_root)?;
-
+        self.ensure_clean_worktree()?;
         let head_oid_opt = store.resolve_ref("HEAD")?;
+        let target_str = req.target.trim();
+        if ObjectId::from_hex(target_str).is_err() {
+            Self::validate_ref_name(target_str, "checkout")?;
+        }
+        let branch_path = git_dir.join("refs").join("heads").join(target_str);
+        let (target_oid, branch_ref, action, message) =
+            if branch_path.exists() && req.detach != Some(true) {
+                let hex = fs::read_to_string(&branch_path)
+                    .map_err(|e| GitError::Io {
+                        path: branch_path.clone(),
+                        source: e,
+                    })?
+                    .trim()
+                    .to_string();
+                (
+                    ObjectId::from_hex(&hex)
+                        .map_err(|e| GitError::Malformed(format!("Invalid branch OID: {e}")))?,
+                    Some(format!("refs/heads/{target_str}")),
+                    "checkout_branch",
+                    format!("Switched to branch '{target_str}'"),
+                )
+            } else {
+                let target_oid = crate::reader::resolve_revision(&mut store, &git_dir, target_str)?;
+                (
+                    target_oid,
+                    None,
+                    "checkout_commit",
+                    format!(
+                        "Detached HEAD at commit {}",
+                        &target_oid.to_hex()[..7.min(target_oid.to_hex().len())]
+                    ),
+                )
+            };
+
+        let target_commit = store.commit(target_oid)?;
         let undo_id = if let Some(head_oid) = head_oid_opt {
             Some(self.create_undo_checkpoint(&git_dir, head_oid)?)
         } else {
             None
         };
+        self.checkout_tree(&git_dir, &mut store, target_commit.tree)?;
+        self.update_head(&git_dir, target_oid, branch_ref.as_deref())?;
 
-        let target_str = req.target.trim();
-        let branch_path = git_dir.join("refs").join("heads").join(target_str);
-
-        if branch_path.exists() && req.detach != Some(true) {
-            let head_path = git_dir.join("HEAD");
-            fs::write(&head_path, format!("ref: refs/heads/{target_str}\n")).map_err(|e| {
-                GitError::Io {
-                    path: head_path,
-                    source: e,
-                }
-            })?;
-            Ok(GitMutationResult {
-                success: true,
-                status: "success".to_string(),
-                action: "checkout_branch".to_string(),
-                new_commit_oid: None,
-                undo_checkpoint_id: undo_id,
-                message: format!("Switched to branch '{target_str}'"),
-                error: None,
-            })
-        } else {
-            // Detached HEAD checkout to commit OID
-            let target_oid = if let Ok(o) = ObjectId::from_hex(target_str) {
-                o
-            } else if branch_path.exists() {
-                let hex = fs::read_to_string(&branch_path)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                ObjectId::from_hex(&hex)
-                    .map_err(|e| GitError::Malformed(format!("Invalid commit OID: {e}")))?
-            } else {
-                return Ok(GitMutationResult {
-                    success: false,
-                    status: "refused".to_string(),
-                    action: "checkout".to_string(),
-                    new_commit_oid: None,
-                    undo_checkpoint_id: None,
-                    message: format!("Cannot checkout '{target_str}': ref or commit not found"),
-                    error: Some("ERR-GIT-CHECKOUT-001: Target missing".to_string()),
-                });
-            };
-
-            let head_path = git_dir.join("HEAD");
-            fs::write(&head_path, format!("{}\n", target_oid.to_hex())).map_err(|e| {
-                GitError::Io {
-                    path: head_path,
-                    source: e,
-                }
-            })?;
-
-            Ok(GitMutationResult {
-                success: true,
-                status: "success".to_string(),
-                action: "checkout_commit".to_string(),
-                new_commit_oid: Some(target_oid.to_hex()),
-                undo_checkpoint_id: undo_id,
-                message: format!(
-                    "Detached HEAD at commit {}",
-                    &target_oid.to_hex()[..7.min(target_oid.to_hex().len())]
-                ),
-                error: None,
-            })
-        }
+        Ok(GitMutationResult {
+            success: true,
+            status: "success".to_string(),
+            action: action.to_string(),
+            new_commit_oid: Some(target_oid.to_hex()),
+            undo_checkpoint_id: undo_id,
+            message,
+            error: None,
+        })
     }
 
     /// Revert historical commit with pre-flight check and undo checkpoint.
     pub fn revert(&self, req: &RevertRequest) -> Result<GitMutationResult, GitError> {
         let git_dir = self.git_dir()?;
         let mut store = GitObjectStore::discover(&self.repo_root)?;
+        self.ensure_clean_worktree()?;
 
         let head_oid = match store.resolve_ref("HEAD")? {
             Some(o) => o,
@@ -396,31 +805,70 @@ impl GitMutationManager {
             .map_err(|e| GitError::Malformed(format!("Invalid target commit OID: {e}")))?;
 
         let target_commit = store.commit(target_oid)?;
+        let head_commit = store.commit(head_oid)?;
+        let current_tree = flatten_tree(&store, head_commit.tree)?;
+        let target_tree = flatten_tree(&store, target_commit.tree)?;
+        let parent_tree = if let Some(parent_oid) = target_commit.parents.first() {
+            let parent = store.commit(*parent_oid)?;
+            flatten_tree(&store, parent.tree)?
+        } else {
+            BTreeMap::new()
+        };
+
+        // Apply the inverse patch only when the current tree still contains
+        // the target side of each change. Divergence is refused explicitly;
+        // silently manufacturing a bad revert would violate coverage honesty.
+        let mut reverted_tree = current_tree.clone();
+        let mut paths = BTreeMap::new();
+        paths.extend(parent_tree.keys().cloned().map(|path| (path, ())));
+        paths.extend(target_tree.keys().cloned().map(|path| (path, ())));
+        for path in paths.keys() {
+            let before = parent_tree.get(path);
+            let target = target_tree.get(path);
+            if before == target {
+                continue;
+            }
+            let current = current_tree.get(path);
+            if current == target {
+                if let Some((mode, oid)) = before {
+                    reverted_tree.insert(path.clone(), (*mode, *oid));
+                } else {
+                    reverted_tree.remove(path);
+                }
+            } else if current != before {
+                return Ok(GitMutationResult {
+                    success: false,
+                    status: "conflict".to_string(),
+                    action: "revert".to_string(),
+                    new_commit_oid: None,
+                    undo_checkpoint_id: None,
+                    message: format!("Revert conflicts with current changes in '{path}'"),
+                    error: Some(
+                        "ERR-GIT-208: Revert conflict requires manual resolution".to_string(),
+                    ),
+                });
+            }
+        }
+        let tree_oid = self.build_git_tree(&git_dir, &reverted_tree)?;
+        let (revert_verdict, revert_summary, revert_digest) =
+            self.semantic_preflight(&store, head_commit.tree, tree_oid)?;
         let undo_id = self.create_undo_checkpoint(&git_dir, head_oid)?;
 
-        let head_commit = store.commit(head_oid)?;
-        let tree_oid = head_commit.tree; // Clean revert state
-
         let snap_digest = blake3::hash(
-            format!(
-                "{}_revert_{}",
-                self.repo_root.display(),
-                target_oid.to_hex()
-            )
-            .as_bytes(),
+            format!("{}_revert_{}", tree_oid.to_hex(), target_oid.to_hex()).as_bytes(),
         )
         .to_hex()[..16]
             .to_string();
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = head_commit.committer_timestamp().unwrap_or(0);
         let full_message = format!(
-            "Revert \"{}\"\n\nThis reverts commit {}.\n\nSynevid-Snapshot: blake3:{}\nSynevid-Verdict: PASS (0 broken callers)\n",
+            "Revert \"{}\"\n\nThis reverts commit {}.\n\nSynevid-Snapshot: blake3:{}\nSynevid-Diff: blake3:{}\nSynevid-Verdict: {} ({})\n",
             target_commit.summary(),
             target_oid.to_hex(),
-            snap_digest
+            snap_digest,
+            revert_digest,
+            revert_verdict,
+            revert_summary
         );
 
         let commit_content = format!(
@@ -443,6 +891,7 @@ impl GitMutationManager {
             git_dir.join("HEAD")
         };
 
+        self.checkout_tree(&git_dir, &mut store, tree_oid)?;
         fs::write(&target_ref_path, format!("{}\n", new_commit_oid.to_hex())).map_err(|e| {
             GitError::Io {
                 path: target_ref_path,
@@ -466,75 +915,167 @@ impl GitMutationManager {
 
     /// Autopsy Bisect Assistant (FR-P3-007): Scans commit range to pinpoint breaking commit.
     pub fn bisect(&self, req: &BisectRequest) -> Result<BisectReport, GitError> {
-        let store = GitObjectStore::discover(&self.repo_root)?;
-        let start_oid = ObjectId::from_hex(req.start_oid.trim())
-            .map_err(|e| GitError::Malformed(format!("Invalid start commit OID: {e}")))?;
-        let end_oid = ObjectId::from_hex(req.end_oid.trim())
-            .map_err(|e| GitError::Malformed(format!("Invalid end commit OID: {e}")))?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let git_dir = store.git_dir().to_path_buf();
+        let start_oid = crate::reader::resolve_revision(&mut store, &git_dir, &req.start_oid)?;
+        let end_oid = crate::reader::resolve_revision(&mut store, &git_dir, &req.end_oid)?;
 
-        // Walk backwards from end_oid until start_oid
-        let mut commit_path: Vec<(ObjectId, autopsy_temporal::git::Commit)> = Vec::new();
-        let mut current = end_oid;
+        // Build the first-parent range and require the requested good commit to
+        // be an ancestor of the requested end commit.
+        let mut newest_first = Vec::new();
+        let mut cursor = end_oid;
         let mut visited = std::collections::BTreeSet::new();
-
-        while visited.insert(current) {
-            if let Ok(c) = store.commit(current) {
-                commit_path.push((current, c.clone()));
-                if current == start_oid || c.parents.is_empty() {
-                    break;
-                }
-                current = c.parents[0];
-            } else {
+        while visited.insert(cursor) {
+            let commit = store.commit(cursor)?;
+            let reached_start = cursor == start_oid;
+            let parent = commit.parents.first().copied();
+            newest_first.push((cursor, commit));
+            if reached_start {
                 break;
             }
+            cursor = parent.ok_or_else(|| {
+                GitError::Malformed("bisect start is not an ancestor of end".to_string())
+            })?;
+        }
+        if newest_first.last().map(|(oid, _)| *oid) != Some(start_oid) {
+            return Err(GitError::Malformed(
+                "bisect start is not an ancestor of end".to_string(),
+            ));
+        }
+        newest_first.reverse();
+        let total_scanned = newest_first.len();
+        if total_scanned <= 1 {
+            return Ok(BisectReport {
+                breaking_commit_oid: None,
+                breaking_summary: "No invariant transition in an empty commit range".to_string(),
+                breaking_author: String::new(),
+                breaking_timestamp: 0,
+                verdict: "PASS".to_string(),
+                drifted_symbols: Vec::new(),
+                commits_evaluated: 0,
+                total_scanned,
+            });
         }
 
-        // Reverse to evaluate chronologically (from start towards end)
-        commit_path.reverse();
+        let rule_id = req.rule_id.as_deref().unwrap_or("contract_transition");
+        let mut evaluations: BTreeMap<usize, BisectEvaluation> = BTreeMap::new();
+        let mut evaluate = |index: usize| -> Result<BisectEvaluation, GitError> {
+            if let std::collections::btree_map::Entry::Vacant(entry) = evaluations.entry(index) {
+                let (oid, commit) = &newest_first[index];
+                let parent = newest_first[index - 1].0;
+                let result = self.evaluate_bisect_commit(&store, parent, *oid, commit, rule_id)?;
+                entry.insert(result);
+            }
+            Ok(evaluations
+                .get(&index)
+                .expect("bisect evaluation inserted")
+                .clone())
+        };
 
-        let total_scanned = commit_path.len();
-        let mut breaking_commit_oid = None;
-        let mut breaking_summary = "No invariant violation detected in commit range".to_string();
-        let mut breaking_author = String::new();
-        let mut breaking_timestamp = 0;
-        let mut drifted_symbols = Vec::new();
-        let mut verdict = "PASS".to_string();
+        let final_index = total_scanned - 1;
+        let final_evaluation = evaluate(final_index)?;
+        if !final_evaluation.is_bad {
+            let verdict = if final_evaluation.unknown {
+                "UNKNOWN"
+            } else {
+                "PASS"
+            };
+            return Ok(BisectReport {
+                breaking_commit_oid: None,
+                breaking_summary: "No invariant transition detected in commit range".to_string(),
+                breaking_author: String::new(),
+                breaking_timestamp: 0,
+                verdict: verdict.to_string(),
+                drifted_symbols: final_evaluation.drifted_symbols,
+                commits_evaluated: evaluations.len(),
+                total_scanned,
+            });
+        }
 
-        for (oid, commit) in &commit_path {
-            // Check summary or forensics for breaking marker
-            let summary = commit.summary();
-            let is_breaking = summary.contains("BREAKING")
-                || summary.contains("breaking")
-                || summary.to_lowercase().contains("drift");
-
-            if is_breaking && breaking_commit_oid.is_none() {
-                breaking_commit_oid = Some(oid.to_hex());
-                breaking_summary = summary.to_string();
-                breaking_author = commit.author.clone();
-                breaking_timestamp = commit.committer_timestamp().unwrap_or(0);
-                verdict = "FAIL".to_string();
-                drifted_symbols.push(format!("contract_drift_in_{}", &oid.to_hex()[..7]));
+        // Binary search the first semantic failure. The predicate is the
+        // invariant/contract result, never a commit-message marker.
+        let mut low = 1usize;
+        let mut high = final_index;
+        while low < high {
+            let midpoint = low + (high - low) / 2;
+            if evaluate(midpoint)?.is_bad {
+                high = midpoint;
+            } else {
+                low = midpoint + 1;
             }
         }
-
-        if breaking_commit_oid.is_none() && commit_path.len() > 1 {
-            // If none marked breaking explicitly, the midpoint or latest is evaluated
-            let last = commit_path.last().unwrap();
-            breaking_commit_oid = Some(last.0.to_hex());
-            breaking_summary = last.1.summary().to_string();
-            breaking_author = last.1.author.clone();
-            breaking_timestamp = last.1.committer_timestamp().unwrap_or(0);
-        }
-
+        let breaking = evaluate(low)?;
+        let (_, commit) = &newest_first[low];
         Ok(BisectReport {
-            breaking_commit_oid,
-            breaking_summary,
-            breaking_author,
-            breaking_timestamp,
-            verdict,
-            drifted_symbols,
-            commits_evaluated: total_scanned,
+            breaking_commit_oid: Some(commit.oid.to_hex()),
+            breaking_summary: commit.summary().to_string(),
+            breaking_author: commit.author.clone(),
+            breaking_timestamp: commit.committer_timestamp().unwrap_or(0),
+            verdict: if breaking.is_bad {
+                "FAIL".to_string()
+            } else {
+                "UNKNOWN".to_string()
+            },
+            drifted_symbols: breaking.drifted_symbols,
+            commits_evaluated: evaluations.len(),
             total_scanned,
+        })
+    }
+
+    fn evaluate_bisect_commit(
+        &self,
+        store: &GitObjectStore,
+        parent_oid: ObjectId,
+        commit_oid: ObjectId,
+        commit: &autopsy_temporal::git::Commit,
+        rule_id: &str,
+    ) -> Result<BisectEvaluation, GitError> {
+        let parent = store.commit(parent_oid)?;
+        let before = semantic::analyze_tree(
+            &self.repo_root,
+            store,
+            parent.tree,
+            &format!("git:{}", parent_oid.to_hex()),
+        )?;
+        let after = semantic::analyze_tree(
+            &self.repo_root,
+            store,
+            commit.tree,
+            &format!("git:{}", commit_oid.to_hex()),
+        )?;
+        let diff = DiffEngine::compute_diff(DiffInput {
+            before_snapshot_id: before.snapshot_id.clone(),
+            after_snapshot_id: after.snapshot_id.clone(),
+            before_files: &before.files,
+            after_files: &after.files,
+            before_graph: &before.graph,
+            after_graph: &after.graph,
+            before_contracts: &before.contracts,
+            after_contracts: &after.contracts,
+        });
+        let unknown = before.coverage_state != autopsy_domain::CoverageState::Verified
+            || after.coverage_state != autopsy_domain::CoverageState::Verified;
+        let contract_failure = diff.summary.breaking_contract_changes > 0;
+        let coverage_failure = unknown && rule_id == "coverage";
+        let is_bad = contract_failure || coverage_failure;
+        let mut drifted_symbols = diff
+            .frontier
+            .direct_symbols
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        drifted_symbols.extend(
+            diff.frontier
+                .impacted_boundary
+                .iter()
+                .map(ToString::to_string),
+        );
+        drifted_symbols.sort();
+        drifted_symbols.dedup();
+        Ok(BisectEvaluation {
+            is_bad,
+            unknown,
+            drifted_symbols,
         })
     }
 
@@ -580,44 +1121,16 @@ impl GitMutationManager {
             git_dir.join("HEAD")
         };
 
-        // 4. Construct tree for commit from staged files or parent
-        let staged_file = self.repo_root.join(".autopsy").join("staged_files.json");
-        let staged_paths: Vec<String> = if staged_file.exists() {
-            fs::read_to_string(&staged_file)
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let tree_oid = if !staged_paths.is_empty() {
-            // Flatten existing parent tree into path -> (mode, oid) map
-            let mut file_map: BTreeMap<String, (u32, ObjectId)> = BTreeMap::new();
-            if let Some(head_oid) = head_oid_opt {
-                if let Ok(parent_commit) = store.commit(head_oid) {
-                    if let Ok(entries) = flatten_tree(&store, parent_commit.tree) {
-                        for (path, (mode, oid)) in entries {
-                            file_map.insert(path, (mode, oid));
-                        }
-                    }
-                }
-            }
-
-            // Apply staged changes
-            for path in &staged_paths {
-                let full_path = self.repo_root.join(path);
-                if full_path.is_file() {
-                    let bytes = fs::read(&full_path).unwrap_or_default();
-                    let blob_oid = self.write_loose_object(&git_dir, "blob", &bytes)?;
-                    let mode = file_map.get(path).map(|(m, _)| *m).unwrap_or(0o100644);
-                    file_map.insert(path.clone(), (mode, blob_oid));
-                } else if !full_path.exists() {
-                    // Staged deletion
-                    file_map.remove(path);
-                }
-            }
-
+        // 4. Construct the commit tree from the real Git index. An absent
+        // index retains the historical empty-root behavior for compatibility;
+        // once staging is used, the index is the only source of commit files.
+        let has_index = index_path(&git_dir).exists();
+        let index_entries = read_index(&git_dir)?;
+        let tree_oid = if has_index {
+            let file_map: BTreeMap<String, (u32, ObjectId)> = index_entries
+                .values()
+                .map(|entry| (entry.path.clone(), (entry.mode, entry.oid)))
+                .collect();
             self.build_git_tree(&git_dir, &file_map)?
         } else if let Some(head_oid) = head_oid_opt {
             let parent_commit = store.commit(head_oid)?;
@@ -626,11 +1139,81 @@ impl GitMutationManager {
             self.write_loose_object(&git_dir, "tree", b"")?
         };
 
-        // 5. Build Synevid verified commit message with trailers
+        // 5. Run the same semantic diff used by the public range-diff API
+        // before writing the commit. The result is recorded in trailers so a
+        // commit never claims PASS merely because the mutation succeeded.
+        let (preflight_verdict, preflight_summary, preflight_digest) =
+            if let Some(head_oid) = head_oid_opt {
+                let parent_commit = store.commit(head_oid)?;
+                match (
+                    semantic::analyze_tree(
+                        &self.repo_root,
+                        &store,
+                        parent_commit.tree,
+                        &format!("git:{}", head_oid.to_hex()),
+                    ),
+                    semantic::analyze_tree(
+                        &self.repo_root,
+                        &store,
+                        tree_oid,
+                        &format!("git:staged:{}", tree_oid.to_hex()),
+                    ),
+                ) {
+                    (Ok(before), Ok(after)) => {
+                        let diff = DiffEngine::compute_diff(DiffInput {
+                            before_snapshot_id: before.snapshot_id.clone(),
+                            after_snapshot_id: after.snapshot_id.clone(),
+                            before_files: &before.files,
+                            after_files: &after.files,
+                            before_graph: &before.graph,
+                            after_graph: &after.graph,
+                            before_contracts: &before.contracts,
+                            after_contracts: &after.contracts,
+                        });
+                        let verdict = if before.coverage_state
+                            != autopsy_domain::CoverageState::Verified
+                            || after.coverage_state != autopsy_domain::CoverageState::Verified
+                        {
+                            "UNKNOWN"
+                        } else if diff.summary.breaking_contract_changes > 0 {
+                            "WARN"
+                        } else {
+                            "PASS"
+                        };
+                        (
+                            verdict.to_string(),
+                            format!(
+                                "{} broken contracts; {} impacted symbols",
+                                diff.summary.breaking_contract_changes,
+                                diff.frontier.impacted_boundary.len()
+                                    + diff.frontier.direct_symbols.len()
+                            ),
+                            diff.diff_digest,
+                        )
+                    }
+                    _ => (
+                        "UNKNOWN".to_string(),
+                        "semantic preflight could not verify the staged tree".to_string(),
+                        blake3::hash(tree_oid.to_hex().as_bytes())
+                            .to_hex()
+                            .to_string(),
+                    ),
+                }
+            } else {
+                (
+                    "PASS".to_string(),
+                    "initial repository commit".to_string(),
+                    blake3::hash(tree_oid.to_hex().as_bytes())
+                        .to_hex()
+                        .to_string(),
+                )
+            };
+
+        // 6. Build Synevid verified commit message with deterministic trailers.
         let snap_digest = blake3::hash(
             format!(
                 "{}_{}",
-                self.repo_root.display(),
+                tree_oid.to_hex(),
                 head_oid_opt.map(|o| o.to_hex()).unwrap_or_default()
             )
             .as_bytes(),
@@ -640,15 +1223,18 @@ impl GitMutationManager {
 
         let author = author_name.unwrap_or("SynEvid Engineer");
         let email = author_email.unwrap_or("engineer@synevid.local");
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = head_oid_opt
+            .and_then(|oid| store.commit(oid).ok())
+            .and_then(|commit| commit.committer_timestamp())
+            .unwrap_or(0);
 
         let full_message = format!(
-            "{}\n\nSynevid-Snapshot: blake3:{}\nSynevid-Verdict: PASS (0 broken callers)\n",
+            "{}\n\nSynevid-Snapshot: blake3:{}\nSynevid-Diff: blake3:{}\nSynevid-Verdict: {} ({})\n",
             message.trim(),
-            snap_digest
+            snap_digest,
+            preflight_digest,
+            preflight_verdict,
+            preflight_summary,
         );
 
         let parent_line = if let Some(head_oid) = head_oid_opt {
@@ -670,10 +1256,10 @@ impl GitMutationManager {
             full_message
         );
 
-        // 6. Write loose git object to .git/objects/xx/yyyy...
+        // 7. Write loose git object to .git/objects/xx/yyyy...
         let new_oid = self.write_loose_object(&git_dir, "commit", commit_content.as_bytes())?;
 
-        // 7. Atomically advance branch ref or HEAD
+        // 8. Atomically advance branch ref or HEAD
         if let Some(parent_dir) = target_ref_path.parent() {
             let _ = fs::create_dir_all(parent_dir);
         }
@@ -684,7 +1270,9 @@ impl GitMutationManager {
             }
         })?;
 
-        // Clear staged files
+        if has_index {
+            write_index(&git_dir, &index_entries)?;
+        }
         let _ = fs::remove_file(self.repo_root.join(".autopsy").join("staged_files.json"));
 
         Ok(GitMutationResult {
@@ -707,10 +1295,28 @@ impl GitMutationManager {
             .ok_or_else(|| GitError::Malformed("HEAD does not resolve".into()))?;
 
         let clean_name = branch_name.trim_start_matches("refs/heads/");
+        Self::validate_ref_name(clean_name, "branch")?;
         let branch_path = git_dir.join("refs").join("heads").join(clean_name);
 
         match action {
             "create" => {
+                if branch_path.exists() {
+                    return Ok(GitMutationResult {
+                        success: false,
+                        status: "refused".to_string(),
+                        action: "branch_create".to_string(),
+                        new_commit_oid: None,
+                        undo_checkpoint_id: None,
+                        message: format!("Branch '{clean_name}' already exists"),
+                        error: Some("ERR-GIT-203: Branch already exists".to_string()),
+                    });
+                }
+                let branch_ref_name = format!("refs/heads/{clean_name}");
+                let undo_id = self.create_undo_checkpoint_with_branch(
+                    &git_dir,
+                    head_oid,
+                    Some((&branch_ref_name, None)),
+                )?;
                 if let Some(p) = branch_path.parent() {
                     let _ = fs::create_dir_all(p);
                 }
@@ -725,7 +1331,7 @@ impl GitMutationManager {
                     status: "success".to_string(),
                     action: "branch_create".to_string(),
                     new_commit_oid: Some(head_oid.to_hex()),
-                    undo_checkpoint_id: None,
+                    undo_checkpoint_id: Some(undo_id),
                     message: format!(
                         "Created branch '{clean_name}' at {}",
                         &head_oid.to_hex()[..7]
@@ -745,25 +1351,56 @@ impl GitMutationManager {
                         error: Some(format!("ERR-GIT-204: Branch '{clean_name}' not found")),
                     });
                 }
-                let undo_id = self.create_undo_checkpoint(&git_dir, head_oid)?;
-                let head_path = git_dir.join("HEAD");
-                fs::write(&head_path, format!("ref: refs/heads/{clean_name}\n")).map_err(|e| {
-                    GitError::Io {
-                        path: head_path,
+                self.ensure_clean_worktree()?;
+                let target_hex = fs::read_to_string(&branch_path)
+                    .map_err(|e| GitError::Io {
+                        path: branch_path.clone(),
                         source: e,
-                    }
-                })?;
+                    })?
+                    .trim()
+                    .to_string();
+                let target_oid = ObjectId::from_hex(&target_hex)
+                    .map_err(|e| GitError::Malformed(format!("Invalid branch OID: {e}")))?;
+                let target_commit = store.commit(target_oid)?;
+                let branch_ref_name = format!("refs/heads/{clean_name}");
+                let previous_branch_oid = fs::read_to_string(&branch_path)
+                    .ok()
+                    .and_then(|value| ObjectId::from_hex(value.trim()).ok());
+                let undo_id = self.create_undo_checkpoint_with_branch(
+                    &git_dir,
+                    head_oid,
+                    Some((&branch_ref_name, previous_branch_oid)),
+                )?;
+                self.checkout_tree(&git_dir, &mut store, target_commit.tree)?;
+                self.update_head(
+                    &git_dir,
+                    target_oid,
+                    Some(&format!("refs/heads/{clean_name}")),
+                )?;
                 Ok(GitMutationResult {
                     success: true,
                     status: "success".to_string(),
                     action: "branch_switch".to_string(),
-                    new_commit_oid: None,
+                    new_commit_oid: Some(target_oid.to_hex()),
                     undo_checkpoint_id: Some(undo_id),
                     message: format!("Switched to branch '{clean_name}'"),
                     error: None,
                 })
             }
             "delete" => {
+                let head_content = fs::read_to_string(git_dir.join("HEAD")).unwrap_or_default();
+                if head_content.trim() == format!("ref: refs/heads/{clean_name}") {
+                    return Ok(GitMutationResult {
+                        success: false,
+                        status: "refused".to_string(),
+                        action: "branch_delete".to_string(),
+                        new_commit_oid: None,
+                        undo_checkpoint_id: None,
+                        message: "Cannot delete the active branch".to_string(),
+                        error: Some("ERR-GIT-207: Active branch deletion refused".to_string()),
+                    });
+                }
+                let undo_id = self.create_undo_checkpoint(&git_dir, head_oid)?;
                 if branch_path.exists() {
                     let _ = fs::remove_file(&branch_path);
                 }
@@ -772,7 +1409,7 @@ impl GitMutationManager {
                     status: "success".to_string(),
                     action: "branch_delete".to_string(),
                     new_commit_oid: None,
-                    undo_checkpoint_id: None,
+                    undo_checkpoint_id: Some(undo_id),
                     message: format!("Deleted branch '{clean_name}'"),
                     error: None,
                 })
@@ -812,7 +1449,7 @@ impl GitMutationManager {
                 source: e,
             })?
             .filter_map(|e| e.ok().map(|ent| ent.path()))
-            .filter(|p| p.is_file())
+            .filter(|p| p.is_file() && p.extension().is_none_or(|ext| ext != "index"))
             .collect();
 
         checkpoints.sort();
@@ -832,35 +1469,73 @@ impl GitMutationManager {
             }
         };
 
-        let target_oid_hex = fs::read_to_string(&latest)
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let checkpoint_text = fs::read_to_string(&latest).unwrap_or_default();
+        let checkpoint =
+            serde_json::from_str::<UndoCheckpoint>(&checkpoint_text).unwrap_or_else(|_| {
+                UndoCheckpoint {
+                    target_oid: checkpoint_text.trim().to_string(),
+                    head_ref: None,
+                    branch_path: None,
+                    branch_oid: None,
+                }
+            });
+        let target_oid = ObjectId::from_hex(&checkpoint.target_oid)
+            .map_err(|e| GitError::Malformed(format!("Invalid undo checkpoint: {e}")))?;
+        let mut store = GitObjectStore::discover(&self.repo_root)?;
+        let target_commit = store.commit(target_oid)?;
+        self.checkout_tree(&git_dir, &mut store, target_commit.tree)?;
+        self.update_head(&git_dir, target_oid, checkpoint.head_ref.as_deref())?;
+        if let Some(branch_path) = checkpoint.branch_path.as_deref() {
+            let branch_file = git_dir.join(branch_path);
+            if let Some(branch_oid) = checkpoint.branch_oid {
+                if let Some(parent) = branch_file.parent() {
+                    fs::create_dir_all(parent).map_err(|e| GitError::Io {
+                        path: parent.to_path_buf(),
+                        source: e,
+                    })?;
+                }
+                fs::write(&branch_file, format!("{branch_oid}\n")).map_err(|e| GitError::Io {
+                    path: branch_file.clone(),
+                    source: e,
+                })?;
+            } else if branch_file.exists() {
+                fs::remove_file(&branch_file).map_err(|e| GitError::Io {
+                    path: branch_file,
+                    source: e,
+                })?;
+            }
+        }
 
-        // Restore HEAD
-        let head_content = fs::read_to_string(git_dir.join("HEAD")).unwrap_or_default();
-        let target_ref_path = if let Some(branch_ref) = head_content.trim().strip_prefix("ref: ") {
-            git_dir.join(branch_ref.trim())
-        } else {
-            git_dir.join("HEAD")
-        };
-
-        fs::write(&target_ref_path, format!("{target_oid_hex}\n")).map_err(|e| GitError::Io {
-            path: target_ref_path,
-            source: e,
-        })?;
+        let index_snapshot = latest.with_extension("index");
+        let index_file = index_path(&git_dir);
+        if index_snapshot.exists() {
+            let bytes = fs::read(&index_snapshot).map_err(|e| GitError::Io {
+                path: index_snapshot.clone(),
+                source: e,
+            })?;
+            fs::write(&index_file, bytes).map_err(|e| GitError::Io {
+                path: index_file,
+                source: e,
+            })?;
+        } else if index_file.exists() {
+            fs::remove_file(&index_file).map_err(|e| GitError::Io {
+                path: index_file,
+                source: e,
+            })?;
+        }
 
         let _ = fs::remove_file(latest);
+        let _ = fs::remove_file(index_snapshot);
 
         Ok(GitMutationResult {
             success: true,
             status: "success".to_string(),
             action: "undo".to_string(),
-            new_commit_oid: Some(target_oid_hex.clone()),
+            new_commit_oid: Some(target_oid.to_hex()),
             undo_checkpoint_id: None,
             message: format!(
                 "Rolled back to checkpoint {}",
-                &target_oid_hex[..7.min(target_oid_hex.len())]
+                &target_oid.to_hex()[..7.min(target_oid.to_hex().len())]
             ),
             error: None,
         })
@@ -871,30 +1546,74 @@ impl GitMutationManager {
         git_dir: &Path,
         head_oid: ObjectId,
     ) -> Result<String, GitError> {
+        self.create_undo_checkpoint_with_branch(git_dir, head_oid, None)
+    }
+
+    fn create_undo_checkpoint_with_branch(
+        &self,
+        git_dir: &Path,
+        head_oid: ObjectId,
+        branch_state: Option<(&str, Option<ObjectId>)>,
+    ) -> Result<String, GitError> {
         let undo_dir = git_dir.join("refs").join("autopsy").join("undo");
         fs::create_dir_all(&undo_dir).map_err(|e| GitError::Io {
             path: undo_dir.clone(),
             source: e,
         })?;
 
-        let undo_id = format!(
-            "{:012x}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
+        let head_content = fs::read_to_string(git_dir.join("HEAD")).unwrap_or_default();
+        let head_ref = head_content
+            .trim()
+            .strip_prefix("ref: ")
+            .map(str::to_string);
+        let branch_path = branch_state.map(|(path, _)| path.to_string());
+        let branch_oid = branch_state
+            .and_then(|(_, oid)| oid)
+            .map(|oid| oid.to_hex());
+        let index_hash = index_digest(git_dir)?;
+        let undo_id = blake3::hash(
+            format!(
+                "undo\0{}\0{}\0{}\0{}\0{}",
+                head_oid.to_hex(),
+                head_ref.as_deref().unwrap_or("DETACHED"),
+                index_hash,
+                branch_path.as_deref().unwrap_or(""),
+                branch_oid.as_deref().unwrap_or("")
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .chars()
+        .take(24)
+        .collect::<String>();
 
         let undo_file = undo_dir.join(&undo_id);
-        fs::write(&undo_file, format!("{}\n", head_oid.to_hex())).map_err(|e| GitError::Io {
+        let checkpoint = serde_json::to_vec(&UndoCheckpoint {
+            target_oid: head_oid.to_hex(),
+            head_ref,
+            branch_path,
+            branch_oid,
+        })
+        .map_err(|e| GitError::Malformed(format!("cannot encode undo checkpoint: {e}")))?;
+        fs::write(&undo_file, checkpoint).map_err(|e| GitError::Io {
             path: undo_file,
             source: e,
         })?;
+        let index_file = index_path(git_dir);
+        let index_snapshot = undo_dir.join(format!("{undo_id}.index"));
+        if index_file.exists() {
+            fs::copy(&index_file, &index_snapshot).map_err(|e| GitError::Io {
+                path: index_snapshot,
+                source: e,
+            })?;
+        } else if index_snapshot.exists() {
+            let _ = fs::remove_file(index_snapshot);
+        }
 
         Ok(undo_id)
     }
 
-    fn write_loose_object(
+    pub(crate) fn write_loose_object(
         &self,
         git_dir: &Path,
         kind: &str,
