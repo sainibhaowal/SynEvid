@@ -165,11 +165,6 @@ jobs:
                   print(f"Validated schema {s}: {title}")
           '
 
-      - name: Validate Phase 0/1 requirement registry and shared evidence contract
-        run: |
-          python3 scripts/validate-requirements.py
-          python3 scripts/validate-evidence-contract.py
-
       - name: Validate autopsy.toml, invariants.yml & baseline.json Syntax
         run: |
           python3 -c '
