@@ -140,7 +140,9 @@ test('Phase 2 canvas controls are actionable and accessible', () => {
 test('Large graph responses stay bounded and dense rendering uses GPU batches', () => {
   const daemon = fs.readFileSync(path.join(repoRoot, 'apps/synevid-ui/src/server.rs'), 'utf8');
   const component = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/CodeUniverse3D.tsx'), 'utf8');
-  const renderer = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/denseUniverseRenderer.ts'), 'utf8');
+  const renderer = fs
+    .readFileSync(path.join(repoRoot, 'apps/web/src/components/denseUniverseRenderer.ts'), 'utf8')
+    .replace(/\r\n/g, '\n');
   const api = fs.readFileSync(path.join(repoRoot, 'apps/web/src/lib/api.ts'), 'utf8');
 
   assert.ok(daemon.includes('MAX_UNIVERSE_NODE_LIMIT: usize = 5_000'));
