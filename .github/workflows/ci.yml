@@ -2,7 +2,7 @@ name: CI Quality & Cross-Platform Matrix
 
 on:
   push:
-    branches: ["main", "master", "develop"]
+    branches: ["main", "master", "develop", "phase3-loose-history-performance"]
   pull_request:
     types: [opened, synchronize, reopened]
     branches: ["main", "master", "develop"]
