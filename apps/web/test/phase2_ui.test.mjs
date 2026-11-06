@@ -261,7 +261,9 @@ test('Dense graphs clearly disable the unavailable pulse control', () => {
 });
 
 test('Dense overview edge sampling is deterministic, evenly spaced, and bounded', async () => {
-  const renderer = fs.readFileSync(path.join(repoRoot, 'apps/web/src/components/denseUniverseRenderer.ts'), 'utf8');
+  const renderer = fs
+    .readFileSync(path.join(repoRoot, 'apps/web/src/components/denseUniverseRenderer.ts'), 'utf8')
+    .replace(/\r\n/g, '\n');
   const constantStart = renderer.indexOf('export const MAX_DENSE_OVERVIEW_EDGES');
   const functionStart = renderer.indexOf('export function sampleDenseOverviewEdges', constantStart);
   const functionEnd = renderer.indexOf('\n}\n', functionStart) + 2;
