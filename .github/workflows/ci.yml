@@ -165,6 +165,11 @@ jobs:
                   print(f"Validated schema {s}: {title}")
           '
 
+      - name: Validate Phase 0/1 requirement registry and shared evidence contract
+        run: |
+          python3 scripts/validate-requirements.py
+          python3 scripts/validate-evidence-contract.py
+
       - name: Validate autopsy.toml, invariants.yml & baseline.json Syntax
         run: |
           python3 -c '
@@ -263,6 +268,19 @@ jobs:
         working-directory: apps/desktop-electron
         run: npm ci --no-audit --no-fund
 
+      - name: Build real Phase 1 daemon browser test target
+        run: cargo build -p synevid-ui
+
+      - name: Run real Electron + daemon browser workflow on Linux
+        if: runner.os == 'Linux'
+        working-directory: apps/web
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm test
+
+      - name: Run real Electron + daemon browser workflow on Windows and macOS
+        if: runner.os != 'Linux'
+        working-directory: apps/web
+        run: npm test
+
       - name: Build unsigned unpacked Electron runtime
         working-directory: apps/desktop-electron
         env:
@@ -351,6 +369,8 @@ jobs:
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| MSRV 1.90 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Web Inspector | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Native Electron Packaged Smoke (Windows/macOS/Linux) | ${{ needs.electron-native-packaged-smoke.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 3 Loose Git History Budget | ${{ needs.phase3-loose-history-performance.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| One-Line Installer & Host Wiring (offline self-test) | ${{ needs.installer-and-wiring-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
 
@@ -360,6 +380,8 @@ jobs:
              [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
              [ "${{ needs.msrv-check.result }}" != "success" ] || \
              [ "${{ needs.mcp-server-check.result }}" != "success" ] || \
+             [ "${{ needs.electron-native-packaged-smoke.result }}" != "success" ] || \
+             [ "${{ needs.phase3-loose-history-performance.result }}" != "success" ] || \
              [ "${{ needs.installer-and-wiring-check.result }}" != "success" ] || \
              [ "${{ needs.supply-chain-audit.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY

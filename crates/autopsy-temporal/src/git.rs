@@ -714,18 +714,41 @@ impl GitObjectStore {
         if oids.len() < 2 || oids.len() > max_objects {
             return;
         }
+        // Keep the worker assignment deterministic even though this cache is
+        // private and never serialized. Deterministic assignment makes timing
+        // comparisons reproducible across repeated benchmark runs and avoids
+        // depending on filesystem directory enumeration order.
+        oids.sort_unstable();
         let workers = std::thread::available_parallelism()
             .map(|count| count.get().min(16))
             .unwrap_or(2)
             .min(oids.len());
         let chunk_size = oids.len().div_ceil(workers);
         std::thread::scope(|scope| {
+            let mut jobs = Vec::with_capacity(workers);
             for chunk in oids.chunks(chunk_size) {
-                scope.spawn(move || {
-                    for oid in chunk {
-                        let _ = self.raw_object(*oid, 0);
+                jobs.push(scope.spawn(move || {
+                    let mut objects = Vec::with_capacity(chunk.len());
+                    for oid in chunk.iter().copied() {
+                        // Prefetch is only a latency optimization. The
+                        // authoritative raw_object path verifies the SHA-1
+                        // before returning a cached object, so doing the hash
+                        // here would duplicate work for every history commit.
+                        // Malformed entries are deliberately skipped and are
+                        // reported by that authoritative read when reachable.
+                        if let Ok(Some(object)) = self.read_loose(oid) {
+                            objects.push((oid, object));
+                        }
                     }
-                });
+                    objects
+                }));
+            }
+            for job in jobs {
+                if let Ok(objects) = job.join()
+                    && let Ok(mut cache) = self.raw_cache.lock()
+                {
+                    cache.extend(objects);
+                }
             }
         });
     }
@@ -812,12 +835,15 @@ impl GitObjectStore {
         if let Ok(cache) = self.raw_cache.lock()
             && let Some(object) = cache.get(&oid)
         {
-            return Ok(object.clone());
+            let object = object.clone();
+            verify_object_id(oid, &object)?;
+            return Ok(object);
         }
 
         if self.has_loose_objects
             && let Some(loose) = self.read_loose(oid)?
         {
+            verify_object_id(oid, &loose)?;
             if let Ok(mut cache) = self.raw_cache.lock() {
                 cache.insert(oid, loose.clone());
             }
@@ -827,6 +853,7 @@ impl GitObjectStore {
         for (pack_index, pack) in self.packs.iter().enumerate() {
             if let Some(offset) = pack.index.offset_of(oid) {
                 let object = self.read_packed(pack_index, pack, offset, oid, depth)?;
+                verify_object_id(oid, &object)?;
                 if let Ok(mut cache) = self.raw_cache.lock() {
                     cache.insert(oid, object.clone());
                 }
@@ -863,7 +890,9 @@ impl GitObjectStore {
         if let Ok(cache) = self.packed_offset_cache.lock()
             && let Some(object) = cache.get(&(pack_index, offset))
         {
-            return Ok(object.clone());
+            let object = object.clone();
+            verify_object_id(oid, &object)?;
+            return Ok(object);
         }
         let bytes = &pack.pack_data;
         let at = offset as usize;
@@ -889,7 +918,7 @@ impl GitObjectStore {
         let mut byte = bytes[cursor];
         cursor += 1;
         let kind = PackEntryKind::from_bits((byte >> 4) & 0x7)?;
-        let mut _size = u64::from(byte & 0x0f);
+        let mut declared_size = u64::from(byte & 0x0f);
         let mut shift = 4;
         while byte & 0x80 != 0 {
             if cursor >= bytes.len() {
@@ -897,7 +926,7 @@ impl GitObjectStore {
             }
             byte = bytes[cursor];
             cursor += 1;
-            _size |= u64::from(byte & 0x7f) << shift;
+            declared_size |= u64::from(byte & 0x7f) << shift;
             shift += 7;
             if shift > 63 {
                 return Err(GitError::Malformed("pack size varint overflow".into()));
@@ -927,6 +956,7 @@ impl GitObjectStore {
                 let (kind_name, base) =
                     self.read_packed_at(pack_index, bytes, base_offset, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
+                verify_declared_size(declared_size, delta.len(), &oid.to_hex())?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
@@ -941,17 +971,20 @@ impl GitObjectStore {
 
                 let (kind_name, base) = self.raw_object(base_oid, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
+                verify_declared_size(declared_size, delta.len(), &oid.to_hex())?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
             concrete => {
                 let data = inflate_from(bytes, cursor, &oid.to_hex())?;
+                verify_declared_size(declared_size, data.len(), &oid.to_hex())?;
                 let name = concrete
                     .type_name()
                     .ok_or_else(|| GitError::Malformed("unexpected delta kind".into()))?;
                 Ok((name.to_string(), data))
             }
         }?;
+        verify_object_id(oid, &object)?;
         if let Ok(mut cache) = self.packed_offset_cache.lock() {
             cache.insert((pack_index, offset), object.clone());
         }
@@ -981,14 +1014,18 @@ impl GitObjectStore {
             .ok_or_else(|| GitError::Malformed("offset past end".into()))?;
         cursor += 1;
         let kind = PackEntryKind::from_bits((byte >> 4) & 0x7)?;
-        // The declared size is not needed for delta resolution: the delta
-        // stream carries its own base/target sizes. We only advance the cursor
-        // past the varint.
+        let mut declared_size = u64::from(byte & 0x0f);
+        let mut shift = 4;
         while byte & 0x80 != 0 {
             byte = *bytes
                 .get(cursor)
                 .ok_or_else(|| GitError::Malformed("truncated header".into()))?;
             cursor += 1;
+            declared_size |= u64::from(byte & 0x7f) << shift;
+            shift += 7;
+            if shift > 63 {
+                return Err(GitError::Malformed("pack size varint overflow".into()));
+            }
         }
 
         let object = match kind {
@@ -1011,6 +1048,7 @@ impl GitObjectStore {
                 let (kind_name, base) =
                     self.read_packed_at(pack_index, bytes, base_offset, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, "<delta>")?;
+                verify_declared_size(declared_size, delta.len(), "<delta>")?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
@@ -1023,11 +1061,13 @@ impl GitObjectStore {
                 cursor += 20;
                 let (kind_name, base) = self.raw_object(ObjectId(arr), depth + 1)?;
                 let delta = inflate_from(bytes, cursor, "<delta>")?;
+                verify_declared_size(declared_size, delta.len(), "<delta>")?;
                 let resolved = apply_delta(&base, &delta)?;
                 Ok((kind_name, resolved))
             }
             concrete => {
                 let data = inflate_from(bytes, cursor, "<pack>")?;
+                verify_declared_size(declared_size, data.len(), "<pack>")?;
                 let name = concrete
                     .type_name()
                     .ok_or_else(|| GitError::Malformed("unexpected delta kind".into()))?;
@@ -1313,6 +1353,27 @@ pub fn compute_object_id(kind: &str, payload: &[u8]) -> ObjectId {
     ObjectId(out)
 }
 
+fn verify_object_id(oid: ObjectId, object: &(String, Vec<u8>)) -> Result<(), GitError> {
+    let computed = compute_object_id(&object.0, &object.1);
+    if computed != oid {
+        return Err(GitError::Malformed(format!(
+            "object hash mismatch: requested {}, computed {}",
+            oid.to_hex(),
+            computed.to_hex()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_declared_size(declared: u64, actual: usize, label: &str) -> Result<(), GitError> {
+    if declared != actual as u64 {
+        return Err(GitError::Malformed(format!(
+            "{label} size mismatch: pack declares {declared} bytes, decoded {actual}"
+        )));
+    }
+    Ok(())
+}
+
 /// Recursively flattens a tree into `path -> (mode, ObjectId)`.
 ///
 /// Paths use POSIX separators and are sorted, so the map is deterministic.
@@ -1351,4 +1412,51 @@ fn flatten_into(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn write_loose_object(root: &Path, oid: ObjectId, kind: &str, payload: &[u8]) {
+        let hex = oid.to_hex();
+        let object_path = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+        fs::create_dir_all(object_path.parent().expect("object parent")).expect("object dir");
+        let raw = format!("{kind} {}\0", payload.len());
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(raw.as_bytes()).expect("header");
+        encoder.write_all(payload).expect("payload");
+        fs::write(object_path, encoder.finish().expect("compress")).expect("object");
+    }
+
+    #[test]
+    fn loose_object_hash_mismatch_is_an_error() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("synevid_git_hash_test_{nonce}"));
+        let git_dir = root.join(".git");
+        fs::create_dir_all(git_dir.join("objects")).expect("objects");
+        let expected_payload = b"trusted";
+        let oid = compute_object_id("blob", expected_payload);
+        write_loose_object(&git_dir, oid, "blob", b"tampered");
+
+        let store = GitObjectStore::open(&git_dir).expect("open git store");
+        let error = store
+            .blob(oid)
+            .expect_err("tampered object must fail integrity check");
+        assert!(error.to_string().contains("object hash mismatch"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn declared_pack_size_helper_rejects_truncated_data() {
+        let error = verify_declared_size(9, 8, "test-object").expect_err("size mismatch");
+        assert!(error.to_string().contains("size mismatch"));
+    }
 }
