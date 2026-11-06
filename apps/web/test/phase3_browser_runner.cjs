@@ -41,6 +41,7 @@ async function main() {
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-electron-browser-')));
   app.commandLine.appendSwitch('disable-gpu');
   app.commandLine.appendSwitch('headless');
+  if (process.platform === 'linux' && process.env.CI) app.commandLine.appendSwitch('no-sandbox');
   await app.whenReady();
 
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://127.0.0.1:3333/*'] }, (details, callback) => {
