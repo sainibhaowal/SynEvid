@@ -109,7 +109,11 @@ async function startFixtureApi(port) {
             tags: [],
             symbols_modified: 1,
             blast_radius_score: 1,
-            verdict: 'PASS',
+            heuristic_verdict: 'PASS',
+            semantic_verdict: 'UNKNOWN',
+            coverage_state: 'unknown',
+            evidence_kind: 'file_heuristic',
+            verdict: 'UNKNOWN',
           },
           {
             oid: OID_A,
@@ -125,7 +129,11 @@ async function startFixtureApi(port) {
             tags: ['v1.0.0'],
             symbols_modified: 0,
             blast_radius_score: 0,
-            verdict: 'PASS',
+            heuristic_verdict: 'PASS',
+            semantic_verdict: 'UNKNOWN',
+            coverage_state: 'unknown',
+            evidence_kind: 'file_heuristic',
+            verdict: 'UNKNOWN',
           },
         ],
         branches: [{ name: 'main', target_oid: OID_B, is_active: true }],
@@ -232,7 +240,10 @@ function runElectron(nextOrigin, fixturePort) {
       SYNEVID_BROWSER_FIXTURE_PORT: String(fixturePort),
     };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const child = spawn(electronExecutable, [ELECTRON_RUNNER], {
+    const electronArgs = process.platform === 'linux' && process.env.CI
+      ? ['--no-sandbox', ELECTRON_RUNNER]
+      : [ELECTRON_RUNNER];
+    const child = spawn(electronExecutable, electronArgs, {
       cwd: REPO_ROOT,
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
