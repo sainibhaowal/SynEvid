@@ -62,7 +62,12 @@ async function main() {
 
   const window = new BrowserWindow({
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      offscreen: process.platform === 'darwin',
+    },
   });
   const daemonOrigin = `http://127.0.0.1:${daemonPort}`;
   const pageUrl = `${nextOrigin}${nextOrigin.includes('?') ? '&' : '?'}synevid_daemon=${encodeURIComponent(daemonOrigin)}`;
