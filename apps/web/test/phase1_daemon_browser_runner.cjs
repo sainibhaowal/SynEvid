@@ -49,13 +49,14 @@ async function publishLiveEvent() {
 async function main() {
   if (!nextOrigin || !daemonPort || !expectedRoot) throw new Error('Browser runner environment is incomplete');
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-electron-phase1-')));
-  app.disableHardwareAcceleration();
+  if (process.platform === 'darwin') app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('disable-gpu');
   if (process.platform !== 'darwin') app.commandLine.appendSwitch('headless');
   if (process.platform === 'darwin') {
     app.commandLine.appendSwitch('use-gl', 'swiftshader');
     app.commandLine.appendSwitch('use-angle', 'swiftshader');
     app.commandLine.appendSwitch('disable-gpu-compositing');
+    app.commandLine.appendSwitch('enable-unsafe-swiftshader');
   }
   if (process.platform === 'linux' && process.env.CI) app.commandLine.appendSwitch('no-sandbox');
   await app.whenReady();

@@ -123,7 +123,12 @@ function runElectron(nextOrigin, daemonPort, rootPath, expectedSeq, publishEvent
     delete environment.ELECTRON_RUN_AS_NODE;
     const electronArgs = ['--disable-gpu'];
     if (process.platform === 'darwin') {
-      electronArgs.push('--use-gl=swiftshader', '--use-angle=swiftshader', '--disable-gpu-compositing');
+      electronArgs.push(
+        '--use-gl=swiftshader',
+        '--use-angle=swiftshader',
+        '--disable-gpu-compositing',
+        '--enable-unsafe-swiftshader',
+      );
     }
     if (process.platform === 'linux' && process.env.CI) electronArgs.push('--no-sandbox');
     electronArgs.push(ELECTRON_RUNNER);
