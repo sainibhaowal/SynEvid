@@ -34,7 +34,7 @@ function sendJson(response, value, status = 200) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Allow-Headers': 'content-type, authorization, x-synevid-client-id, x-synevid-client-type, x-synevid-lease-id',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(body),
@@ -81,7 +81,7 @@ async function startFixtureApi(port) {
     if (request.method === 'OPTIONS') {
       response.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'content-type',
+        'Access-Control-Allow-Headers': 'content-type, authorization, x-synevid-client-id, x-synevid-client-type, x-synevid-lease-id',
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
       });
       response.end();
