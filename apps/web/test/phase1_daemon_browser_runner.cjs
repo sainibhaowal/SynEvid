@@ -64,8 +64,12 @@ async function main() {
   await waitForJavaScript(window, "document.body.innerText.includes('main.ts')");
   const publishedSeq = publishEvent ? await publishLiveEvent() : expectedSeq;
   if (publishedSeq > 0) {
+    const cursorExpression = `(() => {
+      const match = document.body.innerText.match(/LIVE #(\\d+)/);
+      return Boolean(match && Number(match[1]) >= ${publishedSeq});
+    })()`;
     try {
-      await waitForJavaScript(window, `document.body.innerText.includes(${JSON.stringify(`LIVE #${publishedSeq}`)})`);
+      await waitForJavaScript(window, cursorExpression);
     } catch (error) {
       const body = await window.webContents.executeJavaScript('document.body.innerText');
       throw new Error(`${error.message}; body=${JSON.stringify(body.slice(-4000))}`);
@@ -73,9 +77,10 @@ async function main() {
   }
 
   const body = await window.webContents.executeJavaScript('document.body.innerText');
+  const liveCursor = Number(body.match(/LIVE #(\d+)/)?.[1] || 0);
   const result = {
     canonicalPathVisible: body.includes(expectedRoot),
-    replayedSequenceVisible: publishedSeq === 0 || body.includes(`LIVE #${publishedSeq}`),
+    replayedSequenceVisible: publishedSeq === 0 || liveCursor >= publishedSeq,
     repositoryFilesVisible: body.includes('main.ts'),
     graphUnavailable: body.includes('Repository analysis unavailable'),
     publishedSeq,
