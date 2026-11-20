@@ -67,22 +67,40 @@ fn request(
 fn wait_for_health(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        let (status, _) = request(
-            port,
-            Some(TOKEN),
-            "health:test",
-            "test",
-            None,
-            "GET",
-            "/api/v1/health",
-            None,
-        );
-        if status == 200 {
+        if health_probe(port) {
             return;
         }
         thread::sleep(Duration::from_millis(100));
     }
     panic!("daemon did not become healthy on port {port}");
+}
+
+fn health_probe(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(500),
+    ) else {
+        return false;
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
+    let request = format!(
+        "GET /api/v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: 0\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        == Some(200)
 }
 
 fn start_daemon(root: &Path, port: u16) -> Child {
