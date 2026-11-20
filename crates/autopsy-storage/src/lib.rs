@@ -678,7 +678,7 @@ impl StorageEngine {
                 run.run_id,
                 run.command,
                 run.analyzer_version,
-                run.duration_ms,
+                i64::try_from(run.duration_ms).unwrap_or(i64::MAX),
                 run.result_digest,
             ],
         )?;
@@ -739,7 +739,7 @@ impl StorageEngine {
                         run_id: row.get(0)?,
                         command: row.get(1)?,
                         analyzer_version: row.get(2)?,
-                        duration_ms: row.get(3)?,
+                        duration_ms: row.get::<_, i64>(3)?.try_into().unwrap_or(0),
                         result_digest: row.get(4)?,
                     })
                 },
