@@ -5704,14 +5704,6 @@ impl DashboardServer {
         self.handle_impact_for_query(&seed, direction, profile)
     }
 
-    fn handle_impact_for_seed(&self, requested_seed: &str) -> String {
-        self.handle_impact_for_query(
-            requested_seed,
-            ImpactDirection::Backward,
-            callers_profile(64, 10_000),
-        )
-    }
-
     fn handle_impact_for_query(
         &self,
         requested_seed: &str,
