@@ -880,7 +880,12 @@ impl DashboardServer {
             }
             let digest = format!(
                 "blake3:{}",
-                blake3::hash(object.to_string().as_bytes()).to_hex()
+                blake3::hash(
+                    serde_json::to_string(&Value::Object(object.clone()))
+                        .unwrap_or_default()
+                        .as_bytes(),
+                )
+                .to_hex()
             );
             object
                 .entry("evidence_digest")
@@ -1301,7 +1306,7 @@ impl DashboardServer {
         });
         let url = request.url().to_string();
         let path = url.split('?').next().unwrap_or("/");
-        let header_value = |name: &str| {
+        let header_value = |name: &'static str| {
             request
                 .headers()
                 .iter()
@@ -6821,7 +6826,9 @@ impl DashboardServer {
                     "requested_since_seq": since_seq,
                     "gap": gap,
                     "gap_from": gap.then_some(since_seq.saturating_add(1)),
-                    "gap_to": gap.and_then(|_| first_seq.map(|first| first.saturating_sub(1))),
+                    "gap_to": gap
+                        .then(|| first_seq.map(|first| first.saturating_sub(1)))
+                        .flatten(),
                     "replay_complete": !gap
                 })
                 .to_string()
