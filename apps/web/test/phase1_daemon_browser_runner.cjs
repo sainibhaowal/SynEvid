@@ -64,7 +64,7 @@ async function main() {
 
   try {
     await waitForJavaScript(window, `(() => {
-      const body = document.body.innerText.replaceAll('\\', '/').toLowerCase();
+      const body = document.body.innerText.replaceAll('\\\\', '/').toLowerCase();
       return body.includes(${JSON.stringify(expectedRoot.replaceAll('\\', '/').toLowerCase())})
         || body.includes(${JSON.stringify(expectedRootMarker.toLowerCase())});
     })()`);
