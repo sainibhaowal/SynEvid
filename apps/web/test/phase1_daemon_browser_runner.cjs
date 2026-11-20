@@ -49,6 +49,7 @@ async function publishLiveEvent() {
 async function main() {
   if (!nextOrigin || !daemonPort || !expectedRoot) throw new Error('Browser runner environment is incomplete');
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-electron-phase1-')));
+  app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('disable-gpu');
   if (process.platform !== 'darwin') app.commandLine.appendSwitch('headless');
   if (process.platform === 'darwin') {
