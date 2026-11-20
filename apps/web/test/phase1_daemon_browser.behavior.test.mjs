@@ -78,8 +78,35 @@ async function startDaemon(rootPath, port) {
 }
 
 function stopProcess(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill();
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let forceTimer;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      resolve();
+    };
+    child.once('exit', finish);
+    child.once('error', finish);
+    try {
+      child.kill();
+    } catch {
+      finish();
+      return;
+    }
+    forceTimer = setTimeout(() => {
+      if (child.exitCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // The process may have exited between the check and the kill.
+        }
+      }
+      setTimeout(finish, 500);
+    }, 10_000);
+  });
 }
 
 function runElectron(nextOrigin, daemonPort, rootPath, expectedSeq, publishEvent) {
@@ -162,7 +189,7 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
     assert.ok(first.publishedSeq > 0);
     await waitForPersistedEvent(daemonPort, first.publishedSeq);
 
-    stopProcess(daemon);
+    await stopProcess(daemon);
     await new Promise((resolve) => setTimeout(resolve, 250));
     restarted = await startDaemon(root, daemonPort);
     const second = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, first.publishedSeq, false);
@@ -171,10 +198,15 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
     assert.equal(second.repositoryFilesVisible, true);
     assert.equal(second.graphUnavailable, false);
   } finally {
-    stopProcess(daemon);
-    stopProcess(restarted);
-    stopProcess(next);
-    fs.rmSync(path.join(WEB_DIR, `.next-phase1-${nextPort}`), { recursive: true, force: true });
+    await stopProcess(daemon);
+    await stopProcess(restarted);
+    await stopProcess(next);
+    fs.rmSync(path.join(WEB_DIR, `.next-phase1-${nextPort}`), {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 250,
+    });
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
