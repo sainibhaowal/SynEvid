@@ -106,13 +106,17 @@ impl GitGalaxyReader {
         let linear_history = raw_commits.windows(2).all(|pair| {
             pair[0].1.parents.len() <= 1 && pair[0].1.parents.first() == Some(&pair[1].0)
         });
-        let commit_cache: BTreeMap<ObjectId, autopsy_temporal::git::Commit> = raw_commits
-            .iter()
-            .map(|(oid, commit)| (*oid, commit.clone()))
-            .collect();
-        let ordered_commits = if linear_history {
-            raw_commits
+        let (ordered_commits, commit_cache) = if linear_history {
+            // A first-parent linear history is already emitted in the
+            // required newest-to-oldest order. Avoid cloning every commit into
+            // an ordered map; the adjacent entry is the only parent lookup
+            // needed by the forensic diff below.
+            (raw_commits, None)
         } else {
+            let commit_cache: BTreeMap<ObjectId, autopsy_temporal::git::Commit> = raw_commits
+                .iter()
+                .map(|(oid, commit)| (*oid, commit.clone()))
+                .collect();
             let mut child_counts: BTreeMap<ObjectId, usize> =
                 commit_cache.keys().map(|oid| (*oid, 0)).collect();
             for commit in commit_cache.values() {
@@ -141,10 +145,11 @@ impl GitGalaxyReader {
                     }
                 }
             }
-            topological_oids
+            let ordered = topological_oids
                 .into_iter()
                 .filter_map(|oid| commit_cache.get(&oid).cloned().map(|commit| (oid, commit)))
-                .collect()
+                .collect();
+            (ordered, Some(commit_cache))
         };
         let mut tree_cache = BTreeMap::new();
         let mut commits = Vec::with_capacity(ordered_commits.len());
@@ -163,10 +168,18 @@ impl GitGalaxyReader {
             };
 
             // Lightweight per-commit tree differ to extract modified symbols & blast radius
-            let parent = commit
-                .parents
-                .first()
-                .and_then(|parent_oid| commit_cache.get(parent_oid));
+            let parent = if linear_history {
+                ordered_commits
+                    .get(idx + 1)
+                    .and_then(|(parent_oid, parent)| {
+                        (commit.parents.first() == Some(parent_oid)).then_some(parent)
+                    })
+            } else {
+                commit
+                    .parents
+                    .first()
+                    .and_then(|parent_oid| commit_cache.as_ref()?.get(parent_oid))
+            };
             let (
                 sym_mod,
                 sym_add,
