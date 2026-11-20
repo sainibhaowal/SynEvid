@@ -89,8 +89,12 @@ async function main() {
 
   const body = await window.webContents.executeJavaScript('document.body.innerText');
   const liveCursor = Number(body.match(/LIVE #(\d+)/)?.[1] || 0);
+  const canonicalPathVisible = repositoryIdentityVisible(body);
+  if (!canonicalPathVisible) {
+    throw new Error(`Repository identity disappeared after load: expected=${expectedRoot}; marker=${expectedRootMarker}; body=${JSON.stringify(body.slice(-4000))}`);
+  }
   const result = {
-    canonicalPathVisible: repositoryIdentityVisible(body),
+    canonicalPathVisible,
     replayedSequenceVisible: publishedSeq === 0 || liveCursor >= publishedSeq,
     repositoryFilesVisible: body.includes('main.ts'),
     graphUnavailable: body.includes('Repository analysis unavailable'),
