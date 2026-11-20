@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- Added the Phase 4 authenticated runtime authority: daemon identity, client
-  leases, shared CLI/TUI/MCP/UI request identity, explicit offline mode,
-  replay-gap reporting, source-client evidence metadata, and the shared runtime
-  envelope schema. G4 remains pending native Rust/CI verification; no canvas
-  renderer or visual behavior was changed.
+- Verified the Phase 4 authenticated runtime authority across native Windows,
+  Ubuntu, and macOS CI: daemon identity, client leases, shared CLI/TUI/MCP/UI
+  request identity, explicit offline mode, replay-gap reporting, source-client
+  evidence metadata, and the shared runtime envelope schema. The successful
+  pre-merge gate is recorded in `docs/evidence/106-phase4-g4-ci-closure.md`;
+  no canvas renderer or visual behavior was changed.
 
 - Added executable Phase 0/1 requirement registry and CI truth/evidence validators.
 - Added the shared BLAKE3 evidence envelope to daemon JSON responses and MCP
@@ -26,8 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Evidence: `docs/evidence/102-phase2-language-graph-blast-radius-closure.md`.
 - Hardened Phase 3 native Git integrity: SHA-1 object verification, packed-size checks,
   strict malformed-history errors, and explicit file-heuristic versus semantic Galaxy
-  evidence. Packed 5,000-commit release loading measured 140.61 ms; the Windows
-  loose-object cold-start limitation remains honestly tracked as partial in evidence 103.
+  evidence. The strict 5,000-loose-commit fixture measured 118.03 ms on Windows,
+  70.16 ms on macOS, and 29.80 ms on Ubuntu in the final native CI run.
 
 ## [0.6.0] - 2026-11-03
 

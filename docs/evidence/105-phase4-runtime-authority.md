@@ -1,6 +1,6 @@
 # Evidence 105 — Phase 4 Authenticated Runtime Authority
 
-Status: `IMPLEMENTED — GATE PENDING`
+Status: `VERIFIED — GATE G4`
 
 Date: 2026-11-20
 
@@ -47,18 +47,30 @@ The Rust unit/integration runtime tests are present in
 The two web failures are environment evidence, not a pass: they time out while
 waiting for a daemon process that could not be built locally.
 
-## Required G4 closure evidence
+## Native CI closure evidence
 
-The following must be attached from native CI before marking this dossier
-`VERIFIED`:
+GitHub Actions run [44769225870](https://github.com/sainibhaowal/SynEvid/actions/runs/44769225870)
+passed the complete `CI Quality & Cross-Platform Matrix` and its
+`Pre-Merge Verification Gate` (`136409185910`) on commit `6f78ba4`.
 
-1. Rust format, clippy, targeted runtime tests, and workspace tests on Windows,
-   Ubuntu, and macOS.
-2. Native process test for missing token, wrong token, valid token, expired
-   lease, attach/status/events/disconnect, and replay after restart.
-3. CLI attach → daemon → UI status parity and MCP impact/verify → daemon event
-   → UI replay parity.
-4. Runtime envelope schema validation and exact event sequence/digest parity.
+The run passed the real Windows, Ubuntu, and macOS jobs for Rust workspace
+tests, MSRV, formatting and Clippy, determinism and architecture boundaries,
+schema/config validation, cargo-deny, TypeScript/MCP/web checks, Electron
+native browser/packaged smoke, and the strict 5,000-loose-commit history
+budget. The Phase 4 native runtime test
+`apps/synevid-ui/tests/phase4_runtime_native.rs` therefore ran on all three
+native runners as part of the workspace suite, while the Electron browser
+workflow verified repository identity, daemon restart, and replay cursor
+behavior on all three operating systems.
+
+The strict history measurements in this run were 118.03 ms on Windows,
+70.16 ms on macOS, and 29.80 ms on Ubuntu for the 5,000-loose-commit
+acceptance fixture. These are runner measurements, not a universal latency
+guarantee for every repository.
+
+This closes G4 for the stated protocol and CI scope. It does not claim that
+static analysis proves arbitrary dynamic runtime behavior, nor that unsigned
+desktop artifacts satisfy OS signing/notarization trust requirements.
 
 No canvas renderer, animation, camera, WebGL buffer, or canvas styling file was
 changed for this work.

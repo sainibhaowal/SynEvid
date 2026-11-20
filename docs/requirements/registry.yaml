@@ -124,11 +124,11 @@ requirements:
     source: "Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md#phase-4-one-authenticated-runtime-for-cli-tui-mcp-and-ui"
     owner: runtime-authority
     acceptance_test: apps/synevid-ui/tests/phase4_runtime_native.rs
-    evidence: docs/evidence/105-phase4-runtime-authority.md
-    status: IMPLEMENTED
+    evidence: docs/evidence/106-phase4-g4-ci-closure.md
+    status: VERIFIED
   - id: P4-RUNTIME-002
     source: "Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md#requirements"
     owner: protocol-contracts
     acceptance_test: schemas/runtime-envelope.schema.json
-    evidence: docs/evidence/105-phase4-runtime-authority.md
-    status: IMPLEMENTED
+    evidence: docs/evidence/106-phase4-g4-ci-closure.md
+    status: VERIFIED

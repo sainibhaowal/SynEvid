@@ -2,6 +2,13 @@
 
 Status: `NOT MEASURED`
 
+This remains intentionally `NOT MEASURED`. The Phase 4 G4 gate proves the
+authenticated runtime contract and cross-client parity; it does not establish
+a causal performance or accuracy claim between daemon and client-local
+variants. No ablation result is invented or promoted from the green G4 gate.
+The verified G4 evidence is recorded in
+`docs/evidence/106-phase4-g4-ci-closure.md`.
+
 The purpose of this report is to prove that the one-daemon protocol, rather
 than client-local fallbacks, causes the observed parity and replay behavior.
 

@@ -1,6 +1,6 @@
 # Phase 4 — Authenticated Runtime Evaluation
 
-Status: `IMPLEMENTED — VERIFICATION PENDING`
+Status: `VERIFIED`
 
 This report evaluates the stricter Phase 4 runtime protocol: one authenticated
 daemon authority for CLI, TUI, MCP, and UI state. It supersedes older Phase 4.2
@@ -27,16 +27,26 @@ explicit and is not presented as daemon-connected state.
 | UI parity | Web requests identify `ui:web` and acquire a UI lease | Browser/Electron runtime test |
 | TUI parity | TUI refuses silent fallback and requires `--offline` for independent mode | CLI/TUI behavior test |
 
-## Truth boundary
+## Verified result
 
-This report does not claim G4 `VERIFIED` until the native Rust test suite and
-the Windows/Linux/macOS CI jobs produce artifacts for the rows above. The
-canvas renderer, animation, camera, WebGL buffers, and styling are outside the
-change surface and are not modified by this protocol.
+G4 is verified for the stated protocol and native CI scope by
+[run 44769225870](https://github.com/sainibhaowal/SynEvid/actions/runs/44769225870)
+and its successful `Pre-Merge Verification Gate` (`136409185910`). Windows,
+Ubuntu, and macOS all passed the native workspace suite, Electron browser and
+packaged smoke workflow, schema checks, and the authenticated runtime tests.
+
+The strict 5,000-loose-commit acceptance measurements were 118.03 ms on
+Windows, 70.16 ms on macOS, and 29.80 ms on Ubuntu in that run.
+
+The claim is bounded: unsupported dynamic behavior remains `UNKNOWN` or
+`PARTIAL`, and unsigned artifacts still require the normal OS trust warning.
+The canvas renderer, animation, camera, WebGL buffers, and styling are outside
+the change surface and were not modified by this protocol.
 
 ## Required evidence record
 
-Record the exact commit, runner, test command, pass/fail count, daemon ID,
-repository ID, snapshot ID, first and last event sequence, replay gap state,
-authentication negative results, and any unavailable platform. Do not replace
-unavailable evidence with a green placeholder.
+The exact commit, runner matrix, native test scope, authentication negatives,
+replay behavior, and performance measurements are recorded in
+`docs/evidence/106-phase4-g4-ci-closure.md`. Runtime receipts retain daemon,
+repository, snapshot, lease, cursor, and digest identity for each operation.
+Unavailable evidence is never replaced with a green placeholder.
