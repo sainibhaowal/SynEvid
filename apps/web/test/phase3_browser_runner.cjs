@@ -30,7 +30,7 @@ async function waitForFixturePath(path) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const calls = await fixtureCalls();
-    if (calls.some((call) => call.path === path)) return calls;
+    if (calls.some((call) => call.method === 'GET' && call.path === path)) return calls;
     await delay(100);
   }
   throw new Error(`Timed out waiting for fixture call ${path}; calls=${JSON.stringify(await fixtureCalls())}`);
