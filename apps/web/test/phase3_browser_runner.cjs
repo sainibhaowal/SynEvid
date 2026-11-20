@@ -57,6 +57,11 @@ async function main() {
   await waitForJavaScript(window, `document.querySelector('button[title^="Git Galaxy"]') !== null`);
   await window.webContents.executeJavaScript(`document.querySelector('button[title^="Git Galaxy"]').click()`);
   await waitForJavaScript(window, `document.body.innerText.includes('Evolutionary Topology')`);
+  // The range request depends on the real Galaxy response initializing the
+  // two commit pins.  Wait for that response before clicking the control so
+  // slow CI machines exercise the same browser workflow as a user, rather
+  // than racing the component's initial loading state.
+  await waitForFixturePath('/api/v1/git/galaxy?limit=200');
 
   await window.webContents.executeJavaScript(`(() => {
     const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent.includes('Range Mode'));

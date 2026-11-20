@@ -29,7 +29,7 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 /// Upper bound on a single decompressed object, guarding against zlib bombs.
@@ -402,7 +402,7 @@ pub struct GitObjectStore {
     // These are private hot-path caches. Their iteration order is never
     // serialized, so hash maps reduce lookup overhead without affecting
     // deterministic output ordering.
-    raw_cache: Mutex<HashMap<ObjectId, RawObject>>,
+    raw_cache: Mutex<HashMap<ObjectId, Arc<RawObject>>>,
     packed_offset_cache: Mutex<HashMap<PackedOffset, RawObject>>,
 }
 
@@ -658,7 +658,7 @@ impl GitObjectStore {
                             if let Ok(object) = self.read_packed(pack_index, pack, offset, oid, 0)
                                 && let Ok(mut cache) = self.raw_cache.lock()
                             {
-                                cache.insert(oid, object);
+                                cache.insert(oid, Arc::new(object));
                             }
                         }
                     });
@@ -736,8 +736,10 @@ impl GitObjectStore {
                         // here would duplicate work for every history commit.
                         // Malformed entries are deliberately skipped and are
                         // reported by that authoritative read when reachable.
-                        if let Ok(Some(object)) = self.read_loose(oid) {
-                            objects.push((oid, object));
+                        if let Ok(Some(object)) = self.read_loose(oid)
+                            && verify_object_id(oid, &object).is_ok()
+                        {
+                            objects.push((oid, Arc::new(object)));
                         }
                     }
                     objects
@@ -755,8 +757,8 @@ impl GitObjectStore {
 
     /// Reads and decodes any object by id.
     pub fn object(&self, oid: ObjectId) -> Result<GitObject, GitError> {
-        let (kind, data) = self.raw_object(oid, 0)?;
-        decode_object(&kind, &data, oid)
+        let object = self.raw_object(oid, 0)?;
+        decode_object(&object.0, &object.1, oid)
     }
 
     /// Reads a commit, following tag indirection.
@@ -825,7 +827,7 @@ impl GitObjectStore {
     }
 
     /// Reads raw `(type_name, payload)` for an object, resolving deltas.
-    fn raw_object(&self, oid: ObjectId, depth: usize) -> Result<(String, Vec<u8>), GitError> {
+    fn raw_object(&self, oid: ObjectId, depth: usize) -> Result<Arc<RawObject>, GitError> {
         if depth > MAX_DELTA_DEPTH {
             return Err(GitError::Malformed(format!(
                 "delta chain deeper than {MAX_DELTA_DEPTH} at {oid}"
@@ -835,15 +837,14 @@ impl GitObjectStore {
         if let Ok(cache) = self.raw_cache.lock()
             && let Some(object) = cache.get(&oid)
         {
-            let object = object.clone();
-            verify_object_id(oid, &object)?;
-            return Ok(object);
+            return Ok(object.clone());
         }
 
         if self.has_loose_objects
             && let Some(loose) = self.read_loose(oid)?
         {
             verify_object_id(oid, &loose)?;
+            let loose = Arc::new(loose);
             if let Ok(mut cache) = self.raw_cache.lock() {
                 cache.insert(oid, loose.clone());
             }
@@ -854,6 +855,7 @@ impl GitObjectStore {
             if let Some(offset) = pack.index.offset_of(oid) {
                 let object = self.read_packed(pack_index, pack, offset, oid, depth)?;
                 verify_object_id(oid, &object)?;
+                let object = Arc::new(object);
                 if let Ok(mut cache) = self.raw_cache.lock() {
                     cache.insert(oid, object.clone());
                 }
@@ -969,11 +971,11 @@ impl GitObjectStore {
                 cursor += 20;
                 let base_oid = ObjectId(arr);
 
-                let (kind_name, base) = self.raw_object(base_oid, depth + 1)?;
+                let base = self.raw_object(base_oid, depth + 1)?;
                 let delta = inflate_from(bytes, cursor, &oid.to_hex())?;
                 verify_declared_size(declared_size, delta.len(), &oid.to_hex())?;
-                let resolved = apply_delta(&base, &delta)?;
-                Ok((kind_name, resolved))
+                let resolved = apply_delta(&base.1, &delta)?;
+                Ok((base.0.clone(), resolved))
             }
             concrete => {
                 let data = inflate_from(bytes, cursor, &oid.to_hex())?;
@@ -1059,11 +1061,11 @@ impl GitObjectStore {
                 let mut arr = [0u8; 20];
                 arr.copy_from_slice(&bytes[cursor..cursor + 20]);
                 cursor += 20;
-                let (kind_name, base) = self.raw_object(ObjectId(arr), depth + 1)?;
+                let base = self.raw_object(ObjectId(arr), depth + 1)?;
                 let delta = inflate_from(bytes, cursor, "<delta>")?;
                 verify_declared_size(declared_size, delta.len(), "<delta>")?;
-                let resolved = apply_delta(&base, &delta)?;
-                Ok((kind_name, resolved))
+                let resolved = apply_delta(&base.1, &delta)?;
+                Ok((base.0.clone(), resolved))
             }
             concrete => {
                 let data = inflate_from(bytes, cursor, "<pack>")?;

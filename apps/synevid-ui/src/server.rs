@@ -8571,7 +8571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_phase3_git_galaxy_returns_empty_history_for_non_git_repository() {
+    fn test_phase3_git_galaxy_reports_unavailable_for_non_git_repository() {
         let temp = std::env::temp_dir().join(format!(
             "synevid_non_git_galaxy_test_{}",
             std::process::id()
@@ -8583,11 +8583,15 @@ mod tests {
         let response = server.handle_git_galaxy("/api/v1/git/galaxy");
         let galaxy: serde_json::Value = serde_json::from_str(&response).unwrap();
 
-        assert_eq!(galaxy["total_commits"], 0);
-        assert_eq!(galaxy["commits"], serde_json::json!([]));
-        assert_eq!(galaxy["branches"], serde_json::json!([]));
-        assert_eq!(galaxy["tags"], serde_json::json!([]));
-        assert!(galaxy["error"].is_null());
+        assert_eq!(galaxy["status"], "UNAVAILABLE");
+        assert_eq!(galaxy["verdict"], "UNAVAILABLE");
+        assert_eq!(galaxy["coverage_state"], "unavailable");
+        assert_eq!(galaxy["error_code"], "ERR-GIT-NOT-REPOSITORY");
+        assert!(
+            galaxy["error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
 
         let _ = fs::remove_dir_all(temp);
     }
