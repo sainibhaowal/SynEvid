@@ -20,6 +20,7 @@ fn reserve_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn request(
     port: u16,
     token: Option<&str>,
