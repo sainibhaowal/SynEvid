@@ -94,7 +94,10 @@ function runElectron(nextOrigin, daemonPort, rootPath, expectedSeq, publishEvent
       SYNEVID_BROWSER_PUBLISH_EVENT: publishEvent ? '1' : '0',
     };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const child = spawn(electronExecutable, [ELECTRON_RUNNER], {
+    const electronArgs = process.platform === 'linux' && process.env.CI
+      ? ['--no-sandbox', ELECTRON_RUNNER]
+      : [ELECTRON_RUNNER];
+    const child = spawn(electronExecutable, electronArgs, {
       cwd: REPO_ROOT,
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
