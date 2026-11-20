@@ -1173,7 +1173,7 @@ export class SynevidApiClient {
           // closing here makes the explicit cursor URL authoritative as well.
           if (!cancelled) {
             evtSource?.close();
-            scheduleReconnect(connectSse);
+            scheduleReconnect(connectWebSocket);
           }
         };
       } catch {
@@ -1235,7 +1235,11 @@ export class SynevidApiClient {
       }
     };
 
-    connectWebSocket();
+    // SSE is the primary browser transport because it works consistently
+    // across Electron, native browsers, and cross-origin loopback pages.
+    // WebSocket remains available as the reconnect fallback and for native
+    // clients that need the bidirectional live protocol.
+    connectSse();
 
     return () => {
       cancelled = true;
