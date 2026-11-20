@@ -421,7 +421,7 @@ impl GitGalaxyReader {
         if let Some(parent) = parent
             && parent.tree == commit.tree
         {
-            return match Self::cached_tree(store, commit.tree, tree_cache) {
+            return match Self::ensure_tree(store, commit.tree, tree_cache) {
                 Ok(_) => (
                     0,
                     0,
@@ -537,6 +537,19 @@ impl GitGalaxyReader {
         let tree = flatten_tree(store, tree_oid)?;
         tree_cache.insert(tree_oid, tree.clone());
         Ok(tree)
+    }
+
+    fn ensure_tree(
+        store: &GitObjectStore,
+        tree_oid: ObjectId,
+        tree_cache: &mut BTreeMap<ObjectId, BTreeMap<String, (u32, ObjectId)>>,
+    ) -> Result<(), GitError> {
+        if tree_cache.contains_key(&tree_oid) {
+            return Ok(());
+        }
+        let tree = flatten_tree(store, tree_oid)?;
+        tree_cache.insert(tree_oid, tree);
+        Ok(())
     }
 }
 
