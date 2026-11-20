@@ -657,8 +657,7 @@ impl GitObjectStore {
                             // A later authoritative read reports malformed
                             // data normally; prefetch is only a latency
                             // optimization.
-                            if let Ok(object) = self.read_packed(pack_index, pack, offset, oid, 0)
-                            {
+                            if let Ok(object) = self.read_packed(pack_index, pack, offset, oid, 0) {
                                 objects.push((oid, Arc::new(object)));
                             }
                         }
