@@ -64,7 +64,12 @@ async function main() {
   await waitForJavaScript(window, "document.body.innerText.includes('main.ts')");
   const publishedSeq = publishEvent ? await publishLiveEvent() : expectedSeq;
   if (publishedSeq > 0) {
-    await waitForJavaScript(window, `document.body.innerText.includes(${JSON.stringify(`LIVE #${publishedSeq}`)})`);
+    try {
+      await waitForJavaScript(window, `document.body.innerText.includes(${JSON.stringify(`LIVE #${publishedSeq}`)})`);
+    } catch (error) {
+      const body = await window.webContents.executeJavaScript('document.body.innerText');
+      throw new Error(`${error.message}; body=${JSON.stringify(body.slice(-4000))}`);
+    }
   }
 
   const body = await window.webContents.executeJavaScript('document.body.innerText');
