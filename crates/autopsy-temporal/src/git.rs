@@ -649,19 +649,28 @@ impl GitObjectStore {
                 .min(entries.len());
             let chunk_size = entries.len().div_ceil(workers);
             std::thread::scope(|scope| {
+                let mut jobs = Vec::with_capacity(workers);
                 for chunk in entries.chunks(chunk_size) {
-                    scope.spawn(move || {
+                    jobs.push(scope.spawn(move || {
+                        let mut objects = Vec::with_capacity(chunk.len());
                         for (offset, oid) in chunk.iter().copied() {
                             // A later authoritative read reports malformed
                             // data normally; prefetch is only a latency
                             // optimization.
                             if let Ok(object) = self.read_packed(pack_index, pack, offset, oid, 0)
-                                && let Ok(mut cache) = self.raw_cache.lock()
                             {
-                                cache.insert(oid, Arc::new(object));
+                                objects.push((oid, Arc::new(object)));
                             }
                         }
-                    });
+                        objects
+                    }));
+                }
+                for job in jobs {
+                    if let Ok(objects) = job.join()
+                        && let Ok(mut cache) = self.raw_cache.lock()
+                    {
+                        cache.extend(objects);
+                    }
                 }
             });
         }
