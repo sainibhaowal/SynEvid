@@ -123,6 +123,18 @@ impl StorageEngine {
     ) -> Result<Self, StorageError> {
         let path = db_path.as_ref();
         if path.exists() {
+            // SQLite may remove or rewrite sidecars while probing a damaged
+            // database. Capture them before opening so recovery can preserve
+            // the complete persistent WAL state, not just the main file.
+            let sidecar_copies: Vec<(String, Vec<u8>)> = ["-wal", "-shm"]
+                .iter()
+                .filter_map(|suffix| {
+                    let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+                    fs::read(&sidecar)
+                        .ok()
+                        .map(|bytes| ((*suffix).to_string(), bytes))
+                })
+                .collect();
             match Self::open(path, options.clone()) {
                 Ok(engine) => {
                     let check = {
@@ -140,6 +152,12 @@ impl StorageEngine {
                 Err(error) => return Err(error),
             }
             let backup_path = preserve_corrupt_database(path)?;
+            for (suffix, bytes) in sidecar_copies {
+                let sidecar_backup = PathBuf::from(format!("{}{}", backup_path.display(), suffix));
+                if !sidecar_backup.exists() {
+                    fs::write(sidecar_backup, bytes)?;
+                }
+            }
             let mut engine = Self::open(path, options)?;
             engine.recovery_notice = Some(StorageRecoveryNotice {
                 error_code: ERR_STORAGE_CORRUPTION_RECOVERED.to_string(),
@@ -1789,5 +1807,74 @@ mod tests {
         assert_eq!(ledger.tokens_spent, 500);
         assert_eq!(ledger.tokens_saved, 56000);
         assert!(ledger.cost_saved_microcents > 0);
+    }
+
+    #[test]
+    fn test_phase1_event_cursor_survives_restart_with_wal() {
+        let root =
+            std::env::temp_dir().join(format!("synevid-event-restart-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("storage.db");
+        {
+            let engine = StorageEngine::open(&db, StorageOptions::default()).unwrap();
+            engine
+                .record_live_event_with_seq(41, "file.changed", r#"{"path":"src/lib.ts"}"#)
+                .unwrap();
+            engine
+                .record_live_event_with_seq(42, "git.head_changed", r#"{"head":"abc"}"#)
+                .unwrap();
+            assert_eq!(engine.latest_live_event_seq().unwrap(), 42);
+        }
+        {
+            let reopened = StorageEngine::open(&db, StorageOptions::default()).unwrap();
+            assert_eq!(reopened.latest_live_event_seq().unwrap(), 42);
+            let replay = reopened.live_events_since(41, 10).unwrap();
+            assert_eq!(replay.len(), 1);
+            assert_eq!(replay[0].seq_id, 42);
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_phase1_corruption_preserves_database_and_wal_sidecars() {
+        let root = std::env::temp_dir().join(format!(
+            "synevid-corruption-sidecars-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("storage.db");
+        fs::write(&db, b"not a sqlite database").unwrap();
+        fs::write(root.join("storage.db-wal"), b"wal-bytes").unwrap();
+        fs::write(root.join("storage.db-shm"), b"shm-bytes").unwrap();
+
+        let recovered = StorageEngine::open_or_recover(&db, StorageOptions::default()).unwrap();
+        let notice = recovered.recovery_notice().unwrap();
+        assert_eq!(notice.error_code, ERR_STORAGE_CORRUPTION_RECOVERED);
+        assert!(PathBuf::from(&notice.backup_path).exists());
+        assert!(PathBuf::from(format!("{}-wal", notice.backup_path)).exists());
+        assert!(PathBuf::from(format!("{}-shm", notice.backup_path)).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_phase1_transaction_rollback_is_atomic() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO daemon_state (state_key, state_value) VALUES ('pending', 'must-not-survive');
+             ROLLBACK;",
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM daemon_state WHERE state_key = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

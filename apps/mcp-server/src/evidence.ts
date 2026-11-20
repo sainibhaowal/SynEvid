@@ -64,12 +64,45 @@ export function withRepair(
  * act on it, so `actionable` is computed here, in one place, rather than at four call sites.
  */
 export function evidenceEnvelope(command: string, result: AutopsyExecutionResult) {
+  const report = result.data && typeof result.data === 'object' ? result.data : null;
+  const snapshotId = report?.snapshot_id ?? report?.snapshots?.[0]?.snapshot_id ?? null;
+  const coverageState = String(
+    report?.coverage_state ?? report?.coverage?.state ?? (result.exitCode === 3 ? 'error' : 'unknown')
+  ).toLowerCase();
+  const normalizedCoverage = ['verified', 'partial', 'unknown', 'error', 'unavailable'].includes(coverageState)
+    ? coverageState
+    : 'unknown';
+  const explicitVerdict = typeof report?.verdict === 'string' ? report.verdict.toUpperCase() : null;
+  const verdict = explicitVerdict || (result.exitCode === 0 ? 'PASS' : result.exitCode === 4 ? 'UNKNOWN' : 'ERROR');
+  const digest =
+    [report?.result_digest, report?.evidence_digest, report?.blake3_digest].find(
+      (candidate): candidate is string => typeof candidate === 'string' && /^blake3:[0-9a-f]{64}$/.test(candidate)
+    ) ?? null;
+  const warnings = Array.isArray(report?.warnings)
+    ? report.warnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    : [];
   return withRepair(
     {
       command,
       exit_code: result.exitCode,
       actionable: result.exitCode === 0,
-      report: result.data,
+      report,
+      operation_id: digest,
+      repository_id: report?.repository_id ?? report?.repo_id ?? report?.active_repo_id ?? null,
+      canonical_path: report?.canonical_path ?? report?.repo_root ?? null,
+      snapshot_id: snapshotId,
+      coverage_state: normalizedCoverage,
+      verdict: normalizedCoverage !== 'verified' && verdict === 'PASS' ? 'UNKNOWN' : verdict,
+      warnings,
+      // Wall-clock process time is operational telemetry, not canonical
+      // evidence. Only a producer-measured deterministic duration belongs in
+      // the shared envelope; otherwise expose null instead of making repeated
+      // identical queries produce different evidence bytes.
+      latency_ms: typeof report?.duration_ms === 'number' ? report.duration_ms : null,
+      blake3_digest: digest,
+      evidence_receipt: digest
+        ? { algorithm: 'BLAKE3', digest, source: 'autopsy CLI result' }
+        : null,
     },
     result
   );
@@ -98,6 +131,16 @@ export function refusedEnvelope(
   actionable: boolean;
   repair: RepairAdvice;
   report: { error: string };
+  operation_id: null;
+  repository_id: null;
+  canonical_path: null;
+  snapshot_id: null;
+  coverage_state: 'error';
+  verdict: 'ERROR';
+  warnings: string[];
+  latency_ms: null;
+  blake3_digest: null;
+  evidence_receipt: null;
 } {
   const whatFailed = 'input_refused';
   const why = `${command} refused the input before the engine ran`;
@@ -107,5 +150,21 @@ export function refusedEnvelope(
     next_action: nextAction,
   };
   // Exit code 3 is the engine's own "the analysis could not be performed" contract.
-  return { command, exit_code: 3, actionable: false, repair: advice, report: { error: reason } };
+  return {
+    command,
+    exit_code: 3,
+    actionable: false,
+    repair: advice,
+    report: { error: reason },
+    operation_id: null,
+    repository_id: null,
+    canonical_path: null,
+    snapshot_id: null,
+    coverage_state: 'error',
+    verdict: 'ERROR',
+    warnings: [reason],
+    latency_ms: null,
+    blake3_digest: null,
+    evidence_receipt: null,
+  };
 }

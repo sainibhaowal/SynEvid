@@ -215,6 +215,13 @@ impl ImpactEngine {
         graph: &DependencyGraph,
         query: &ImpactQuery,
     ) -> Result<ImpactResult, ImpactError> {
+        // Canonicalize the query before traversing.  Adapter edge insertion
+        // order and caller-provided seed order are not evidence and must not
+        // affect a result digest or the selected shortest path.
+        let mut canonical_query = query.clone();
+        canonical_query.seed_symbols.sort();
+        canonical_query.seed_symbols.dedup();
+        let query = &canonical_query;
         let raw_graph = graph.raw_graph();
         let mut impacted_nodes: BTreeSet<NodeIndex> = BTreeSet::new();
         let mut shortest_paths: BTreeMap<NodeIndex, Vec<NodeIndex>> = BTreeMap::new();
@@ -240,6 +247,24 @@ impl ImpactEngine {
                 return true;
             }
             !raw_graph[neighbor].stable_id.as_str().starts_with("file::")
+        };
+
+        let ordered_neighbors = |node: NodeIndex, direction: Direction| {
+            let mut neighbors = Vec::new();
+            let mut walker = raw_graph.neighbors_directed(node, direction).detach();
+            while let Some((edge_idx, neighbor)) = walker.next(raw_graph) {
+                neighbors.push((edge_idx, neighbor));
+            }
+            neighbors.sort_by(|(left_edge, left_node), (right_edge, right_node)| {
+                raw_graph[*left_edge]
+                    .cmp(&raw_graph[*right_edge])
+                    .then_with(|| {
+                        raw_graph[*left_node]
+                            .stable_id
+                            .cmp(&raw_graph[*right_node].stable_id)
+                    })
+            });
+            neighbors
         };
 
         for (_seed_id, seed_idx) in seed_indices {
@@ -268,8 +293,7 @@ impl ImpactEngine {
                         }
                     };
                     for &dir in directions {
-                        let mut walker = raw_graph.neighbors_directed(curr, dir).detach();
-                        while let Some((edge_idx, neighbor)) = walker.next(raw_graph) {
+                        for (edge_idx, neighbor) in ordered_neighbors(curr, dir) {
                             let edge_weight = &raw_graph[edge_idx];
                             if query.profile.edge_kinds.contains(&edge_weight.kind)
                                 && expandable(neighbor)
@@ -290,8 +314,7 @@ impl ImpactEngine {
                 };
 
                 for &dir in directions {
-                    let mut walker = raw_graph.neighbors_directed(curr, dir).detach();
-                    while let Some((edge_idx, neighbor)) = walker.next(raw_graph) {
+                    for (edge_idx, neighbor) in ordered_neighbors(curr, dir) {
                         let edge_weight = &raw_graph[edge_idx];
                         if !query.profile.edge_kinds.contains(&edge_weight.kind) {
                             continue;
@@ -339,15 +362,25 @@ impl ImpactEngine {
                             next_path.push(neighbor);
 
                             // Store or update shortest path
-                            match shortest_paths.get(&neighbor) {
+                            let path_is_better = match shortest_paths.get(&neighbor) {
                                 Some(existing) => {
-                                    if next_path.len() < existing.len() {
-                                        shortest_paths.insert(neighbor, next_path.clone());
-                                    }
+                                    let candidate_key = next_path
+                                        .iter()
+                                        .map(|idx| raw_graph[*idx].stable_id.clone())
+                                        .collect::<Vec<_>>();
+                                    let existing_key = existing
+                                        .iter()
+                                        .map(|idx| raw_graph[*idx].stable_id.clone())
+                                        .collect::<Vec<_>>();
+                                    next_path.len() < existing.len()
+                                        || (next_path.len() == existing.len()
+                                            && candidate_key < existing_key)
                                 }
-                                None => {
-                                    shortest_paths.insert(neighbor, next_path.clone());
-                                }
+                                None => true,
+                            };
+                            if path_is_better {
+                                shortest_paths.insert(neighbor, next_path.clone());
+                                node_hops.insert(neighbor, next_depth);
                             }
 
                             // Traversal gate: record non-expandable nodes
@@ -602,6 +635,63 @@ mod tests {
             .find(|p| p.last() == Some(&SymbolId::new("c")))
             .unwrap();
         assert_eq!(path_to_c, &vec![SymbolId::new("a"), SymbolId::new("c")]);
+    }
+
+    #[test]
+    fn test_seed_and_edge_insertion_order_cannot_change_result_digest() {
+        let build_graph = |reverse_edges: bool| {
+            let mut graph = DependencyGraph::new();
+            for id in ["a", "b", "c", "d"] {
+                graph.add_node(make_test_symbol(id));
+            }
+            let edges = [
+                make_test_edge("a", "b", EdgeKind::Calls),
+                make_test_edge("a", "c", EdgeKind::Calls),
+                make_test_edge("b", "d", EdgeKind::Calls),
+                make_test_edge("c", "d", EdgeKind::Calls),
+            ];
+            if reverse_edges {
+                for edge in edges.into_iter().rev() {
+                    graph.add_edge(edge);
+                }
+            } else {
+                for edge in edges {
+                    graph.add_edge(edge);
+                }
+            }
+            graph
+        };
+
+        let query = |seeds: Vec<&str>| ImpactQuery {
+            seed_symbols: seeds.into_iter().map(SymbolId::new).collect(),
+            direction: ImpactDirection::Forward,
+            profile: ImpactProfile::default(),
+        };
+        let engine = ImpactEngine::new();
+        let first = engine
+            .compute_impact(&build_graph(false), &query(vec!["b", "a"]))
+            .unwrap();
+        let second = engine
+            .compute_impact(&build_graph(true), &query(vec!["a", "b"]))
+            .unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(
+            first.query.seed_symbols,
+            vec![SymbolId::new("a"), SymbolId::new("b")]
+        );
+        let tie_result = engine
+            .compute_impact(&build_graph(true), &query(vec!["a"]))
+            .unwrap();
+        let path_to_d = tie_result
+            .paths
+            .iter()
+            .find(|path| path.last() == Some(&SymbolId::new("d")))
+            .expect("d must have a deterministic shortest path");
+        assert_eq!(
+            path_to_d,
+            &vec![SymbolId::new("a"), SymbolId::new("b"), SymbolId::new("d")]
+        );
     }
 
     #[test]

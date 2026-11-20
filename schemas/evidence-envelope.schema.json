@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synevid.local/schemas/evidence-envelope.schema.json",
+  "title": "SynEvid Shared Evidence Envelope",
+  "description": "The transport contract shared by Rust, daemon, CLI, TUI, MCP, and web adapters. Null means the producer could not establish that fact and must not be interpreted as PASS.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "operation_id",
+    "repository_id",
+    "canonical_path",
+    "snapshot_id",
+    "coverage_state",
+    "verdict",
+    "warnings",
+    "latency_ms",
+    "blake3_digest",
+    "evidence_receipt"
+  ],
+  "properties": {
+    "operation_id": { "type": ["string", "null"] },
+    "repository_id": { "type": ["string", "null"] },
+    "canonical_path": { "type": ["string", "null"] },
+    "snapshot_id": { "type": ["string", "null"] },
+    "coverage_state": {
+      "type": "string",
+      "enum": ["verified", "partial", "unknown", "error", "unavailable"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["VERIFIED", "PASS", "FAIL", "WARN", "PARTIAL", "UNKNOWN", "ERROR", "UNAVAILABLE", "INFO"]
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+    "blake3_digest": { "type": ["string", "null"], "pattern": "^blake3:[0-9a-f]{64}$" },
+    "evidence_receipt": {
+      "type": ["object", "null"],
+      "required": ["algorithm", "digest", "source"],
+      "properties": {
+        "algorithm": { "const": "BLAKE3" },
+        "digest": { "type": ["string", "null"] },
+        "source": { "type": "string", "minLength": 1 },
+        "test_reference": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    }
+  }
+}

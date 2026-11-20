@@ -167,7 +167,7 @@ export default function OperationalCockpitPage() {
     const begin = () => {
       if (requestId !== graphRequestIdRef.current) return;
       if (worker) {
-        worker.postMessage({ type: 'load', requestId, dimension });
+        worker.postMessage({ type: 'load', requestId, dimension, daemonUrl: api.getBaseUrl() });
         return;
       }
       setGraphLoadStage('requesting');
@@ -790,7 +790,8 @@ export default function OperationalCockpitPage() {
                   const replaySimulation: SimulateEditResponse = {
                     repo_id: activeRepoId,
                     verdict: 'INFO',
-                    coverage_state: 'verified',
+                    coverage_state: 'unknown',
+                    coverage_note: 'Historical event selection is not a fresh simulation; no verification verdict is asserted.',
                     baseline_snapshot_id: null,
                     candidate_snapshot_id: null,
                     impacted_entities: affectedIds,
@@ -806,7 +807,7 @@ export default function OperationalCockpitPage() {
                     newly_dead_symbols: [],
                     broken_imports: [],
                     syntax_errors: [],
-                    computation_latency_ms: 0,
+                    computation_latency_ms: null,
                   };
                   setSimulation(replaySimulation);
                   setSimulatorFilePath(filePath);

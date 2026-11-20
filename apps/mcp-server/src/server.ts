@@ -1,7 +1,7 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import path from 'node:path';
-import { runAutopsy } from './cli.js';
+import { runAutopsy, type AutopsyExecutionResult } from './cli.js';
 import { asText, evidenceEnvelope, refusedEnvelope } from './evidence.js';
 
 /**
@@ -27,6 +27,19 @@ export function resolveAgainstRepoRoot(input: string, repoRoot: string): string 
 
 type DaemonResult = Record<string, any>;
 
+const MCP_CLIENT_ID = process.env.SYNEVID_CLIENT_ID?.trim() || 'mcp:default';
+let mcpLeaseId = process.env.SYNEVID_LEASE_ID?.trim() || '';
+
+function daemonHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = process.env.SYNEVID_LOOPBACK_TOKEN?.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  headers['X-Synevid-Client-Id'] = MCP_CLIENT_ID;
+  headers['X-Synevid-Client-Type'] = 'mcp';
+  if (mcpLeaseId) headers['X-Synevid-Lease-Id'] = mcpLeaseId;
+  return headers;
+}
+
 async function postDaemonJson(
   route: string,
   body: Record<string, unknown>,
@@ -34,7 +47,7 @@ async function postDaemonJson(
 ): Promise<DaemonResult> {
   const response = await fetch(`http://127.0.0.1:3333${route}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: daemonHeaders(),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -46,9 +59,63 @@ async function postDaemonJson(
     throw new Error(`daemon returned invalid JSON for ${route}`);
   }
   if (!response.ok || data.status === 'ERROR' || data.error) {
-    throw new Error(String(data.error || `daemon rejected ${route}`));
+    throw new Error(
+      `${String(data.error_code || `ERR-DAEMON-${response.status}`)}: ${String(data.error || `daemon rejected ${route}`)}`
+    );
   }
   return data;
+}
+
+async function getDaemonJson(route: string, timeoutMs = 1500): Promise<DaemonResult> {
+  const response = await fetch(`http://127.0.0.1:3333${route}`, {
+    method: 'GET',
+    headers: daemonHeaders(),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await response.text();
+  let data: DaemonResult;
+  try {
+    data = JSON.parse(text) as DaemonResult;
+  } catch {
+    throw new Error(`daemon returned invalid JSON for ${route}`);
+  }
+  if (!response.ok || data.status === 'ERROR' || data.error) {
+    throw new Error(
+      `${String(data.error_code || `ERR-DAEMON-${response.status}`)}: ${String(data.error || `daemon rejected ${route}`)}`
+    );
+  }
+  return data;
+}
+
+async function ensureDaemonRuntime(sessionId?: string): Promise<DaemonResult> {
+  if (mcpLeaseId) {
+    try {
+      const state = await getDaemonJson('/api/v1/runtime/status', 1500);
+      const leases = Array.isArray(state.connected_clients) ? state.connected_clients : [];
+      if (leases.some((lease: unknown) => {
+        if (typeof lease !== 'object' || lease === null) return false;
+        const record = lease as Record<string, unknown>;
+        return record.client_id === MCP_CLIENT_ID && record.lease_id === mcpLeaseId;
+      })) {
+        return { lease_id: mcpLeaseId };
+      }
+    } catch {
+      // The daemon may have restarted. Reconnect below and never continue with
+      // a lease that is only present in this MCP process's memory.
+    }
+    mcpLeaseId = '';
+  }
+  const result = await postDaemonJson('/api/v1/runtime/connect', {
+    client_id: MCP_CLIENT_ID,
+    client_type: 'mcp',
+    session_id: sessionId,
+  });
+  const lease = typeof result.lease_id === 'string' ? result.lease_id : '';
+  if (!lease) {
+    throw new Error('ERR-RUNTIME-500: daemon did not return a runtime lease');
+  }
+  mcpLeaseId = lease;
+  return result;
 }
 
 async function publishMcpActivity(
@@ -56,6 +123,7 @@ async function publishMcpActivity(
   payload: Record<string, unknown>
 ): Promise<{ live_published: boolean; live_seq?: number; live_error?: string }> {
   try {
+    await ensureDaemonRuntime(typeof payload.session_id === 'string' ? payload.session_id : undefined);
     const result = await postDaemonJson(
       '/api/v1/live/broadcast',
       {
@@ -125,6 +193,7 @@ async function persistMcpAnalysisEvent(options: {
   evidence: Record<string, unknown>;
 }): Promise<{ trajectory_persisted: boolean; event_seq?: number; trajectory_error?: string }> {
   try {
+    await ensureDaemonRuntime(options.sessionId);
     const result = await postDaemonJson('/api/v1/forensics/event', {
       repo_root: options.repoRoot,
       session_id: options.sessionId,
@@ -157,6 +226,28 @@ function daemonFailureEnvelope(command: string, error: unknown, nextAction: stri
       next_action: nextAction,
     },
     report: { error: message },
+    operation_id: null,
+    repository_id: null,
+    canonical_path: null,
+    snapshot_id: null,
+    coverage_state: 'unavailable',
+    verdict: 'UNAVAILABLE',
+    warnings: [message],
+    latency_ms: null,
+    blake3_digest: null,
+    evidence_receipt: null,
+  };
+}
+
+function daemonExecutionResult(data: DaemonResult): AutopsyExecutionResult {
+  const verdict = String(data.verdict || data.status || 'UNKNOWN').toUpperCase();
+  const exitCode = verdict === 'PASS' ? 0 : verdict === 'WARN' || verdict === 'PARTIAL' ? 4 : 2;
+  return {
+    success: exitCode === 0,
+    exitCode,
+    data,
+    rawStdout: JSON.stringify(data),
+    rawStderr: '',
   };
 }
 
@@ -268,6 +359,10 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Optional forensic session that receives the persisted impact event'),
+        offline: z
+          .boolean()
+          .optional()
+          .describe('Explicitly bypass the daemon and run an independent offline CLI analysis'),
         detail: z
           .enum(['summary', 'full'])
           .optional()
@@ -309,7 +404,35 @@ export function createAutopsyMcpServer(): McpServer {
         summary: `AI impact analysis started for ${args.symbol}`,
       });
 
-      const result = await runAutopsy('impact', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
+      let result: AutopsyExecutionResult;
+      if (args.offline) {
+        result = await runAutopsy('impact', cliArgs, { repoRoot, snapshotId: args.snapshot_id });
+      } else {
+        try {
+          await ensureDaemonRuntime(args.session_id);
+          const query = new URLSearchParams({ seed: args.symbol });
+          if (args.direction) query.set('direction', args.direction);
+          if (args.profile) query.set('profile', args.profile);
+          if (args.max_depth) query.set('max_depth', String(args.max_depth));
+          if (args.budget) query.set('budget', String(args.budget));
+          result = daemonExecutionResult(await getDaemonJson(`/api/impact?${query.toString()}`, 30_000));
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: asText(
+                  daemonFailureEnvelope(
+                    'impact',
+                    error,
+                    'start the authenticated SynEvid daemon or pass offline=true for an explicitly independent CLI run'
+                  )
+                ),
+              },
+            ],
+          };
+        }
+      }
 
       // Persist the complete evidence needed for a deterministic canvas replay.
       // Summary mode remains compact for the agent response; the trajectory stores
@@ -324,11 +447,13 @@ export function createAutopsyMcpServer(): McpServer {
           return cliArgs[index - 1] !== '--detail';
         });
         fullArgs.push('--detail', 'full');
-        const fullResult = await runAutopsy('impact', fullArgs, {
-          repoRoot,
-          snapshotId: args.snapshot_id,
-        });
-        if (fullResult.success && fullResult.data?.impact) replayReport = fullResult.data;
+        if (args.offline) {
+          const fullResult = await runAutopsy('impact', fullArgs, {
+            repoRoot,
+            snapshotId: args.snapshot_id,
+          });
+          if (fullResult.success && fullResult.data?.impact) replayReport = fullResult.data;
+        }
       }
       const trajectory = await persistMcpAnalysisEvent({
         repoRoot,
@@ -444,6 +569,10 @@ export function createAutopsyMcpServer(): McpServer {
           .string()
           .optional()
           .describe('Optional forensic session that receives the persisted verification event'),
+        offline: z
+          .boolean()
+          .optional()
+          .describe('Explicitly bypass the daemon and run an independent offline CLI analysis'),
       }),
     },
     async (args) => {
@@ -468,7 +597,30 @@ export function createAutopsyMcpServer(): McpServer {
         summary: 'AI verification started',
       });
 
-      const result = await runAutopsy('verify', cliArgs, { repoRoot, snapshotId: base });
+      let result: AutopsyExecutionResult;
+      if (args.offline) {
+        result = await runAutopsy('verify', cliArgs, { repoRoot, snapshotId: base });
+      } else {
+        try {
+          await ensureDaemonRuntime(args.session_id);
+          result = daemonExecutionResult(await getDaemonJson('/api/verify', 30_000));
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: asText(
+                  daemonFailureEnvelope(
+                    'verify',
+                    error,
+                    'start the authenticated SynEvid daemon or pass offline=true for an explicitly independent CLI run'
+                  )
+                ),
+              },
+            ],
+          };
+        }
+      }
       const trajectory = await persistMcpAnalysisEvent({
         repoRoot,
         sessionId: args.session_id,
@@ -1424,7 +1576,7 @@ export function createAutopsyMcpServer(): McpServer {
       try {
         const resp = await fetch('http://127.0.0.1:3333/api/v1/ai/cache/query', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: daemonHeaders(),
           body: JSON.stringify({
             session_id: args.session_id,
             symbol: args.symbol,

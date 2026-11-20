@@ -28,8 +28,12 @@ export interface CommitGalaxyNode {
   symbols_added?: number;
   symbols_deleted?: number;
   blast_radius_score: number;
-  verdict?: 'PASS' | 'WARN' | 'BREAKING' | string;
-  verification_verdict?: 'PASS' | 'WARN' | 'BREAKING' | string;
+  heuristic_verdict?: 'PASS' | 'WARN' | 'UNKNOWN' | string;
+  semantic_verdict?: 'PASS' | 'WARN' | 'BREAKING' | 'UNKNOWN' | string;
+  coverage_state?: string;
+  evidence_kind?: 'file_heuristic' | 'semantic' | string;
+  verdict?: 'PASS' | 'WARN' | 'BREAKING' | 'UNKNOWN' | string;
+  verification_verdict?: 'PASS' | 'WARN' | 'BREAKING' | 'UNKNOWN' | string;
 }
 
 export interface BranchRef {
@@ -88,6 +92,7 @@ export interface TimeTravelVisualFrame {
   deleted_files: string[];
   coverage_state?: string;
   result_digest?: string;
+  error?: string;
 }
 
 export interface SemanticDiffReport {
@@ -143,6 +148,7 @@ export interface GitStatusReport {
   ignored: string[];
   is_clean: boolean;
   total_uncommitted: number;
+  error?: string;
 }
 
 export interface DiffLine {
@@ -314,6 +320,8 @@ export interface Capabilities {
   layouts: string[];
   gates?: string[];
   storage_engine?: string;
+  error?: string;
+  coverage_state?: 'verified' | 'partial' | 'unknown' | 'unavailable' | string;
 }
 
 export interface FsDirectoryEntry {
@@ -455,7 +463,7 @@ export interface SimulateEditResponse {
   newly_dead_symbols: DeadSymbolItem[];
   broken_imports: string[];
   syntax_errors: string[];
-  computation_latency_ms: number;
+  computation_latency_ms: number | null;
 }
 
 export interface InvariantFinding {
@@ -502,25 +510,18 @@ export function normalizeCrossPlatformPath(rawPath: string): string {
   return p.replace(/\\/g, '/');
 }
 
-// Fallback Mock Data for offline testing (Zero hardcoded repository paths)
-const FALLBACK_REPOS: RepoRecord[] = [];
-
-const FALLBACK_CAPS: Capabilities = {
-  languages: ['typescript', 'rust', 'python', 'go', 'java', 'csharp'],
-  resolvers: ['npm', 'pnpm', 'yarn', 'cargo', 'go', 'maven', 'gradle', 'nuget'],
-  layouts: ['DeterministicForceLayout-2D', 'DeterministicForceLayout-3D'],
-  gates: ['no-new-cycles', 'api-contract-compatibility', 'layer-boundaries'],
-  storage_engine: 'SQLite WAL Mode with Auto-Recovery (ERR-STORAGE-102)',
-};
-
 export class SynevidApiClient {
   private baseUrl: string;
+  private readonly clientId = 'ui:web';
+  private runtimeLeaseId = '';
+  private runtimeConnectInFlight: Promise<void> | null = null;
 
   private static readonly SIMULATION_TIMEOUT_MS = 60_000;
 
   constructor(baseUrl?: string) {
     if (typeof window !== 'undefined') {
-      this.baseUrl = baseUrl || localStorage.getItem('synevid_api_url') || 'http://127.0.0.1:3333';
+      const queryUrl = new URL(window.location.href).searchParams.get('synevid_daemon');
+      this.baseUrl = baseUrl || queryUrl || localStorage.getItem('synevid_api_url') || 'http://127.0.0.1:3333';
     } else {
       this.baseUrl = baseUrl || 'http://127.0.0.1:3333';
     }
@@ -559,6 +560,9 @@ export class SynevidApiClient {
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
+    headers['X-Synevid-Client-Id'] = this.clientId;
+    headers['X-Synevid-Client-Type'] = 'ui';
+    if (this.runtimeLeaseId) headers['X-Synevid-Lease-Id'] = this.runtimeLeaseId;
 
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
@@ -579,7 +583,7 @@ export class SynevidApiClient {
 
   public async getStatus() {
     try {
-      return await this.fetchWithTimeout<{
+      const status = await this.fetchWithTimeout<{
         snapshot_id: string;
         repo_root: string;
         repo_name?: string;
@@ -588,8 +592,26 @@ export class SynevidApiClient {
         files_scanned: number;
         symbol_count: number;
         edge_count: number;
+        daemon_connection?: string;
+        last_event_seq?: number;
+        freshness?: string;
+        storage_health?: string;
         version: string;
-      }>('/api/status');
+        daemon_id?: string;
+        session_id?: string | null;
+        lease_id?: string | null;
+        runtime?: Record<string, unknown>;
+        runtime_error?: string;
+        error?: string;
+      }>('/api/v1/status');
+      if (status.active_repo_id && !this.runtimeLeaseId) {
+        try {
+          await this.ensureRuntime(status.active_repo_id, status.session_id || undefined);
+        } catch (error) {
+          status.runtime_error = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return status;
     } catch {
       return {
         snapshot_id: 'no-active-snapshot',
@@ -600,24 +622,60 @@ export class SynevidApiClient {
         files_scanned: 0,
         symbol_count: 0,
         edge_count: 0,
-        version: 'v0.2.6',
+        daemon_connection: 'unavailable',
+        last_event_seq: 0,
+        freshness: 'unavailable',
+        storage_health: 'unavailable',
+        version: 'unknown',
+        error: 'UNAVAILABLE: SynEvid daemon status could not be read',
       };
     }
+  }
+
+  private async ensureRuntime(repositoryId: string, sessionId?: string): Promise<void> {
+    if (this.runtimeLeaseId) return;
+    if (this.runtimeConnectInFlight) return this.runtimeConnectInFlight;
+    this.runtimeConnectInFlight = this.fetchWithTimeout<{ lease_id?: string }>('/api/v1/runtime/connect', {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: this.clientId,
+        client_type: 'ui',
+        repository_id: repositoryId,
+        session_id: sessionId,
+      }),
+    }).then((response) => {
+      if (typeof response.lease_id !== 'string' || !response.lease_id) {
+        throw new Error('ERR-RUNTIME-500: daemon did not return a UI runtime lease');
+      }
+      this.runtimeLeaseId = response.lease_id;
+    }).finally(() => {
+      this.runtimeConnectInFlight = null;
+    });
+    return this.runtimeConnectInFlight;
   }
 
   public async getCapabilities(): Promise<Capabilities> {
     try {
       return await this.fetchWithTimeout<Capabilities>('/api/v1/capabilities');
-    } catch {
-      return FALLBACK_CAPS;
+    } catch (error: unknown) {
+      return {
+        languages: [],
+        resolvers: [],
+        layouts: [],
+        gates: [],
+        storage_engine: 'unavailable',
+        coverage_state: 'unavailable',
+        error: error instanceof Error ? error.message : 'Capabilities are unavailable because the daemon request failed.',
+      };
     }
   }
 
   public async listRepos(): Promise<RepoRecord[]> {
     try {
-      return await this.fetchWithTimeout<RepoRecord[]>('/api/v1/repos/list');
+      const payload = await this.fetchWithTimeout<RepoRecord[] | { data?: RepoRecord[] }>('/api/v1/repos/list');
+      return Array.isArray(payload) ? payload : (Array.isArray(payload.data) ? payload.data : []);
     } catch {
-      return FALLBACK_REPOS;
+      return [];
     }
   }
 
@@ -791,24 +849,12 @@ export class SynevidApiClient {
   public async getInvariants() {
     try {
       return await this.fetchWithTimeout<{ findings: InvariantFinding[] }>('/api/verify');
-    } catch {
+    } catch (error: unknown) {
       return {
-        findings: [
-          {
-            rule_id: 'no-circular-deps',
-            status: 'pass' as const,
-            severity: 'error' as const,
-            message: 'No circular dependencies introduced across module graph',
-            locations: [{ path: 'src/services' }],
-          },
-          {
-            rule_id: 'api-compatibility',
-            status: 'pass' as const,
-            severity: 'error' as const,
-            message: 'All public API contract definitions match workspace callers',
-            locations: [{ path: 'src/domain' }],
-          },
-        ],
+        findings: [],
+        verdict: 'UNAVAILABLE',
+        coverage_state: 'unavailable',
+        error: error instanceof Error ? error.message : 'Verification is unavailable because the daemon request failed.',
       };
     }
   }
@@ -816,19 +862,12 @@ export class SynevidApiClient {
   public async getTrajectory() {
     try {
       return await this.fetchWithTimeout<{ runs: TrajectoryRun[] }>('/api/trajectory');
-    } catch {
+    } catch (error: unknown) {
       return {
-        runs: [
-          {
-            session_id: 'sess_9f82ab11',
-            exit_code: 0,
-            report_digest: 'blake3:c498ae20bb11',
-            started_snapshot: 'snap_v0_1_baseline',
-            completed_snapshot: 'snap_v0_2_pluggable',
-            steps: [{ action: 'verify_invariants', status: 'pass' }, { action: 'compute_layout', status: 'pass' }],
-            next_agent_guidance: 'All invariants verified. Ready for Phase 2 3D visual canvas integration.',
-          },
-        ],
+        runs: [],
+        verdict: 'UNAVAILABLE',
+        coverage_state: 'unavailable',
+        error: error instanceof Error ? error.message : 'Trajectory is unavailable because the daemon request failed.',
       };
     }
   }
@@ -853,7 +892,7 @@ export class SynevidApiClient {
   public async getTimeTravelFrame(oid: string, dim: '2d' | '3d' = '3d'): Promise<TimeTravelVisualFrame> {
     try {
       return await this.fetchWithTimeout<TimeTravelVisualFrame>(`/api/v1/git/time-travel/${encodeURIComponent(oid)}?dim=${dim}`);
-    } catch {
+    } catch (error: unknown) {
       return {
         oid,
         short_oid: oid.slice(0, 7),
@@ -867,29 +906,15 @@ export class SynevidApiClient {
         added_files: [],
         modified_files: [],
         deleted_files: [],
-        coverage_state: 'Unknown',
+        coverage_state: 'unavailable',
         result_digest: '',
+        error: error instanceof Error ? error.message : 'Historical frame is unavailable because the daemon request failed.',
       };
     }
   }
 
   public async getGitDiff(baseOid: string, headOid: string): Promise<SemanticDiffReport> {
-    try {
-      return await this.fetchWithTimeout<SemanticDiffReport>(`/api/v1/git/diff/${encodeURIComponent(baseOid)}/${encodeURIComponent(headOid)}`);
-    } catch {
-      return {
-        base_oid: baseOid,
-        head_oid: headOid,
-        added_files: [],
-        modified_files: [],
-        deleted_files: [],
-        total_changed_files: 0,
-        blast_radius_score: 0,
-        verdict: 'UNKNOWN',
-        drifted_contracts: [],
-        coverage_state: 'Unknown',
-      };
-    }
+    return await this.fetchWithTimeout<SemanticDiffReport>(`/api/v1/git/diff/${encodeURIComponent(baseOid)}/${encodeURIComponent(headOid)}`);
   }
 
   public async getGitBlame(path: string, oid = 'HEAD'): Promise<BlameReport> {
@@ -929,46 +954,11 @@ export class SynevidApiClient {
   }
 
   public async getGitStatus(): Promise<GitStatusReport> {
-    try {
-      return await this.fetchWithTimeout<GitStatusReport>('/api/v1/git/status');
-    } catch {
-      return {
-        branch: 'main',
-        head_oid: null,
-        staged: [],
-        unstaged: [],
-        untracked: [],
-        deleted: [],
-        ignored: [],
-        is_clean: true,
-        total_uncommitted: 0,
-      };
-    }
+    return await this.fetchWithTimeout<GitStatusReport>('/api/v1/git/status');
   }
 
   public async getFileDiff(path: string): Promise<FileDiffReport> {
-    try {
-      const res = await this.fetchWithTimeout<FileDiffReport>(`/api/v1/git/diff-file?path=${encodeURIComponent(path)}`);
-      return {
-        path: res?.path || path,
-        status: res?.status || 'clean',
-        old_content: res?.old_content || '',
-        new_content: res?.new_content || '',
-        diff_lines: res?.diff_lines || [],
-        total_additions: res?.total_additions || 0,
-        total_deletions: res?.total_deletions || 0,
-      };
-    } catch {
-      return {
-        path,
-        status: 'clean',
-        old_content: '',
-        new_content: '',
-        diff_lines: [],
-        total_additions: 0,
-        total_deletions: 0,
-      };
-    }
+    return await this.fetchWithTimeout<FileDiffReport>(`/api/v1/git/diff-file?path=${encodeURIComponent(path)}`);
   }
 
   public async unstageGit(paths?: string[]): Promise<GitMutationResult> {
@@ -1069,7 +1059,10 @@ export class SynevidApiClient {
   }
 
   public async getAiLedger(sessionId: string): Promise<AiSessionLedger> {
-    return await this.fetchWithTimeout<AiSessionLedger>(`/api/v1/ai/ledger?session_id=${encodeURIComponent(sessionId)}`);
+    const response = await this.fetchWithTimeout<{ ledger: AiSessionLedger }>(
+      `/api/v1/ai/ledger?session_id=${encodeURIComponent(sessionId)}`,
+    );
+    return response.ledger;
   }
 
   public async queryAiCache(request: {
@@ -1162,6 +1155,8 @@ export class SynevidApiClient {
       try {
         const sseUrl = new URL(`${this.baseUrl}/api/v1/live`);
         sseUrl.searchParams.set('since', String(lastSeq));
+        sseUrl.searchParams.set('client_id', this.clientId);
+        sseUrl.searchParams.set('client_type', 'ui');
         const token = this.getLoopbackToken();
         if (token) sseUrl.searchParams.set('token', token);
         evtSource = new EventSource(sseUrl.toString());
@@ -1196,6 +1191,8 @@ export class SynevidApiClient {
         const url = new URL(`${this.baseUrl}/api/v1/live`);
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
         url.searchParams.set('since', String(lastSeq));
+        url.searchParams.set('client_id', this.clientId);
+        url.searchParams.set('client_type', 'ui');
         const token = this.getLoopbackToken();
         if (token) url.searchParams.set('token', token);
         socket = new WebSocket(url.toString());

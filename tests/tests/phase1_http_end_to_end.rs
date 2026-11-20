@@ -191,7 +191,7 @@ fn phase1_http_randomized_edits_match_cold_scan_and_live_contracts() {
     let listener = Server::http(("127.0.0.1", 0)).unwrap();
     let addr = listener.server_addr().to_ip().unwrap();
     let server_thread = thread::spawn(move || {
-        for request in listener.incoming_requests().take(106) {
+        for request in listener.incoming_requests().take(107) {
             dashboard.dispatch(request);
         }
     });
@@ -245,6 +245,19 @@ fn phase1_http_randomized_edits_match_cold_scan_and_live_contracts() {
     }
 
     let encoded_id = encode_path_component("src/service.ts");
+    let status = json_request(addr, "GET", "/api/v1/status", None);
+    assert!(
+        status["operation_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("blake3:"))
+    );
+    assert!(status["active_repo_id"].is_string());
+    assert!(status["last_event_seq"].is_number());
+    assert!(
+        status["evidence_receipt"]["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("blake3:"))
+    );
     let path_ego = json_request(
         addr,
         "GET",
@@ -257,7 +270,20 @@ fn phase1_http_randomized_edits_match_cold_scan_and_live_contracts() {
         &format!("/api/v1/graph/ego?id={encoded_id}"),
         None,
     );
-    assert_eq!(path_ego, query_ego);
+    // The semantic response and digest must be identical for the path and
+    // compatibility query aliases. The transport latency sample is
+    // operational metadata and is intentionally allowed to vary per request.
+    let mut path_ego_semantic = path_ego.clone();
+    let mut query_ego_semantic = query_ego.clone();
+    path_ego_semantic
+        .as_object_mut()
+        .unwrap()
+        .remove("latency_ms");
+    query_ego_semantic
+        .as_object_mut()
+        .unwrap()
+        .remove("latency_ms");
+    assert_eq!(path_ego_semantic, query_ego_semantic);
 
     let live_body = serde_json::json!({
         "event": "phase1.http_contract",
@@ -266,6 +292,29 @@ fn phase1_http_randomized_edits_match_cold_scan_and_live_contracts() {
     let live_response = json_request(addr, "POST", "/api/v1/live", Some(&live_body.to_string()));
     assert_eq!(live_response["success"], true);
     assert!(live_response["seq_id"].as_i64().is_some());
+    for field in [
+        "operation_id",
+        "repository_id",
+        "canonical_path",
+        "snapshot_id",
+        "coverage_state",
+        "verdict",
+        "warnings",
+        "latency_ms",
+        "blake3_digest",
+        "evidence_receipt",
+    ] {
+        assert!(
+            live_response.get(field).is_some(),
+            "missing shared field {field}"
+        );
+    }
+    assert_eq!(live_response["evidence_receipt"]["algorithm"], "BLAKE3");
+    assert!(
+        live_response["blake3_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("blake3:"))
+    );
     let sse = http_request(addr, "GET", "/api/v1/live?since=0", None);
     assert!(sse.contains("event: phase1.http_contract"));
     let replay = json_request(addr, "GET", "/api/v1/live/poll?since_seq=0", None);
@@ -313,6 +362,13 @@ fn phase1_http_corruption_recovery_reports_err_storage_102() {
     let health = json_request(addr, "GET", "/health", None);
     assert_eq!(health["error_code"], "ERR-STORAGE-102");
     assert_eq!(health["storage_recovery"]["error_code"], "ERR-STORAGE-102");
+    assert_eq!(health["verdict"], "ERROR");
+    assert_eq!(health["coverage_state"], "error");
+    assert!(
+        health["evidence_receipt"]["digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("blake3:"))
+    );
     let backup_path = health["storage_recovery"]["backup_path"]
         .as_str()
         .expect("recovery response must include the backup path");

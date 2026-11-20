@@ -6,6 +6,7 @@ type GraphWorkerRequest = {
   type: 'load' | 'cancel';
   requestId: number;
   dimension?: '2D' | '3D';
+  daemonUrl?: string;
 };
 
 type RawGraph = Record<string, unknown> & {
@@ -71,13 +72,15 @@ function normalizeUniverse(raw: RawGraph, dimension: '2D' | '3D'): GraphUniverse
   };
 }
 
-async function loadGraph(requestId: number, dimension: '2D' | '3D') {
+async function loadGraph(requestId: number, dimension: '2D' | '3D', daemonUrl?: string) {
   activeController?.abort();
   const controller = new AbortController();
   activeController = controller;
   const query = dimension === '2D' ? '?dim=2d' : '?dim=3d';
   postProgress(requestId, 'requesting', 4);
-  const response = await fetch(`/api/v1/graph/universe${query}`, { signal: controller.signal });
+  const graphPath = `/api/v1/graph/universe${query}`;
+  const graphUrl = daemonUrl ? new URL(graphPath, daemonUrl).toString() : graphPath;
+  const response = await fetch(graphUrl, { signal: controller.signal });
   if (!response.ok) throw new Error(`Graph request failed (${response.status})`);
   const totalBytes = Number(response.headers.get('content-length')) || 0;
   const reader = response.body?.getReader();
@@ -124,7 +127,7 @@ self.onmessage = (event: MessageEvent<GraphWorkerRequest>) => {
     activeController = null;
     return;
   }
-  loadGraph(message.requestId, message.dimension || '3D').catch((error: unknown) => {
+  loadGraph(message.requestId, message.dimension || '3D', message.daemonUrl).catch((error: unknown) => {
     if (error instanceof DOMException && error.name === 'AbortError') return;
     self.postMessage({
       type: 'error',

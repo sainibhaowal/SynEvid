@@ -60,6 +60,14 @@ repos:
         pass_filenames: false
         always_run: true
 
+      - id: truth-contract-validation
+        name: Phase 0/1 Requirement & Evidence Contract Validation
+        entry: bash -c 'python3 scripts/validate-requirements.py && python3 scripts/validate-evidence-contract.py'
+        language: system
+        files: ^(docs/requirements/registry\.yaml|docs/requirements/TRACEABILITY\.md|schemas/evidence-envelope\.schema\.json|scripts/validate-(requirements|evidence-contract)\.py)$
+        pass_filenames: false
+        always_run: true
+
       - id: config-syntax-check
         name: Engine Config & Invariant Syntax Validation
         entry: python3 -c 'import tomllib, yaml, json, sys; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); json.load(open(".autopsy/baseline.json")); print("Configs valid.")'

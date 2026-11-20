@@ -1,0 +1,134 @@
+version: 1
+scope: phase0-phase4
+source_documents:
+  - Resource/6.1 Fixing/00_MASTER_PRODUCTION_PROGRAM.md
+  - Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md
+  - Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md
+  - Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md
+requirements:
+  - id: R0.1
+    source: "Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md#r0.1-requirement-registry"
+    owner: platform-governance
+    acceptance_test: scripts/validate-requirements.py
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: R0.2
+    source: "Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md#r0.2-truth-states"
+    owner: contracts
+    acceptance_test: schemas/evidence-envelope.schema.json
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: R0.3
+    source: "Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md#r0.3-evidence-ledger"
+    owner: evidence
+    acceptance_test: schemas/evidence-envelope.schema.json
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: R0.4
+    source: "Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md#r0.4-no-fabricated-data"
+    owner: truth-governance
+    acceptance_test: scripts/validate-evidence-contract.py
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-IDENTITY-001
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: daemon-registry
+    acceptance_test: tests/tests/phase1_http_end_to_end.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-PATH-002
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: daemon-registry
+    acceptance_test: crates/autopsy-cli/src/daemon.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-ERROR-003
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: daemon-registry
+    acceptance_test: crates/autopsy-cli/src/daemon.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-STORAGE-004
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: storage
+    acceptance_test: crates/autopsy-storage/src/lib.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-RECOVERY-005
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#backend-and-core-work"
+    owner: storage
+    acceptance_test: crates/autopsy-storage/src/lib.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-TRANSACTION-006
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: storage
+    acceptance_test: crates/autopsy-storage/src/lib.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-EVENT-007
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: daemon-events
+    acceptance_test: tests/tests/phase1_http_end_to_end.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P1-WATCH-008
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: daemon-watchers
+    acceptance_test: apps/synevid-ui/src/server.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-SHUTDOWN-009
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: storage
+    acceptance_test: crates/autopsy-storage/src/lib.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P1-CLI-010
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#cli-tui-and-mcp-work"
+    owner: cli
+    acceptance_test: crates/autopsy-cli/src/daemon.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-TUI-011
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#cli-tui-and-mcp-work"
+    owner: tui
+    acceptance_test: crates/autopsy-cli/src/tui.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P1-MCP-012
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#cli-tui-and-mcp-work"
+    owner: mcp
+    acceptance_test: apps/mcp-server/test/server.test.js
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: VERIFIED
+  - id: P1-UI-013
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#frontend-and-ux-work"
+    owner: web-cockpit
+    acceptance_test: apps/web-inspector/test/phase2_cockpit.test.js
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P1-E2E-014
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#tests"
+    owner: verification
+    acceptance_test: apps/synevid-ui/tests/phase1_native_process.rs
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P1-LOG-015
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#logging"
+    owner: observability
+    acceptance_test: scripts/validate-evidence-contract.py
+    evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
+    status: IMPLEMENTED
+  - id: P4-RUNTIME-001
+    source: "Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md#phase-4-one-authenticated-runtime-for-cli-tui-mcp-and-ui"
+    owner: runtime-authority
+    acceptance_test: apps/synevid-ui/tests/phase4_runtime_native.rs
+    evidence: docs/evidence/105-phase4-runtime-authority.md
+    status: IMPLEMENTED
+  - id: P4-RUNTIME-002
+    source: "Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md#requirements"
+    owner: protocol-contracts
+    acceptance_test: schemas/runtime-envelope.schema.json
+    evidence: docs/evidence/105-phase4-runtime-authority.md
+    status: IMPLEMENTED

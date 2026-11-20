@@ -906,7 +906,7 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                                   : 'bg-rose-500/15 text-rose-500 border-rose-500/30'
                               }`}
                             >
-                              {commit.verdict || 'PASS'}
+                              {commit.verdict || 'UNKNOWN'}
                             </span>
 
                             <div className="flex items-center space-x-1 text-[10px] font-mono text-[var(--text-muted)]">
@@ -917,6 +917,11 @@ export function GitGalaxySection({ onTimeTravelFrame, onNavigateUniverse }: GitG
                               <span>
                                 Blast: <strong>{commit.blast_radius_score}</strong>
                               </span>
+                              {commit.evidence_kind === 'file_heuristic' && (
+                                <span className="text-amber-500" title="File-count heuristic; semantic safety was not proven">
+                                  heuristic only
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>

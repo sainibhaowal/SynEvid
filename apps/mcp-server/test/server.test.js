@@ -782,7 +782,17 @@ test('autopsy_impact and autopsy_verify persist trajectory events and publish li
   assert.ok(verify, 'autopsy_verify must be registered');
   const seen = [];
   const responses = await withDaemonFetch(async (url, request, body) => {
-    assert.equal(request.method, 'POST');
+    if (url.pathname === '/api/v1/runtime/connect') {
+      assert.equal(request.method, 'POST');
+      return { status: 'connected', lease_id: 'lease_test' };
+    }
+    assert.equal(request.method, url.pathname === '/api/impact' || url.pathname === '/api/verify' ? 'GET' : 'POST');
+    if (url.pathname === '/api/impact') {
+      return { status: 'VERIFIED', verdict: 'PASS', coverage_state: 'verified', repo_id: 'repo-test', impact: { impacted_entities: ['seed'] } };
+    }
+    if (url.pathname === '/api/verify') {
+      return { status: 'VERIFIED', verdict: 'PASS', coverage_state: 'verified', repo_id: 'repo-test' };
+    }
     const payload = JSON.parse(body);
     seen.push({ path: url.pathname, payload });
     if (url.pathname === '/api/v1/live/broadcast') return { success: true, seq_id: seen.length };

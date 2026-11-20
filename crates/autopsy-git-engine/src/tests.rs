@@ -74,8 +74,43 @@ fn test_isolated_commit_and_galaxy_reader() {
     assert_eq!(galaxy.active_branch.as_deref(), Some("main"));
     assert!(galaxy.commits[0].is_head);
     assert_eq!(galaxy.commits[0].summary, "feat: add second feature");
+    assert!(
+        galaxy
+            .commits
+            .iter()
+            .all(|commit| commit.verdict == "UNKNOWN")
+    );
+    assert!(
+        galaxy
+            .commits
+            .iter()
+            .all(|commit| commit.evidence_kind == "file_heuristic")
+    );
 
     // Clean up temp repo
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[test]
+fn test_corrupt_commit_object_is_not_a_successful_galaxy() {
+    let repo_root = create_isolated_test_repo();
+    let manager = GitMutationManager::new(&repo_root);
+    stage_initial_files(&repo_root);
+    let commit = manager
+        .commit("feat: integrity fixture", None, None)
+        .expect("commit");
+    let oid = commit.new_commit_oid.expect("commit oid");
+    let object_path = repo_root
+        .join(".git")
+        .join("objects")
+        .join(&oid[..2])
+        .join(&oid[2..]);
+    fs::write(object_path, b"corrupt object bytes").expect("corrupt commit object");
+
+    let error = GitGalaxyReader::new(&repo_root)
+        .read_galaxy(20)
+        .expect_err("corrupt commit must fail the galaxy read");
+    assert!(!error.to_string().contains("PASS"));
     let _ = fs::remove_dir_all(&repo_root);
 }
 

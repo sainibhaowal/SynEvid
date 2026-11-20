@@ -54,7 +54,7 @@ export default function EgoNetworkInspector({
 
         <div className="flex items-center space-x-2 text-xs font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20 self-start sm:self-auto">
           <Zap className="w-3.5 h-3.5 text-emerald-500" />
-          <span>&lt; 5ms SQLite WAL Ego Network</span>
+          <span>Request latency shown after query</span>
         </div>
       </div>
 

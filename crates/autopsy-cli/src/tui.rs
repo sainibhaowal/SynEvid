@@ -13,7 +13,7 @@ use crate::{
     ANALYZER_VERSION, Cli, CliError, EXIT_PASS, build_snapshot_and_graph, load_or_default_config,
 };
 use autopsy_domain::{FindingStatus, SymbolId};
-use autopsy_impact::{ImpactDirection, ImpactEngine, ImpactProfile, ImpactQuery};
+use autopsy_impact::{EdgeGrade, ImpactDirection, ImpactEngine, ImpactQuery, callers_profile};
 use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
 use crossterm::{
     event::{
@@ -31,11 +31,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Tabs},
 };
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// RAII Terminal Cleanup Guard that guarantees raw mode and mouse capture are disabled on exit.
 struct TerminalCleanup;
@@ -67,6 +66,18 @@ pub struct TuiApp {
     pub search_active: bool,
     pub input_buffer: String,
     pub should_quit: bool,
+    pub daemon_connected: bool,
+    pub repository_id: String,
+    pub last_event_seq: i64,
+    pub freshness: String,
+    pub impact_verdict: String,
+    pub impact_coverage: String,
+    pub impact_truncated: bool,
+    pub impact_digest: String,
+    pub impact_direction: String,
+    pub impact_profile: String,
+    pub impact_budget: usize,
+    last_daemon_sync: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -129,6 +140,18 @@ impl TuiApp {
             search_active: false,
             input_buffer: String::new(),
             should_quit: false,
+            daemon_connected: false,
+            repository_id: String::new(),
+            last_event_seq: 0,
+            freshness: "offline analysis not synchronized".to_string(),
+            impact_verdict: "UNKNOWN".to_string(),
+            impact_coverage: "unknown".to_string(),
+            impact_truncated: false,
+            impact_digest: String::new(),
+            impact_direction: "unknown".to_string(),
+            impact_profile: "unknown".to_string(),
+            impact_budget: 0,
+            last_daemon_sync: None,
         };
         app.load_fast();
         app
@@ -142,6 +165,13 @@ impl TuiApp {
         self.findings.clear();
         self.likely_affected.clear();
         self.possibly_affected.clear();
+        self.impact_verdict = "UNKNOWN".to_string();
+        self.impact_coverage = "unknown".to_string();
+        self.impact_truncated = false;
+        self.impact_digest.clear();
+        self.impact_direction = "unknown".to_string();
+        self.impact_profile = "unknown".to_string();
+        self.impact_budget = 0;
     }
 
     pub fn refresh(&mut self) {
@@ -235,6 +265,124 @@ impl TuiApp {
         self.load_runs();
     }
 
+    /// Synchronize the TUI from the daemon-owned status and event cursor.
+    /// Offline mode remains explicit: if the daemon is unavailable, the TUI
+    /// keeps its local analysis but labels it as independent.
+    pub fn sync_from_daemon(&mut self) -> bool {
+        if let Some(last_sync) = self.last_daemon_sync
+            && last_sync.elapsed() < Duration::from_millis(250)
+        {
+            return self.daemon_connected;
+        }
+        self.last_daemon_sync = Some(Instant::now());
+        let Ok(status) = crate::daemon::fetch_status_for_client("tui") else {
+            self.daemon_connected = false;
+            self.freshness = "offline analysis not synchronized".to_string();
+            return false;
+        };
+        let previous_snapshot_id = self.snapshot_id.clone();
+        let active_repo_id = status
+            .get("active_repo_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let repo_root = status
+            .get("canonical_path")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| status.get("repo_root").and_then(serde_json::Value::as_str))
+            .unwrap_or_default();
+        if active_repo_id.is_empty() || repo_root.is_empty() {
+            self.daemon_connected = true;
+            self.repository_id.clear();
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
+            self.impact_verdict = "UNKNOWN".to_string();
+            self.impact_coverage = "unknown".to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.freshness = "daemon connected; no active repository".to_string();
+            return true;
+        }
+        self.daemon_connected = true;
+        self.repository_id = active_repo_id.to_string();
+        self.repo_root = PathBuf::from(repo_root);
+        self.snapshot_id = status
+            .get("snapshot_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unindexed")
+            .to_string();
+        self.coverage_state = status
+            .get("coverage_state")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.symbol_count = status
+            .get("symbol_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        self.edge_count = status
+            .get("edge_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let status_cursor = status
+            .get("last_event_seq")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(self.last_event_seq);
+        let mut replayed = false;
+        if let Ok(events) = crate::daemon::fetch_live_events_for_client(self.last_event_seq, "tui")
+        {
+            if let Some(items) = events.get("events").and_then(serde_json::Value::as_array) {
+                for event in items {
+                    if let Some(seq) = event.get("seq_id").and_then(serde_json::Value::as_i64) {
+                        self.last_event_seq = self.last_event_seq.max(seq);
+                        replayed = true;
+                    }
+                }
+            }
+        }
+        self.last_event_seq = self.last_event_seq.max(status_cursor);
+        self.freshness = if replayed {
+            "replay complete".to_string()
+        } else {
+            status
+                .get("freshness")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("daemon connected")
+                .to_string()
+        };
+
+        // Re-query impact after a replayed or newly indexed snapshot so a
+        // previously selected seed never remains visually tied to stale graph
+        // data.  The daemon response is applied verbatim; no local estimate is
+        // substituted when it is unavailable.
+        if !self.impact_seed.trim().is_empty()
+            && (replayed
+                || previous_snapshot_id != self.snapshot_id
+                || self.impact_digest.is_empty())
+        {
+            match crate::daemon::fetch_impact_for_client(&self.impact_seed, "tui") {
+                Ok(response) => {
+                    self.apply_daemon_impact(&response);
+                }
+                Err(error) => {
+                    self.impact_verdict = "UNAVAILABLE".to_string();
+                    self.impact_coverage = "unavailable".to_string();
+                    self.impact_truncated = false;
+                    self.impact_digest.clear();
+                    self.impact_direction = "unknown".to_string();
+                    self.impact_profile = "unknown".to_string();
+                    self.impact_budget = 0;
+                    self.likely_affected.clear();
+                    self.possibly_affected.clear();
+                    self.freshness = format!("daemon impact unavailable: {error}");
+                }
+            }
+        }
+        true
+    }
+
     fn load_runs(&mut self) {
         self.runs.clear();
         let runs_dir = self.repo_root.join(".autopsy").join("runs");
@@ -287,41 +435,207 @@ impl TuiApp {
         }
     }
 
+    fn apply_daemon_impact(&mut self, response: &serde_json::Value) -> bool {
+        let Some(impact) = response.get("impact") else {
+            self.impact_verdict = response
+                .get("verdict")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("UNKNOWN")
+                .to_ascii_uppercase();
+            self.impact_coverage = response
+                .get("coverage_state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
+            return response.get("error").is_none();
+        };
+
+        let meta = impact
+            .get("entity_meta")
+            .and_then(serde_json::Value::as_object);
+        let hops_for = |id: &str| {
+            meta.and_then(|items| items.get(id))
+                .and_then(|value| value.get("hops"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize
+        };
+        let reason_for = |id: &str| {
+            meta.and_then(|items| items.get(id))
+                .and_then(|value| value.get("weakest_link"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("coverage below resolved")
+                .to_string()
+        };
+
+        self.likely_affected = impact
+            .get("likely_affected")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|id| (id.to_string(), hops_for(id)))
+            .collect();
+        self.possibly_affected = impact
+            .get("possibly_affected")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|id| (id.to_string(), hops_for(id), reason_for(id)))
+            .collect();
+        self.impact_verdict = response
+            .get("verdict")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("UNKNOWN")
+            .to_ascii_uppercase();
+        self.impact_coverage = response
+            .get("coverage_state")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                impact
+                    .get("coverage_state")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_truncated = impact
+            .get("truncated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        self.impact_digest = impact
+            .get("impact_digest")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.impact_direction = impact
+            .get("query")
+            .and_then(|query| query.get("direction"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_profile = impact
+            .get("traversal_profile")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_budget = impact
+            .get("query")
+            .and_then(|query| query.get("profile"))
+            .and_then(|profile| profile.get("budget"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        response.get("error").is_none()
+    }
+
     fn recompute_blast(&mut self, graph: &autopsy_graph::DependencyGraph) {
         if self.impact_seed.trim().is_empty() {
             return;
         }
 
+        // The daemon is the source of truth for a connected session.  This
+        // keeps the TUI's result, event cursor, snapshot, and Electron/MCP
+        // result on one authoritative path instead of silently analyzing a
+        // second local snapshot.
+        if self.daemon_connected {
+            match crate::daemon::fetch_impact_for_client(&self.impact_seed, "tui") {
+                Ok(response) if self.apply_daemon_impact(&response) => return,
+                Ok(response) => {
+                    self.apply_daemon_impact(&response);
+                    return;
+                }
+                Err(error) => {
+                    self.impact_verdict = "UNAVAILABLE".to_string();
+                    self.impact_coverage = "unavailable".to_string();
+                    self.impact_truncated = false;
+                    self.impact_digest.clear();
+                    self.impact_direction = "unknown".to_string();
+                    self.impact_profile = "unknown".to_string();
+                    self.impact_budget = 0;
+                    self.likely_affected.clear();
+                    self.possibly_affected.clear();
+                    self.freshness = format!("daemon impact unavailable: {error}");
+                    return;
+                }
+            }
+        }
+
         let query = ImpactQuery {
             seed_symbols: vec![SymbolId::new(&self.impact_seed)],
-            direction: ImpactDirection::Forward,
-            profile: ImpactProfile {
-                name: "tui-impact".to_string(),
-                max_depth: 10,
-                budget: 1000,
-                edge_kinds: BTreeSet::new(),
-                traverse_file_nodes: true,
-            },
+            direction: ImpactDirection::Backward,
+            profile: callers_profile(64, 10_000),
         };
 
         let engine = ImpactEngine::new();
         if let Ok(report) = engine.compute_impact(graph, &query) {
+            let has_unknown_evidence = report
+                .entity_meta
+                .values()
+                .any(|meta| meta.grade == EdgeGrade::Unrated);
+            let has_partial_evidence = report
+                .entity_meta
+                .values()
+                .any(|meta| matches!(meta.grade, EdgeGrade::NameLevel | EdgeGrade::Inferred));
+            self.impact_verdict = if report.truncated || has_unknown_evidence {
+                "UNKNOWN".to_string()
+            } else if has_partial_evidence {
+                "WARN".to_string()
+            } else {
+                "PASS".to_string()
+            };
+            self.impact_coverage = if has_unknown_evidence {
+                "unknown".to_string()
+            } else if has_partial_evidence {
+                "partial".to_string()
+            } else {
+                "verified".to_string()
+            };
+            self.impact_truncated = report.truncated;
+            self.impact_digest = report.impact_digest.clone();
+            self.impact_direction = "backward".to_string();
+            self.impact_profile = report.traversal_profile.clone();
+            self.impact_budget = query.profile.budget;
             self.likely_affected = report
                 .likely_affected
                 .into_iter()
-                .map(|id| (id.as_str().to_string(), 1))
+                .map(|id| {
+                    let hops = report
+                        .entity_meta
+                        .get(&id)
+                        .map(|meta| meta.hops)
+                        .unwrap_or(0);
+                    (id.as_str().to_string(), hops)
+                })
                 .collect();
             self.possibly_affected = report
                 .possibly_affected
                 .into_iter()
                 .map(|id| {
+                    let meta = report.entity_meta.get(&id);
                     (
                         id.as_str().to_string(),
-                        2,
-                        "call_expression:imported-name".to_string(),
+                        meta.map(|value| value.hops).unwrap_or(0),
+                        meta.and_then(|value| value.weakest_link.clone())
+                            .unwrap_or_else(|| "coverage below resolved".to_string()),
                     )
                 })
                 .collect();
+        } else {
+            self.impact_verdict = "UNKNOWN".to_string();
+            self.impact_coverage = "unknown".to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
         }
     }
 
@@ -358,7 +672,11 @@ impl TuiApp {
             KeyCode::Char('3') => self.selected_tab = 2,
             KeyCode::Char('4') => self.selected_tab = 3,
             KeyCode::Char('5') => self.selected_tab = 4,
-            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Char('r') => {
+                if !self.sync_from_daemon() {
+                    self.refresh();
+                }
+            }
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.input_buffer.clear();
@@ -524,8 +842,16 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
         .draw(|f| ui(f, &mut app))
         .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-    // Refresh active workspace analysis to update live symbols, edges, invariants
-    app.refresh();
+    // The daemon is authoritative when available. Offline analysis is retained
+    // as an explicitly labelled fallback for CI and disconnected terminals.
+    if !app.sync_from_daemon() {
+        if !cli.offline {
+            return Err(CliError::Analysis(
+                "daemon unavailable; TUI requires the authenticated daemon (use --offline for an explicitly independent local view)".to_string(),
+            ));
+        }
+        app.refresh();
+    }
 
     // Re-draw with updated live workspace state
     terminal
@@ -537,7 +863,9 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
             .draw(|f| ui(f, &mut app))
             .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-        // 50ms polling rate provides ultra-smooth responsiveness for mouse wheel and keyboard
+        // 50ms input polling remains responsive; daemon synchronization is
+        // cursor-based and cheap, so replay is visible without rebuilding a
+        // second repository graph in the TUI.
         if event::poll(Duration::from_millis(50)).map_err(|e| CliError::Analysis(e.to_string()))? {
             match event::read().map_err(|e| CliError::Analysis(e.to_string()))? {
                 Event::Key(key) => {
@@ -548,6 +876,11 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
                 Event::Mouse(mouse) => app.on_mouse(mouse),
                 _ => {}
             }
+        }
+
+        if !app.sync_from_daemon() {
+            // Do not rebuild on every frame when disconnected. The explicit
+            // refresh key is the offline re-analysis boundary.
         }
 
         if app.should_quit {
@@ -757,6 +1090,21 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(Color::White),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Sync      : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                if app.daemon_connected {
+                    format!("daemon / {} / seq {}", app.freshness, app.last_event_seq)
+                } else {
+                    app.freshness.clone()
+                },
+                Style::default().fg(if app.daemon_connected {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+        ]),
     ];
     let info_card = Paragraph::new(info_text).block(
         Block::default()
@@ -782,7 +1130,7 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(vec![
             Span::styled("Coverage : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "100% ",
+                "reported by daemon/indexer; percentage not inferred",
                 Style::default()
                     .fg(Color::Rgb(16, 185, 129))
                     .add_modifier(Modifier::BOLD),
@@ -794,7 +1142,14 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Gaps     : ", Style::default().fg(Color::DarkGray)),
-            Span::styled("0% Unknown / Dynamic", Style::default().fg(Color::White)),
+            Span::styled(
+                if app.coverage_state.eq_ignore_ascii_case("verified") {
+                    "none reported within analyzed scope"
+                } else {
+                    "unknown or dynamic behavior remains"
+                },
+                Style::default().fg(Color::White),
+            ),
         ]),
     ];
     let coverage_card = Paragraph::new(coverage_text).block(
@@ -1263,7 +1618,58 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
         vec![Line::from("No inferred symbol selected.")]
     };
 
-    let detail_widget = Paragraph::new(detail_lines).block(
+    let digest = if app.impact_digest.is_empty() {
+        "unavailable".to_string()
+    } else {
+        app.impact_digest[..12.min(app.impact_digest.len())].to_string()
+    };
+    let mut evidence_lines = vec![
+        Line::from(vec![
+            Span::styled("Result          : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} within analyzed scope", app.impact_verdict),
+                Style::default().fg(if app.impact_verdict == "PASS" {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Coverage        : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&app.impact_coverage, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if app.impact_truncated {
+                    "  |  truncated=true"
+                } else {
+                    "  |  truncated=false"
+                },
+                Style::default().fg(if app.impact_truncated {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Traversal       : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{} / {} / budget {}",
+                    app.impact_direction, app.impact_profile, app.impact_budget
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Impact digest   : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(digest, Style::default().fg(Color::LightCyan)),
+        ]),
+        Line::from(""),
+    ];
+    evidence_lines.extend(detail_lines);
+
+    let detail_widget = Paragraph::new(evidence_lines).block(
         Block::default()
             .title(" Blast Radius Provenance & Confidence Inspector ")
             .borders(Borders::ALL)
@@ -1513,6 +1919,18 @@ mod tests {
             search_active: false,
             input_buffer: String::new(),
             should_quit: false,
+            daemon_connected: false,
+            repository_id: String::new(),
+            last_event_seq: 0,
+            freshness: "offline analysis not synchronized".to_string(),
+            impact_verdict: "UNKNOWN".to_string(),
+            impact_coverage: "unknown".to_string(),
+            impact_truncated: false,
+            impact_digest: String::new(),
+            impact_direction: "unknown".to_string(),
+            impact_profile: "unknown".to_string(),
+            impact_budget: 0,
+            last_daemon_sync: None,
         }
     }
 

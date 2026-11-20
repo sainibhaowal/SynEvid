@@ -5,7 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Added the Phase 4 authenticated runtime authority: daemon identity, client
+  leases, shared CLI/TUI/MCP/UI request identity, explicit offline mode,
+  replay-gap reporting, source-client evidence metadata, and the shared runtime
+  envelope schema. G4 remains pending native Rust/CI verification; no canvas
+  renderer or visual behavior was changed.
+
+- Added executable Phase 0/1 requirement registry and CI truth/evidence validators.
+- Added the shared BLAKE3 evidence envelope to daemon JSON responses and MCP
+  envelopes, with explicit unknown/unavailable states and no PASS promotion.
+- Synchronized the TUI with daemon status and replay cursors when connected; offline
+  analysis is labeled instead of silently presented as shared state.
+- Added WAL/SHM sidecar preservation, restart cursor, and transaction rollback tests,
+  plus structured daemon operation logs that omit source contents and full paths.
+- Closed the literal Phase 2 language/graph/blast-radius gate: canonical deterministic
+  traversal, real overlay parsing, structured daemon-backed terminal impact queries,
+  TUI evidence parity, and non-PASS handling for name-level/inferred/unknown edges.
+  Evidence: `docs/evidence/102-phase2-language-graph-blast-radius-closure.md`.
+- Hardened Phase 3 native Git integrity: SHA-1 object verification, packed-size checks,
+  strict malformed-history errors, and explicit file-heuristic versus semantic Galaxy
+  evidence. Packed 5,000-commit release loading measured 140.61 ms; the Windows
+  loose-object cold-start limitation remains honestly tracked as partial in evidence 103.
+
+## [0.6.0] - 2026-11-03
+
+SynEvid v0.6.0 is the cumulative desktop milestone from the v0.1.0 core foundation through the Phase 1-5 delivery line. It brings deterministic repository analysis, native Git forensics, the live trajectory/MCP workflow, and a production Electron shell into one offline developer experience.
+
+### Highlights
+
+- **Offline, deterministic verification:** BLAKE3-addressed snapshots, canonical outputs, SQLite WAL persistence, corruption recovery, ordered event replay, and explicit `PASS`, `FAIL`, `PARTIAL`, and `UNKNOWN` coverage states.
+- **Real repository-to-canvas flow:** Connect a repository, scan it, inspect persisted symbols and semantic edges, open source ranges, simulate unsaved edits, and inspect the resulting impact without writing source files.
+- **Native Git forensics:** Read loose and packed Git objects, delta chains, branches, tags, merge parents, dirty worktrees, historical snapshots, semantic diffs, blame, bisect, staging, and guarded Git controls without invoking the external Git process.
+- **Forensic trajectory timeline:** Persist sessions, workflows, steps, jobs, receipts, edit simulations, verification results, rollback actions, and replayable live events in the selected repository's SQLite store.
+- **Live MCP and AI workflow:** MCP actions use the real daemon APIs, persist trajectory receipts, publish ordered activity events, and expose real working-memory/cache metrics without fabricated PASS or token-savings fallbacks.
+- **Native Electron desktop delivery:** Live source development plus Windows NSIS/portable/MSI, macOS DMG/ZIP, and Linux AppImage/DEB/RPM release targets, with a Rust sidecar, bundled Next.js cockpit, MCP bridge, watchdog, preload isolation, loopback authentication, and packaged smoke coverage.
+- **Analytics and export:** Deterministic structural-health, dead-code, Git-risk, and AI-session reports in JSON, Markdown, HTML, and SARIF, with canonical BLAKE3 report digests.
+
+### Phase milestones
+
+- **v0.1.0 to v0.2.0 - Core and daemon:** Added the pluggable analyzer registry, SQLite persistence and migrations, real incremental simulation, workspace detection, safe path traversal, deterministic snapshots, live event transport, recovery receipts, and the WASM plugin policy loader.
+- **v0.3.0 - Infinite Code Universe and simulator:** Connected scan, graph, editor, simulator, and canvas data paths; bounded large-graph projection; added deterministic layouts, semantic source-line edges, real editor overlays, worker-backed graph preparation, and honest unsupported-coverage handling.
+- **v0.4.0 - Native Git and time travel:** Added pure-Rust `.git` reading, packed-object and delta support, commit DAGs, virtual historical trees, semantic diffs, Git Galaxy controls, staging/commit/branch/checkout/revert/undo flows, blame, bisect, terminal workbench, and recovery receipts.
+- **v0.5.0 - Timeline, cache, and MCP:** Added persisted forensic sessions and trajectories, real edit-to-verify integration, MCP tool wiring, WebSocket/SSE replay, restart recovery, AI Active activity signals, six-turn cache acceptance coverage, deterministic trace bundles, and client configuration generation.
+- **v0.6.0 - Electron and release engineering:** Added the standalone desktop runtime, live `npm run dev` source workflow, cross-platform packaging definitions, daemon watchdog and security controls, analytics center, workspace presets, report export, artifact verification, native-runner CI, and packaged launch/health tests.
+
+### Fixes and hardening
+
+- Removed hard-coded repository defaults and fixed the selected-directory path being appended twice. User-selected paths are canonicalized once and remain the active repository internally.
+- Removed misleading `User Home`, `Root Filesystem`, and repository shortcuts from runtime selection and manual data. The picker now represents temporary navigation state, not a fixed repository.
+- Fixed Electron source startup to use the live Next.js and Rust source runtimes, clear inherited `ELECTRON_RUN_AS_NODE`, use the intended loopback port, and keep the branded splash until the cockpit is healthy.
+- Kept development-only React `unsafe-eval` scoped to the local source runtime; packaged production retains the restrictive CSP.
+- Replaced fabricated graph, simulator, MCP, cache, and TUI output with authoritative daemon data or explicit non-actionable error envelopes.
+- Added truthful invalid-root, storage-corruption, daemon-watchdog, path-containment, and unsupported-coverage diagnostics.
+- Preserved the existing 2D/3D canvas renderer, animation loop, camera/orbit behavior, WebGL buffers, and canvas styling while wiring real historical, trajectory, and AI activity data around it.
+
+### Verification and release contents
+
+- Rust workspace, Rust documentation, MCP, web, Electron, analytics, determinism, architecture, and packaged smoke checks are covered by focused local and CI gates.
+- Native release jobs verify Windows NSIS/portable/MSI, macOS DMG/ZIP, and Linux AppImage/DEB/RPM targets on their respective runners.
+- Free release provenance is supported through SHA-256 checksums, SBOM output, and Sigstore-compatible attestations. Paid OS signing and notarization are not required for building or testing artifacts.
+
+### Known limitations
+
+- A strict sub-150 ms history-loading claim is not made for every cold loose-object repository; packed warm-path measurements and native CI coverage are tracked separately.
+- OS signing/notarization credentials are intentionally not bundled. Windows, macOS, and Linux artifacts can be distributed unsigned with the normal platform trust warnings.
+- The existing `[Unreleased]` section contains post-v0.6.0 maintenance and release-gate follow-ups; the paste-ready GitHub body is maintained at [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md).
+
 ## [Unreleased] - Native Live Electron Runtime & Accurate Repository Selection (2026-11-01)
+
+### Phase 0/1 truth and daemon closure (2026-11-05)
+
+- Replaced embedded terminal blast-radius demo output with real indexed-graph impact analysis and explicit error/unknown envelopes.
+- Removed static AI metrics, terminal transcripts, demo repository buffers, and legacy dashboard latency/verdict placeholders from production presentation paths.
+- Changed Git tree decode failures to `UNKNOWN`, added authenticated CLI `attach`/`status`, and propagated loopback tokens through MCP.
+- Moved live-event SQLite persistence off the producer wake-up path with a bounded back-pressure queue while preserving monotonic sequence IDs and replay.
+- Added evidence receipt 101 and traceability rows for the Phase 0/1 truth and daemon contracts. No 2D/3D canvas renderer, animation, camera, WebGL, or styling implementation was changed.
+- Added executable requirement/evidence validators, real Electron daemon-restart replay coverage, and aggregate CI failure propagation for Electron and Phase 3 required jobs.
 
 ### Phase 1 literal PRD closure
 

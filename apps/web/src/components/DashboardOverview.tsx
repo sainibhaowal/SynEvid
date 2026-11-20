@@ -51,11 +51,11 @@ export default function DashboardOverview({
             <span>Snapshot Digest</span>
             <GitBranch className="w-4 h-4 text-cyan-500" />
           </div>
-          <div className="text-xl font-bold font-mono text-[var(--text-primary)] mt-2 truncate" title={snapshotId}>
-            {snapshotId.substring(0, 16)}...
+          <div className="text-xl font-bold font-mono text-[var(--text-primary)] mt-2 truncate" title={snapshotId || 'No active snapshot'}>
+            {snapshotId ? `${snapshotId.substring(0, 16)}...` : 'No active snapshot'}
           </div>
           <div className="text-xs text-[var(--text-muted)] mt-1 truncate" title={repoRoot}>
-            Repo: {repoRoot}
+            Repo: {repoRoot || 'Unavailable'}
           </div>
         </div>
 
@@ -69,7 +69,7 @@ export default function DashboardOverview({
             {coverageState.toUpperCase()}
           </div>
           <div className="text-xs text-[var(--text-muted)] mt-1">
-            {filesScanned} Source Files Verified
+            {filesScanned > 0 ? `${filesScanned} source files in scope` : 'Files not measured'}
           </div>
         </div>
 
@@ -103,8 +103,10 @@ export default function DashboardOverview({
             {ruleFindingsCount} Rules
           </div>
           <div className="text-xs mt-1 font-mono font-medium">
-            {failingRulesCount === 0 ? (
-              <span className="text-emerald-600 dark:text-emerald-400">100% Passing</span>
+            {ruleFindingsCount === 0 ? (
+              <span className="text-[var(--text-muted)]">No findings returned</span>
+            ) : failingRulesCount === 0 ? (
+              <span className="text-emerald-600 dark:text-emerald-400">No failures within scope</span>
             ) : (
               <span className="text-rose-600 dark:text-rose-400">{failingRulesCount} Violations</span>
             )}
@@ -122,7 +124,7 @@ export default function DashboardOverview({
             </h3>
           </div>
           <span className="text-xs font-mono text-sky-700 dark:text-cyan-400 px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-cyan-500/10 border border-sky-200 dark:border-cyan-500/20 font-bold">
-            Sub-15ms Push Deliv
+            Measured from live event samples
           </span>
         </div>
 
@@ -177,7 +179,7 @@ export default function DashboardOverview({
                 </td>
                 <td className="py-2.5 text-right">
                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    100% WIRED
+                    Evidence-backed
                   </span>
                 </td>
               </tr>
@@ -190,7 +192,7 @@ export default function DashboardOverview({
                 </td>
                 <td className="py-2.5 text-right">
                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    &lt; 5ms WAL
+                    Storage health API
                   </span>
                 </td>
               </tr>
@@ -203,7 +205,7 @@ export default function DashboardOverview({
                 </td>
                 <td className="py-2.5 text-right">
                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    100/100 DETERMINISTIC
+                    100-run tests
                   </span>
                 </td>
               </tr>
@@ -216,7 +218,7 @@ export default function DashboardOverview({
                 </td>
                 <td className="py-2.5 text-right">
                   <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-sky-50 dark:bg-cyan-500/15 text-sky-700 dark:text-cyan-400 border border-sky-200 dark:border-cyan-500/20">
-                    &le; 50ms P95
+                    Request samples
                   </span>
                 </td>
               </tr>
