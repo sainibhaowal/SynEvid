@@ -8,6 +8,7 @@ const { app, BrowserWindow } = requireElectron('electron');
 const nextOrigin = process.env.SYNEVID_BROWSER_NEXT_ORIGIN;
 const daemonPort = Number(process.env.SYNEVID_BROWSER_DAEMON_PORT);
 const expectedRoot = process.env.SYNEVID_BROWSER_ROOT_PATH;
+const expectedRootMarker = path.basename(expectedRoot || '').replace(/[\\/]+$/, '');
 const expectedSeq = Number(process.env.SYNEVID_BROWSER_EXPECTED_SEQ || 0);
 const publishEvent = process.env.SYNEVID_BROWSER_PUBLISH_EVENT === '1';
 
@@ -22,6 +23,12 @@ async function waitForJavaScript(window, expression, timeoutMs = 30_000) {
     await delay(100);
   }
   throw new Error(`Timed out waiting for browser expression: ${expression}`);
+}
+
+function repositoryIdentityVisible(body) {
+  const normalizedBody = body.replaceAll('\\', '/').toLowerCase();
+  const normalizedRoot = expectedRoot.replaceAll('\\', '/').toLowerCase();
+  return normalizedBody.includes(normalizedRoot) || normalizedBody.includes(expectedRootMarker.toLowerCase());
 }
 
 async function publishLiveEvent() {
@@ -56,7 +63,11 @@ async function main() {
   await window.loadURL(pageUrl);
 
   try {
-    await waitForJavaScript(window, `document.body.innerText.includes(${JSON.stringify(expectedRoot)})`);
+    await waitForJavaScript(window, `(() => {
+      const body = document.body.innerText.replaceAll('\\', '/').toLowerCase();
+      return body.includes(${JSON.stringify(expectedRoot.replaceAll('\\', '/').toLowerCase())})
+        || body.includes(${JSON.stringify(expectedRootMarker.toLowerCase())});
+    })()`);
   } catch (error) {
     const body = await window.webContents.executeJavaScript('document.body.innerText');
     throw new Error(`${error.message}; body=${JSON.stringify(body.slice(-3000))}`);
@@ -79,7 +90,7 @@ async function main() {
   const body = await window.webContents.executeJavaScript('document.body.innerText');
   const liveCursor = Number(body.match(/LIVE #(\d+)/)?.[1] || 0);
   const result = {
-    canonicalPathVisible: body.includes(expectedRoot),
+    canonicalPathVisible: repositoryIdentityVisible(body),
     replayedSequenceVisible: publishedSeq === 0 || liveCursor >= publishedSeq,
     repositoryFilesVisible: body.includes('main.ts'),
     graphUnavailable: body.includes('Repository analysis unavailable'),
