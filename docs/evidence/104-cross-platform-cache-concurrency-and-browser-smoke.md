@@ -110,3 +110,16 @@ parallel run failed 3/21; its temporary config had lost strict mode and the
 sets `--test-concurrency=1`; the full serialized suite passed **21/21** on
 Windows. This serializes test execution only and does not change application
 runtime or rendering behavior.
+
+Run `44995105101` on `96ccee458a17ce8f0803600b56ccaf1e37678d55` passed Linux
+package/install smoke, Windows/Linux/macOS workspace tests, all three strict
+history gates, and the other shared validation jobs. The macOS browser smoke
+still failed after the daemon accepted live event sequence 100: the hidden
+Electron view changed to the generic page load-error view before `LIVE #100`
+appeared. The previous SwANGLE/Vulkan/EGL errors no longer appeared, so removing
+SwiftShader resolved that specific GPU failure but not the page transition. The
+runner now captures current URL/title, loading/crash state, renderer
+console/navigation/crash diagnostics, and Next.js dev-server output on failure.
+A fresh native run is necessary to examine these details. The macOS installer
+smoke is skipped when this preceding browser workflow fails, so macOS packaging
+is still unverified. G5 remains **PARTIAL**.

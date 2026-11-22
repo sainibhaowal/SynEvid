@@ -115,7 +115,14 @@ async function main() {
       await waitForJavaScript(window, cursorExpression);
     } catch (error) {
       const body = await window.webContents.executeJavaScript('document.body.innerText');
-      throw new Error(`${error.message}; body=${JSON.stringify(body.slice(-4000))}`);
+      const pageState = {
+        url: window.webContents.getURL(),
+        title: window.webContents.getTitle(),
+        isLoading: window.webContents.isLoading(),
+        isLoadingMainFrame: window.webContents.isLoadingMainFrame(),
+        rendererCrashed: window.webContents.isCrashed(),
+      };
+      throw new Error(`${error.message}; page=${JSON.stringify(pageState)}; diagnostics=${JSON.stringify(rendererDiagnostics.slice(-50))}; body=${JSON.stringify(body.slice(-4000))}`);
     }
   }
 

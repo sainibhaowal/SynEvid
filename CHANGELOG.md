@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed 21/21. A new exact-revision native run is required; G5 remains
   **PARTIAL**. Production canvas behavior is untouched.
 
+- **macOS live-event smoke investigation:** run `44995105101` passed Linux
+  package/install smoke, Windows/Linux/macOS workspace tests, and all three
+  strict history gates, but macOS still failed after broadcasting event 100:
+  the hidden Electron page changed to its load-error view before displaying
+  `LIVE #100`. The SwiftShader/EGL errors are gone, so this is a distinct
+  renderer/page failure. The browser test now reports page loading/crash state,
+  Electron navigation/console diagnostics, and the captured Next.js server log
+  on failure. Local serialized web tests pass 21/21. The exact macOS cause and
+  native macOS package smoke are still unproven; G5 remains **PARTIAL**.
+
 - **Cross-platform follow-up:** fixed a race in concurrent content-addressed
   cache writes by assigning each writer an exclusive temporary file and cleaning
   it on errors. The Windows integration test verifies published bytes and no

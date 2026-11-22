@@ -170,18 +170,26 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
   const canonicalRoot = normalizePath(root);
   const daemonPort = await reservePort();
   const nextPort = await reservePort();
+  let nextOutput = '';
   const next = spawn(process.execPath, [NEXT_BIN, 'dev', '-p', String(nextPort), '-H', '127.0.0.1'], {
     cwd: WEB_DIR,
     env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', SYNEVID_NEXT_DIST_DIR: `.next-phase1-${nextPort}` },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  next.stdout.on('data', (chunk) => { nextOutput += chunk.toString(); });
+  next.stderr.on('data', (chunk) => { nextOutput += chunk.toString(); });
   let daemon;
   let restarted;
   try {
     daemon = await startDaemon(root, daemonPort);
     await waitForHttp(`http://127.0.0.1:${nextPort}/`);
-    const first = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, 0, true);
+    let first;
+    try {
+      first = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, 0, true);
+    } catch (error) {
+      throw new Error(`${error.message}; Next.js output=${JSON.stringify(nextOutput.slice(-12_000))}`);
+    }
     assert.equal(first.canonicalPathVisible, true);
     assert.equal(first.replayedSequenceVisible, true);
     assert.equal(first.repositoryFilesVisible, true);
@@ -192,7 +200,12 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
     await stopProcess(daemon);
     await new Promise((resolve) => setTimeout(resolve, 250));
     restarted = await startDaemon(root, daemonPort);
-    const second = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, first.publishedSeq, false);
+    let second;
+    try {
+      second = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, first.publishedSeq, false);
+    } catch (error) {
+      throw new Error(`${error.message}; Next.js output=${JSON.stringify(nextOutput.slice(-12_000))}`);
+    }
     assert.equal(second.canonicalPathVisible, true);
     assert.equal(second.replayedSequenceVisible, true);
     assert.equal(second.repositoryFilesVisible, true);
