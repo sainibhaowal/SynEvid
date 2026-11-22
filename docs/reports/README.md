@@ -24,6 +24,7 @@ test logs, receipts, schemas, or source-level traceability.
 - [Phase 2 evaluation](phase-2/01-evaluation.md) and [ablation report](phase-2/02-ablation.md)
 - [Phase 3 evaluation](phase-3/01-evaluation.md) and [ablation report](phase-3/02-ablation.md)
 - [Phase 4 authenticated-runtime evaluation](phase-4/01-evaluation.md) and [ablation report](phase-4/02-ablation.md)
+- [Phase 5 packaged lifecycle/security evaluation](phase-5/01-evaluation.md) and [ablation applicability report](phase-5/02-ablation.md)
 - [Phase 0–3 publication report](publication/PHASE_0_TO_3_PUBLICATION_REPORT.md)
 - [Evolution log](evolution/README.md)
 - [Evaluation template](templates/EVALUATION_TEMPLATE.md)

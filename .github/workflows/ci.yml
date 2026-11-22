@@ -269,6 +269,10 @@ jobs:
         working-directory: apps/desktop-electron
         run: npm ci --no-audit --no-fund
 
+      - name: Run Electron desktop and packaged-security unit tests
+        working-directory: apps/desktop-electron
+        run: npm test
+
       - name: Build real Phase 1 daemon browser test target
         run: cargo build -p synevid-ui
 

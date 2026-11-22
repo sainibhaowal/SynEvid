@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Phase 5 packaged watchdog/security follow-up (local Windows):** fixed the
+  desktop daemon treating its app-data directory as the active repository after
+  a crash/restart by introducing explicit `--managed-runtime` startup. Added a
+  Rust regression test and packaged checks for authenticated status/report
+  identity after recovery, forced daemon termination (`ERR-DAEMON-301`), CSP,
+  renderer isolation, hostile navigation/IPC denial, native tray Show/Quit,
+  service shutdown, and install/uninstall. Local Windows Electron tests passed
+  21/21, the managed-runtime Rust test passed, and NSIS plus portable package
+  smokes passed against a real temporary repository. This remains PARTIAL until
+  the exact pushed revision passes native Windows/Linux/macOS CI and the
+  aggregate daemon/npm SBOM, checksum, Sigstore, and SLSA workflow. No OS signing
+  is claimed. Evidence: `docs/evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md`.
+
+- **Phase 5 native cross-platform G5 acceptance verified:** exact source SHA
+  `42c6f48dafab1663d658ca1164952cd458bd2c35` passed GitHub Actions run
+  [44998015104](https://github.com/sainibhaowal/SynEvid/actions/runs/44998015104).
+  Windows NSIS/portable, Linux DEB/AppImage, and macOS DMG/ZIP packaged smokes
+  passed authenticated repository analysis, receipt verification, and clean
+  exit. Required artifacts and Electron/cockpit/MCP CycloneDX SBOMs were
+  checked. Windows, Linux, and Apple Silicon macOS workspace/docs suites and
+  the three strict 5,000-commit performance gates passed. Artifacts are
+  unsigned. The separate post-merge daemon-SBOM/checksum/Sigstore/SLSA release
+  bundle was not run on this branch, so broader supply-chain evidence remains
+  **PARTIAL**. Windows MSI was built and verified but not installer-smoked. No
+  canvas renderer, camera, animation, or styling code changed. Evidence:
+  `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
 - **Phase 5 cross-platform smoke follow-up:** the last completed native matrix on
   `8ac1052` (Actions run `44988175938`) passed the Windows packaged install,
   real repository analysis, UI/daemon receipt, workspace, and platform checks.

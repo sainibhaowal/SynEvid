@@ -30,8 +30,12 @@ const LOOPBACK_TOKEN = process.env.SYNEVID_LOOPBACK_TOKEN || crypto.randomBytes(
 let shuttingDown = false;
 let daemonRestartTimer = null;
 let daemonRestartAttempts = 0;
+let daemonRecoveryReceipt = null;
 let tray = null;
+let trayContextMenu = null;
 let mcpTokenFilePath = null;
+let observedMainFrameCsp = null;
+let rendererWebPreferences = null;
 
 function cockpitRendererUrl() {
   const url = new URL(COCKPIT_URL);
@@ -110,6 +114,17 @@ function showDaemonErrorBanner(message) {
 function clearDaemonErrorBanner() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.executeJavaScript("document.getElementById('synevid-daemon-error')?.remove()").catch(() => {});
+}
+
+function quitFromTray() {
+  if (process.env.SYNEVID_SMOKE === '1' && process.env.SYNEVID_SMOKE_REPO) {
+    fs.writeFileSync(path.join(process.env.SYNEVID_SMOKE_REPO, '.synevid-tray-quit-invoked'), 'invoked\n', {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  }
+  app.quit();
 }
 
 function readFrameMeterStats() {
@@ -559,6 +574,186 @@ async function verifyVisibleAnalyticsReceipt(expected) {
   throw new Error(`Visible analytics receipt did not become ready: ${lastState}`);
 }
 
+async function verifyPackagedSecurityBoundaries() {
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Security smoke window is unavailable');
+  const preferences = rendererWebPreferences || {};
+  if (preferences.contextIsolation !== true || preferences.nodeIntegration !== false ||
+      preferences.sandbox !== true || preferences.webviewTag === true) {
+    throw new Error(`Packaged renderer preferences are not isolated: ${JSON.stringify({
+      contextIsolation: preferences.contextIsolation,
+      nodeIntegration: preferences.nodeIntegration,
+      sandbox: preferences.sandbox,
+      webviewTag: preferences.webviewTag,
+    })}`);
+  }
+
+  const csp = observedMainFrameCsp || '';
+  const scriptDirective = csp.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('script-src ')) || '';
+  const nonce = scriptDirective.match(/'nonce-([^']+)'/)?.[1];
+  if (!nonce || !scriptDirective.includes("'strict-dynamic'") ||
+      scriptDirective.includes("'unsafe-eval'") || !csp.includes("object-src 'none'") ||
+      !csp.includes("frame-ancestors 'none'")) {
+    throw new Error(`Packaged renderer CSP did not meet the nonce/deny contract: ${csp}`);
+  }
+  const renderer = await mainWindow.webContents.executeJavaScript(`(() => ({
+    hasNodeRequire: typeof window.require !== 'undefined',
+    hasNodeProcess: typeof window.process !== 'undefined',
+    hasElectron: typeof window.electron !== 'undefined' || typeof window.ipcRenderer !== 'undefined',
+    desktopBridge: Boolean(window.synevidDesktop?.isDesktop),
+    inlineScriptNonces: [...document.scripts].filter((script) => !script.src).map((script) => script.nonce),
+  }))()`);
+  if (renderer.hasNodeRequire || renderer.hasNodeProcess || renderer.hasElectron ||
+      !renderer.desktopBridge || renderer.inlineScriptNonces.length === 0 ||
+      renderer.inlineScriptNonces.some((value) => value !== nonce)) {
+    throw new Error(`Packaged renderer isolation/CSP nonce check failed: ${JSON.stringify(renderer)}`);
+  }
+
+  const initialOrigin = new URL(mainWindow.webContents.getURL()).origin;
+  const initialWindowCount = BrowserWindow.getAllWindows().length;
+  await mainWindow.webContents.executeJavaScript(`(() => {
+    window.open('https://synevid-untrusted.invalid/', '_blank');
+    window.location.assign('https://synevid-untrusted.invalid/');
+    return true;
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  if (new URL(mainWindow.webContents.getURL()).origin !== initialOrigin ||
+      BrowserWindow.getAllWindows().length !== initialWindowCount) {
+    throw new Error('Packaged shell allowed untrusted navigation or a popup');
+  }
+
+  // A second window with the real preload but an untrusted data: origin proves
+  // IPC handlers reject a hostile sender in the actual packaged main process.
+  const hostileWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    await hostileWindow.loadURL('data:text/html,<html><body>untrusted sender test</body></html>');
+    const hostileResults = await hostileWindow.webContents.executeJavaScript(`(async () => ({
+      status: await window.synevidDesktop.getDaemonStatus(),
+      token: window.synevidDesktop.getDaemonToken(),
+      directory: await window.synevidDesktop.openDirectory(),
+    }))()`);
+    if (hostileResults.status?.error_code !== 'ERR-IPC-403' ||
+        hostileResults.token !== null || hostileResults.directory !== null) {
+      throw new Error(`Untrusted IPC sender was not refused: ${JSON.stringify(hostileResults)}`);
+    }
+  } finally {
+    if (!hostileWindow.isDestroyed()) hostileWindow.destroy();
+  }
+  console.log('PACKAGED_SECURITY_BOUNDARIES_PASS', {
+    context_isolation: true,
+    node_integration: false,
+    sandbox: true,
+    nonce_csp: true,
+    untrusted_navigation_blocked: true,
+    popup_blocked: true,
+    invalid_ipc_sender_refused: true,
+  });
+  return {
+    context_isolation: true,
+    node_integration_disabled: true,
+    sandbox: true,
+    nonce_csp_verified: true,
+    untrusted_navigation_blocked: true,
+    popup_blocked: true,
+    invalid_ipc_sender_refused: true,
+  };
+}
+
+function verifyDesktopMenuAndTray() {
+  const menu = Menu.getApplicationMenu();
+  const menuLabels = menu?.items.map((item) => item.label).filter(Boolean) || [];
+  if (!menuLabels.includes('SynEvid') || !menuLabels.includes('View')) {
+    throw new Error(`Native application menu is missing required entries: ${JSON.stringify(menuLabels)}`);
+  }
+  const trayMenu = trayContextMenu;
+  const trayLabels = trayMenu?.items.map((item) => item.label).filter(Boolean) || [];
+  if (tray && (!trayLabels.includes('Show SynEvid') || !trayLabels.includes('Quit'))) {
+    throw new Error(`Tray menu is missing required actions: ${JSON.stringify(trayLabels)}`);
+  }
+  if ((process.platform === 'win32' || process.platform === 'darwin') && !tray) {
+    throw new Error('Native tray initialization failed on a platform where tray controls are required');
+  }
+  const showItem = trayMenu?.items.find((item) => item.label === 'Show SynEvid');
+  const quitItem = trayMenu?.items.find((item) => item.label === 'Quit');
+  if (showItem?.click) showItem.click();
+  if ((process.platform === 'win32' || process.platform === 'darwin') && !quitItem?.click) {
+    throw new Error('Tray Quit action is unavailable on a platform where tray controls are required');
+  }
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) {
+    throw new Error('Show SynEvid tray action did not restore the application window');
+  }
+  const receipt = {
+    application_menu_verified: true,
+    tray_available: Boolean(tray),
+    tray_actions_verified: Boolean(showItem?.click && quitItem?.click),
+    tray_quit_action_verified: Boolean(quitItem?.click),
+  };
+  console.log('PACKAGED_MENU_TRAY_PASS', receipt);
+  return receipt;
+}
+
+async function verifyDaemonWatchdogRecovery(expectedRepositoryId) {
+  const crashedProcess = daemonProcess;
+  if (!crashedProcess || crashedProcess.exitCode !== null || crashedProcess.signalCode !== null) {
+    throw new Error('Watchdog smoke requires the packaged app to own a running daemon process');
+  }
+  const exited = new Promise((resolve) => crashedProcess.once('exit', (code, signal) => resolve({ code, signal })));
+  if (!crashedProcess.kill()) throw new Error('Could not terminate the disposable smoke daemon');
+  const exit = await Promise.race([
+    exited,
+    new Promise((resolve) => setTimeout(() => resolve(null), 10_000)),
+  ]);
+  if (!exit) throw new Error('Disposable smoke daemon did not exit after termination request');
+
+  const deadline = Date.now() + 45_000;
+  let lastState = 'replacement daemon has not become healthy';
+  while (Date.now() < deadline) {
+    const healthy = await checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`, 1000, {
+      Authorization: `Bearer ${LOOPBACK_TOKEN}`,
+    });
+    if (healthy && daemonRecoveryReceipt?.state === 'RECOVERED') {
+      const status = await requestJson(`http://127.0.0.1:${DAEMON_PORT}/api/v1/status`, {
+        token: LOOPBACK_TOKEN,
+      }).catch((error) => ({ error }));
+      const report = await requestJson(`http://127.0.0.1:${DAEMON_PORT}/api/v1/analytics/report?format=json`, {
+        token: LOOPBACK_TOKEN,
+      }).catch((error) => ({ error }));
+      const actualRepositoryId = report.json?.report?.repository?.repo_id;
+      const activeRepositoryId = status.json?.active_repo_id;
+      if (status.error || status.statusCode !== 200 || activeRepositoryId !== expectedRepositoryId ||
+          report.error || report.statusCode !== 200 || actualRepositoryId !== expectedRepositoryId) {
+        throw new Error(`Recovered daemon did not restore the same repository: ${JSON.stringify({
+          expected_repository_id: expectedRepositoryId,
+          active_repository_id: activeRepositoryId,
+          status_code: status.statusCode,
+          status_error: status.json?.error || status.error?.message,
+          actual_repository_id: actualRepositoryId,
+          report_status_code: report.statusCode,
+          report_error: report.json?.error || report.error?.message,
+          request_error: report.error?.message,
+        })}`);
+      }
+      const bannerCode = await mainWindow?.webContents.executeJavaScript(
+        "document.getElementById('synevid-daemon-error')?.textContent || ''"
+      ).catch(() => '');
+      if (bannerCode) throw new Error(`Recovery banner remained after daemon health returned: ${bannerCode}`);
+      console.log('PACKAGED_WATCHDOG_RECOVERY_PASS', daemonRecoveryReceipt);
+      return { ...daemonRecoveryReceipt, same_repository_restored: true };
+    }
+    lastState = daemonRecoveryReceipt?.state || lastState;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Daemon watchdog failed to recover within 45 seconds (state=${lastState})`);
+}
+
 async function runPackagedSmokeWorkflow() {
   const runtimeIntegrity = app.isPackaged
     ? verifyRuntimeManifest(process.resourcesPath)
@@ -668,6 +863,9 @@ async function runPackagedSmokeWorkflow() {
     digest: finalReportEnvelope.digest,
     report: finalReportEnvelope.report,
   });
+  const securityVerification = await verifyPackagedSecurityBoundaries();
+  const desktopControls = verifyDesktopMenuAndTray();
+  const watchdogVerification = await verifyDaemonWatchdogRecovery(connected.json.repo_id);
   console.log('PACKAGED_SMOKE_UI_RECEIPT_PASS', {
     repository_id: connected.json.repo_id,
     snapshot_id: scan.snapshot_id,
@@ -700,6 +898,9 @@ async function runPackagedSmokeWorkflow() {
     mcp_trajectory_persisted: mcpImpact.trajectory.trajectory_persisted,
     ui_receipt_verified: true,
     runtime_files_verified: runtimeIntegrity?.files_verified ?? null,
+    security_verification: securityVerification,
+    desktop_controls: desktopControls,
+    watchdog_recovery: watchdogVerification,
     missing_token_status: unauthenticated.statusCode,
     invalid_token_status: invalidToken.statusCode,
   };
@@ -723,6 +924,52 @@ async function waitForApplicationHealth(maxAttempts = 60) {
   return false;
 }
 
+function recordDaemonHealthy() {
+  if (daemonRecoveryReceipt?.state === 'RECOVERING') {
+    daemonRecoveryReceipt = { ...daemonRecoveryReceipt, state: 'RECOVERED' };
+    console.log('[SynEvid Desktop] ERR-DAEMON-301', JSON.stringify(daemonRecoveryReceipt));
+  }
+  daemonRestartAttempts = 0;
+  clearDaemonErrorBanner();
+}
+
+function scheduleDaemonRestart(child, message) {
+  if (shuttingDown || daemonRestartTimer) return;
+  if (daemonProcess === child) daemonProcess = null;
+  daemonRestartAttempts += 1;
+  daemonRecoveryReceipt = {
+    code: 'ERR-DAEMON-301',
+    state: 'RECOVERING',
+    attempt: daemonRestartAttempts,
+    message,
+  };
+  console.error('[SynEvid Desktop] ERR-DAEMON-301', JSON.stringify(daemonRecoveryReceipt));
+  showDaemonErrorBanner(message);
+  const backoffMs = Math.min(5_000, 250 * (2 ** Math.min(daemonRestartAttempts - 1, 5)));
+  daemonRestartTimer = setTimeout(() => {
+    daemonRestartTimer = null;
+    void ensureSidecarDaemon();
+  }, backoffMs);
+}
+
+async function monitorSidecarStartup(child) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (shuttingDown || daemonProcess !== child) return;
+    const healthy = await checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`, 1000, {
+      Authorization: `Bearer ${LOOPBACK_TOKEN}`,
+    });
+    if (healthy) {
+      recordDaemonHealthy();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (daemonProcess === child && !shuttingDown) {
+    scheduleDaemonRestart(child, 'sidecar did not become healthy before startup timeout');
+    try { child.kill(); } catch {}
+  }
+}
+
 const SPLASH_DATA_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML);
 
 // Ensure sidecar daemon is running natively on Windows
@@ -732,6 +979,7 @@ async function ensureSidecarDaemon() {
   });
   if (isHealthy) {
     console.log(`[SynEvid Desktop] Reusing active synevid-ui daemon on port ${DAEMON_PORT}`);
+    recordDaemonHealthy();
     return;
   }
 
@@ -747,7 +995,7 @@ async function ensureSidecarDaemon() {
     if (LIVE_DEVELOPMENT) {
       const cargoCmd = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
       console.log('[SynEvid Desktop] Live development: starting synevid-ui from source via Cargo.');
-      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot()], {
+      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
         cwd: repoRoot,
         stdio: 'ignore',
         detached: false,
@@ -766,7 +1014,7 @@ async function ensureSidecarDaemon() {
         },
       });
     } else if (existingBinary) {
-      daemonProcess = spawn(existingBinary, ['--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot()], {
+      daemonProcess = spawn(existingBinary, ['--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
         cwd: daemonRepositoryRoot(),
         stdio: 'ignore',
         detached: false,
@@ -786,7 +1034,7 @@ async function ensureSidecarDaemon() {
       });
     } else {
       const cargoCmd = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
-      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot()], {
+      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
         cwd: repoRoot,
         stdio: 'ignore',
         detached: false,
@@ -795,27 +1043,18 @@ async function ensureSidecarDaemon() {
       });
     }
 
-    daemonProcess.on('error', (err) => {
-      console.warn('[SynEvid Desktop] Sidecar daemon spawn warning:', err.message);
-      showDaemonErrorBanner(err.message);
+    const child = daemonProcess;
+    child.on('error', (err) => {
+      scheduleDaemonRestart(child, `sidecar spawn failed: ${err.message}`);
     });
-    daemonProcess.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
       if (shuttingDown) return;
-      daemonProcess = null;
-      daemonRestartAttempts += 1;
       const detail = `sidecar exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})`;
-      showDaemonErrorBanner(detail);
-      const delay = Math.min(2000, 100 * daemonRestartAttempts);
-      daemonRestartTimer = setTimeout(async () => {
-        daemonRestartTimer = null;
-        await ensureSidecarDaemon();
-      }, delay);
+      scheduleDaemonRestart(child, detail);
     });
-    daemonRestartAttempts = 0;
-    clearDaemonErrorBanner();
+    void monitorSidecarStartup(child);
   } catch (err) {
-    console.warn('[SynEvid Desktop] Sidecar spawn exception:', err.message);
-    showDaemonErrorBanner(err.message);
+    scheduleDaemonRestart(daemonProcess, `sidecar spawn exception: ${err.message}`);
   }
 }
 
@@ -916,6 +1155,11 @@ async function ensureWebCockpit() {
 
 function createWindow() {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType === 'mainFrame' && details.url.startsWith(COCKPIT_URL)) {
+      const header = Object.entries(details.responseHeaders || {})
+        .find(([name]) => name.toLowerCase() === 'content-security-policy')?.[1];
+      observedMainFrameCsp = Array.isArray(header) ? header.join('; ') : String(header || '');
+    }
     const hasServerCsp = Object.keys(details.responseHeaders || {})
       .some((name) => name.toLowerCase() === 'content-security-policy');
     callback({
@@ -928,6 +1172,13 @@ function createWindow() {
     });
   });
 
+  rendererWebPreferences = {
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    devTools: true,
+  };
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -943,13 +1194,7 @@ function createWindow() {
       ? undefined
       : { color: '#090A0F', symbolColor: '#94A3B8', height: 34 },
     show: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      devTools: true,
-    },
+    webPreferences: rendererWebPreferences,
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -1126,11 +1371,14 @@ app.whenReady().then(async () => {
   try {
     tray = new Tray(nativeImage.createEmpty());
     tray.setToolTip('SynEvid');
-    tray.setContextMenu(Menu.buildFromTemplate([
+    trayContextMenu = Menu.buildFromTemplate([
       { label: 'Show SynEvid', click: () => mainWindow?.show() },
-      { label: 'Quit', click: () => app.quit() },
-    ]));
+      { label: 'Quit', click: quitFromTray },
+    ]);
+    tray.setContextMenu(trayContextMenu);
   } catch (error) {
+    tray = null;
+    trayContextMenu = null;
     console.warn('[SynEvid Desktop] Tray unavailable:', error.message);
   }
   await ensureSidecarDaemon();
@@ -1146,8 +1394,13 @@ app.whenReady().then(async () => {
       console.log('PACKAGED_SMOKE_COMPONENTS', { daemon: true, cockpit: true });
       console.log('PACKAGED_SMOKE_PASS');
       setTimeout(() => {
-        shutdownChildren();
-        app.exit(0);
+        const trayQuit = trayContextMenu?.items.find((item) => item.label === 'Quit');
+        if (trayQuit?.click) {
+          console.log('PACKAGED_TRAY_QUIT_ACTION_PASS');
+          trayQuit.click();
+        } else {
+          app.quit();
+        }
       }, 50);
     } catch (error) {
       console.error('PACKAGED_SMOKE_FAIL', error.message);

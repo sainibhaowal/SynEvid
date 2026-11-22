@@ -52,6 +52,15 @@ test('Phase 5 packaged smoke authenticates, indexes, and checks a real report re
   assert.match(main, /PACKAGED_SMOKE_ANALYSIS_PASS/);
   assert.match(main, /PACKAGED_SMOKE_UI_RECEIPT_PASS/);
   assert.match(main, /PACKAGED_SMOKE_MCP_PASS/);
+  assert.match(main, /PACKAGED_SECURITY_BOUNDARIES_PASS/);
+  assert.match(main, /invalid_ipc_sender_refused/);
+  assert.match(main, /nonce_csp_verified/);
+  assert.match(main, /verifyDaemonWatchdogRecovery/);
+  assert.match(main, /ERR-DAEMON-301/);
+  assert.match(main, /--managed-runtime/);
+  assert.match(main, /active_repository_id: activeRepositoryId/);
+  assert.match(main, /function quitFromTray/);
+  assert.match(main, /PACKAGED_MENU_TRAY_PASS/);
   assert.match(main, /verifyVisibleAnalyticsReceipt/);
   assert.match(main, /\.synevid-smoke-receipt\.json/);
   assert.match(main, /schema_version: 1/);
@@ -71,6 +80,11 @@ test('Phase 5 packaged smoke authenticates, indexes, and checks a real report re
   assert.match(smoke, /receipt\?\.schema_version === 1/);
   assert.match(smoke, /mcp_trajectory_persisted === true/);
   assert.match(smoke, /ui_receipt_verified === true/);
+  assert.match(smoke, /watchdog_recovery\?\.same_repository_restored === true/);
+  assert.match(smoke, /security_verification\?\.invalid_ipc_sender_refused === true/);
+  assert.match(smoke, /PACKAGED_SMOKE_SHUTDOWN_PASS/);
+  assert.match(smoke, /\.synevid-tray-quit-invoked/);
+  assert.match(smoke, /waitForSmokeServicesToStop/);
   assert.match(smoke, /mcp_trajectory_persisted === true/);
   assert.match(smoke, /taskkill.*\/T.*\/F/);
 });
@@ -82,6 +96,16 @@ test('Phase 5 release artifact verification covers every native target', () => {
   assert.match(verifier, /Windows NSIS installer/);
   assert.match(verifier, /macOS disk image/);
   assert.match(verifier, /Linux AppImage/);
+});
+
+test('manual release verification is non-publishing by default and verifies free attestations', () => {
+  const workflow = fs.readFileSync(path.resolve(ROOT, '../../.github/workflows/post-merge.yml'), 'utf8');
+  assert.match(workflow, /publish_release:[\s\S]*?default: false/);
+  assert.match(workflow, /cosign verify-blob/);
+  assert.match(workflow, /gh attestation verify/);
+  assert.match(workflow, /inputs\.publish_release == true/);
+  assert.match(workflow, /name: Verify keyless Sigstore signature/);
+  assert.match(workflow, /name: Verify SLSA provenance for each release-bundle file/);
 });
 
 test('native artifact verifier rejects missing, empty, or malformed platform outputs', () => {

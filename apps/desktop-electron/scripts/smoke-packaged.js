@@ -4,6 +4,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const net = require('node:net');
 
 const desktopDir = path.resolve(__dirname, '..');
 const requested = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -54,6 +55,36 @@ const child = spawn(executable, launchArgs, {
   stdio: ['ignore', 'pipe', 'pipe'],
   windowsHide: true,
 });
+
+function checkPortClosed(port) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    let settled = false;
+    const finish = (closed) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(closed);
+    };
+    socket.setTimeout(750, () => finish(false));
+    socket.once('connect', () => finish(false));
+    socket.once('error', (error) => finish(error.code === 'ECONNREFUSED'));
+  });
+}
+
+async function waitForSmokeServicesToStop() {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const [daemonClosed, cockpitClosed] = await Promise.all([
+      checkPortClosed(3343),
+      checkPortClosed(3344),
+    ]);
+    if (daemonClosed && cockpitClosed) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
 let output = '';
 let timedOut = false;
 child.stdout.on('data', (chunk) => { output += chunk.toString(); process.stdout.write(chunk); });
@@ -67,7 +98,7 @@ const timeout = setTimeout(() => {
   }
   console.error('[SynEvid Smoke] Timed out waiting for packaged health.');
   setTimeout(() => process.exit(1), 2_000).unref();
-}, 180_000);
+}, 300_000);
 child.on('error', (error) => {
   clearTimeout(timeout);
   console.error(`[SynEvid Smoke] ${error.message}`);
@@ -75,7 +106,7 @@ child.on('error', (error) => {
   fs.rmSync(smokeRepository, { recursive: true, force: true });
   process.exit(1);
 });
-child.on('close', (code) => {
+child.on('close', async (code) => {
   clearTimeout(timeout);
   let receipt = null;
   try {
@@ -83,6 +114,7 @@ child.on('close', (code) => {
   } catch {}
   const digestPattern = /^blake3:[0-9a-f]{64}$/;
   const repositoryPattern = /^[0-9a-f]{64}$/;
+  const trayQuitInvoked = fs.existsSync(path.join(smokeRepository, '.synevid-tray-quit-invoked'));
   const validReceipt = receipt?.schema_version === 1 &&
     receipt.status === 'PASS' &&
     repositoryPattern.test(receipt.repository_id || '') &&
@@ -92,15 +124,36 @@ child.on('close', (code) => {
     Number.isInteger(receipt.mcp_trajectory_event_seq) && receipt.mcp_trajectory_event_seq > 0 &&
     receipt.mcp_trajectory_persisted === true &&
     receipt.ui_receipt_verified === true &&
+    receipt.security_verification?.context_isolation === true &&
+    receipt.security_verification?.node_integration_disabled === true &&
+    receipt.security_verification?.sandbox === true &&
+    receipt.security_verification?.nonce_csp_verified === true &&
+    receipt.security_verification?.untrusted_navigation_blocked === true &&
+    receipt.security_verification?.popup_blocked === true &&
+    receipt.security_verification?.invalid_ipc_sender_refused === true &&
+    receipt.desktop_controls?.application_menu_verified === true &&
+    receipt.desktop_controls?.tray_available === true &&
+    receipt.desktop_controls?.tray_actions_verified === true &&
+    receipt.desktop_controls?.tray_quit_action_verified === true &&
+    trayQuitInvoked &&
+    receipt.watchdog_recovery?.code === 'ERR-DAEMON-301' &&
+    receipt.watchdog_recovery?.state === 'RECOVERED' &&
+    receipt.watchdog_recovery?.same_repository_restored === true &&
     Number.isInteger(receipt.runtime_files_verified) && receipt.runtime_files_verified > 0 &&
     receipt.missing_token_status === 401 && receipt.invalid_token_status === 401 &&
     Number.isInteger(receipt.files_scanned) && receipt.files_scanned > 0;
   fs.rmSync(smokeUserData, { recursive: true, force: true });
   fs.rmSync(smokeRepository, { recursive: true, force: true });
-  if (!timedOut && code === 0 && validReceipt) {
+  const servicesStopped = await waitForSmokeServicesToStop();
+  if (!timedOut && code === 0 && validReceipt && servicesStopped) {
     console.log('PACKAGED_SMOKE_RECEIPT_PASS', receipt);
+    console.log('PACKAGED_SMOKE_SHUTDOWN_PASS', {
+      tray_quit_handler_invoked: trayQuitInvoked,
+      daemon_port_closed: true,
+      cockpit_port_closed: true,
+    });
     process.exit(0);
   }
-  console.error(`[SynEvid Smoke] Failed with exit code ${code}; receipt valid=${validReceipt}.`);
+  console.error(`[SynEvid Smoke] Failed with exit code ${code}; receipt valid=${validReceipt}; sidecars stopped=${servicesStopped}.`);
   process.exit(1);
 });

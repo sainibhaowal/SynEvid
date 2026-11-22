@@ -29,7 +29,7 @@ function run(command, args, { capture = false, ...options } = {}) {
     encoding: 'utf8',
     stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
     windowsHide: true,
-    timeout: 180_000,
+    timeout: 360_000,
     ...options,
   });
   if (result.error) fail(`${command} failed: ${result.error.message}`);
@@ -49,7 +49,7 @@ function waitForPathRemoval(targetPath, timeoutMs = 30_000) {
 function smokeExecutable(executable) {
   if (!fs.existsSync(executable)) fail(`Installed executable is missing: ${executable}`);
   // Windows portable builds self-extract the complete runtime on first launch.
-  run(process.execPath, [smokeScript, executable], { timeout: 240_000 });
+  run(process.execPath, [smokeScript, executable], { timeout: 330_000 });
 }
 
 function findUninstaller(root) {

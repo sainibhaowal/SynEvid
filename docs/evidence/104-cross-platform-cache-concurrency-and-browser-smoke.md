@@ -2,9 +2,13 @@
 
 ## Status
 
-**Phase 5 G5 remains PARTIAL.** This evidence records targeted fixes and local
-verification; it does not claim that the latest Linux/macOS native artifact
-matrix passed.
+**Phase 5 native G5 acceptance: VERIFIED for exact CI-tested source SHA
+`42c6f48dafab1663d658ca1164952cd458bd2c35`.** Windows, Linux, and macOS
+packaged-app jobs passed, including native install/launch, authenticated
+repository analysis, receipt checks, and clean smoke exit. This is not a claim
+of OS signing/notarization. The separate aggregated release-bundle
+checksums/provenance workflow has not been run for this feature-branch SHA, so
+the broader supply-chain requirement remains PARTIAL.
 
 ## CI evidence that triggered this work
 
@@ -131,6 +135,20 @@ requires a WebGL context and raised an uncaught
 page-error view before the live cursor could render. The test now leaves macOS
 hardware acceleration and WebGL enabled and does not pass `--disable-gpu` on
 that platform. Windows/Linux test flags remain unchanged. This removes the
-test-induced cause without changing any production canvas file. A new native
-macOS workflow/package smoke is required to verify the fix; G5 remains
-**PARTIAL**.
+test-induced cause without changing any production canvas file. The exact-
+revision native rerun and its final result are recorded below.
+
+## Exact-revision cross-platform verification — run 44998015104
+
+- Source SHA: `42c6f48dafab1663d658ca1164952cd458bd2c35`.
+- GitHub Actions: [run 44998015104](https://github.com/sainibhaowal/SynEvid/actions/runs/44998015104) — **completed / success**; every job reported success.
+- Native Electron packaged smoke: Windows **success**, Linux **success**, macOS **success**. Each job built platform artifacts, generated and validated Electron/cockpit/MCP CycloneDX SBOMs, verified required artifact presence, then installed/extracted and launched the app for authenticated real-repository analysis, receipt validation, and clean exit.
+- Linux passed DEB install/removal and AppImage smoke; macOS passed DMG copy and ZIP extraction smoke; Windows passed NSIS install/uninstall and portable-app smoke. Windows MSI was built and artifact-checked, but the smoke script does not install MSI.
+- Workspace unit/integration and documentation tests: Linux **success**, macOS Apple Silicon **success**, Windows **success**.
+- Strict Phase 3 5,000-loose-commit budget: Linux **success**, macOS **success**, Windows **success**. Schema/config, cargo-deny, formatting/clippy, MSRV 1.90, determinism/architecture, MCP/web-inspector/VS Code, installer self-test, and pre-merge gate: **success**.
+- Artifacts are unsigned. This verifies tested build/install/runtime behavior, not Gatekeeper trust or Apple notarization. The separate post-merge aggregated release bundle (daemon SBOM, SHA-256 manifest, Sigstore bundle, and SLSA provenance) was not run for this feature-branch SHA; supply-chain release evidence remains **PARTIAL**.
+- The production canvas renderer, camera, animation, and styling were not changed by the macOS test-harness correction.
+
+Historical failure notes above explain the diagnosis and are superseded for
+native G5 acceptance by this exact-SHA successful run. Do not treat native
+smoke success as proof of signing/notarization or aggregated release provenance.

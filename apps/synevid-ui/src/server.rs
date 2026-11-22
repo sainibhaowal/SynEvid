@@ -431,6 +431,16 @@ impl DashboardServer {
         Self::new_with_loopback_token(repo_root, host, port, loopback_token)
     }
 
+    /// Creates the desktop-owned daemon whose `repo_root` is persistent
+    /// application data, not a repository selected by the user. Repositories
+    /// in this mode are restored exclusively from the durable registry.
+    pub fn new_managed_runtime(repo_root: PathBuf, host: String, port: u16) -> Self {
+        let loopback_token = std::env::var("SYNEVID_LOOPBACK_TOKEN")
+            .ok()
+            .filter(|token| !token.trim().is_empty());
+        Self::new_with_runtime_options(repo_root, host, port, loopback_token, true)
+    }
+
     /// Testable constructor for the authenticated runtime. Production callers
     /// should use [`DashboardServer::new`], which reads the Electron-provided
     /// loopback token from the environment.
@@ -439,6 +449,16 @@ impl DashboardServer {
         host: String,
         port: u16,
         loopback_token: Option<String>,
+    ) -> Self {
+        Self::new_with_runtime_options(repo_root, host, port, loopback_token, false)
+    }
+
+    fn new_with_runtime_options(
+        repo_root: PathBuf,
+        host: String,
+        port: u16,
+        loopback_token: Option<String>,
+        managed_runtime: bool,
     ) -> Self {
         let registry = Arc::new(PluginRegistry::new());
         autopsy_cli::register_builtin_language_plugins(&registry, &repo_root);
@@ -523,7 +543,7 @@ impl DashboardServer {
         }
 
         // If repo_root is an explicit project directory (e.g. in tests or targeted CLI usage) and not SynEvid itself, activate it
-        if !is_synevid_self && repo_root.exists() {
+        if !managed_runtime && !is_synevid_self && repo_root.exists() {
             let repo_id = blake3::hash(root_canon.to_string_lossy().as_bytes())
                 .to_hex()
                 .to_string();
@@ -7568,6 +7588,36 @@ fn empty_universe(repo_id: &str, is_3d: bool, coverage: &str) -> String {
 mod tests {
     use super::*;
     use autopsy_storage::EgoNetwork;
+
+    #[test]
+    fn managed_runtime_does_not_treat_application_data_as_a_repository() {
+        let temp = std::env::temp_dir().join(format!(
+            "synevid_managed_runtime_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let server = DashboardServer::new_managed_runtime(temp.clone(), "127.0.0.1".to_string(), 0);
+        let status: Value = serde_json::from_str(&server.handle_status()).unwrap();
+        assert_eq!(status["active_repo_id"], "");
+        assert_eq!(
+            server
+                .storage
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .list_repositories()
+                .unwrap()
+                .len(),
+            0
+        );
+        drop(server);
+        fs::remove_dir_all(temp).unwrap();
+    }
 
     #[test]
     fn test_phase1_all_workspace_resolvers_are_registered_and_detected() {

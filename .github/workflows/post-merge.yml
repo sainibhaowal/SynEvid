@@ -5,6 +5,12 @@ on:
     branches: ["main"]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the generated release to GitHub (normally keep false for branch verification)"
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
   group: post-merge-${{ github.ref }}
@@ -245,6 +251,10 @@ jobs:
         working-directory: apps/desktop-electron
         run: npm ci --no-audit --no-fund
 
+      - name: Run Electron desktop and packaged-security unit tests
+        working-directory: apps/desktop-electron
+        run: npm test
+
       - name: Build Electron release artifacts
         working-directory: apps/desktop-electron
         env:
@@ -352,10 +362,30 @@ jobs:
             --bundle release-bundle/SHA256SUMS.txt.sigstore.json \
             release-bundle/SHA256SUMS.txt
 
+      - name: Verify keyless Sigstore signature
+        env:
+          COSIGN_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/post-merge.yml@${{ github.ref }}
+        run: |
+          cosign verify-blob \
+            --bundle release-bundle/SHA256SUMS.txt.sigstore.json \
+            --certificate-identity "$COSIGN_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            release-bundle/SHA256SUMS.txt
+
       - name: Generate SLSA Build Provenance Attestation
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "release-bundle/*"
+
+      - name: Verify SLSA provenance for each release-bundle file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while IFS= read -r -d '' artifact; do
+            gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/post-merge.yml"
+          done < <(find release-bundle -maxdepth 1 -type f -print0)
 
       - name: Upload Final Release Bundle
         uses: actions/upload-artifact@v4
@@ -366,6 +396,7 @@ jobs:
   release-publish:
     name: Publish Rolling Latest Release
     needs: release-manifest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
