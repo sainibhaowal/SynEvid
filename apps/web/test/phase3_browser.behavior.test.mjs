@@ -265,6 +265,25 @@ function runElectron(nextOrigin, fixturePort) {
   });
 }
 
+function stopProcess(child) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      resolve();
+    };
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null) child.kill('SIGKILL');
+    }, 10_000);
+    child.once('close', finish);
+    child.once('error', finish);
+    child.kill('SIGTERM');
+  });
+}
+
 test('Phase 3 browser behavior: slider and range comparison call real API routes', { timeout: 180_000 }, async () => {
   assert.ok(require(ELECTRON_PACKAGE), 'source Electron runtime must be installed');
   assert.ok(NEXT_BIN, 'Next source runtime must be present');
@@ -293,8 +312,13 @@ test('Phase 3 browser behavior: slider and range comparison call real API routes
     assert.ok(result.calls.some((call) => call.path === `/api/v1/git/time-travel/${OID_A}?dim=3d`));
     assert.ok(result.calls.some((call) => call.path === `/api/v1/git/diff/${OID_A}/${OID_B}`));
   } finally {
-    fixture.server.close();
-    next.kill();
-    fs.rmSync(path.join(WEB_DIR, `.next-browser-${nextPort}`), { recursive: true, force: true });
+    await new Promise((resolve) => fixture.server.close(resolve));
+    await stopProcess(next);
+    fs.rmSync(path.join(WEB_DIR, `.next-browser-${nextPort}`), {
+      recursive: true,
+      force: true,
+      maxRetries: 12,
+      retryDelay: 250,
+    });
   }
 });

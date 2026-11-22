@@ -8,7 +8,9 @@ use autopsy_evidence::EvidenceReceipt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -63,6 +65,8 @@ fn is_database_corruption(error: &rusqlite::Error) -> bool {
 
 /// Stable API error code emitted when SQLite recovery preserves a damaged file.
 pub const ERR_STORAGE_CORRUPTION_RECOVERED: &str = "ERR-STORAGE-102";
+
+static CACHE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Non-fatal recovery information made available to API layers after a corrupt
 /// database was backed up and rebuilt.  Recovery is successful, but callers
@@ -824,16 +828,38 @@ impl StorageEngine {
 
             let target_path = dir.join(rest);
             if !target_path.exists() {
-                // Atomic write via PID-isolated temporary file
-                let tmp_path = dir.join(format!(".tmp-{}-{}", std::process::id(), rest));
-                fs::write(&tmp_path, content)?;
+                // PID-only temporary names race when threads publish the same
+                // content concurrently. Create a unique file atomically instead.
+                let (tmp_path, mut tmp_file) = loop {
+                    let sequence = CACHE_TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                    let candidate =
+                        dir.join(format!(".tmp-{}-{sequence}-{}", std::process::id(), rest));
+                    match fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&candidate)
+                    {
+                        Ok(file) => break (candidate, file),
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                if let Err(error) = tmp_file.write_all(content) {
+                    drop(tmp_file);
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(error.into());
+                }
+                drop(tmp_file);
                 match fs::rename(&tmp_path, &target_path) {
                     Ok(()) => {}
                     Err(_) if target_path.exists() => {
                         // Concurrent writer finished first; safely clean up temporary file
                         let _ = fs::remove_file(&tmp_path);
                     }
-                    Err(e) => return Err(e.into()),
+                    Err(error) => {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(error.into());
+                    }
                 }
             }
         }

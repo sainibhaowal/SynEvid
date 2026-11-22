@@ -164,7 +164,16 @@ fn test_e2e_storage_concurrent_atomic_write_resilience() {
         .unwrap()
         .expect("Object must be present in cache");
     assert_eq!(retrieved, content_blob);
+    let object_dir = cache_dir.join("objects").join(&expected_hash[..2]);
+    assert!(fs::read_dir(object_dir).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tmp-")
+    }));
 
+    drop(storage);
     let _ = fs::remove_dir_all(&cache_dir);
 }
 

@@ -67,6 +67,12 @@ requirements:
     acceptance_test: crates/autopsy-storage/src/lib.rs
     evidence: docs/evidence/101-phase0-phase1-truth-and-daemon.md
     status: VERIFIED
+  - id: P1-CACHE-WRITE-016
+    source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
+    owner: storage
+    acceptance_test: tests/tests/e2e_cross_platform_and_multi_arch.rs
+    evidence: docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md
+    status: IMPLEMENTED
   - id: P1-EVENT-007
     source: "Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md#requirements"
     owner: daemon-events

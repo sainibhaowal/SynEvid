@@ -32,6 +32,7 @@ The four governance requirements are independently registered as `R0.1`, `R0.2`,
 | P1-STORAGE-004 | Versioned storage migrations | storage | `crates/autopsy-storage/src/lib.rs` | **VERIFIED** |
 | P1-RECOVERY-005 | Corruption backup and `ERR-STORAGE-102` | storage | storage recovery tests | **VERIFIED** |
 | P1-TRANSACTION-006 | Atomic transactions | storage | storage transaction test | **VERIFIED** |
+| P1-CACHE-WRITE-016 | Concurrent content-addressed cache publication uses isolated atomic temporary files without leftovers | storage | `tests/tests/e2e_cross_platform_and_multi_arch.rs`; evidence 104 | **IMPLEMENTED — Windows verified; Linux/macOS CI pending** |
 | P1-EVENT-007 | Monotonic persisted/replayable event cursor | daemon-events | HTTP replay and restart tests | **IMPLEMENTED** |
 | P1-WATCH-008 | Debounced source-backed watcher events | daemon-watchers | `apps/synevid-ui/src/server.rs` tests | **VERIFIED** |
 | P1-SHUTDOWN-009 | Clean WAL and persistence-worker shutdown | storage | recovery/reopen tests; native CI | **IMPLEMENTED** |

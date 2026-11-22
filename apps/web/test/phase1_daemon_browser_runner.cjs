@@ -52,12 +52,6 @@ async function main() {
   if (process.platform === 'darwin') app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('disable-gpu');
   if (process.platform !== 'darwin') app.commandLine.appendSwitch('headless');
-  if (process.platform === 'darwin') {
-    app.commandLine.appendSwitch('use-gl', 'swiftshader');
-    app.commandLine.appendSwitch('use-angle', 'swiftshader');
-    app.commandLine.appendSwitch('disable-gpu-compositing');
-    app.commandLine.appendSwitch('enable-unsafe-swiftshader');
-  }
   if (process.platform === 'linux' && process.env.CI) app.commandLine.appendSwitch('no-sandbox');
   await app.whenReady();
 
@@ -67,7 +61,7 @@ async function main() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      offscreen: process.platform === 'darwin',
+      offscreen: false,
     },
   });
   const rendererDiagnostics = [];

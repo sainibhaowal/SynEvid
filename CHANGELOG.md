@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Cross-platform follow-up:** fixed a race in concurrent content-addressed
+  cache writes by assigning each writer an exclusive temporary file and cleaning
+  it on errors. The Windows integration test verifies published bytes and no
+  temporary-file leftovers. Browser test teardown waits for Next.js to exit
+  before cleaning isolated output, and the macOS test runner no longer forces
+  SwiftShader/offscreen rendering. Local Windows storage (4/4) and web browser
+  (21/21) tests pass. The latest Actions run had Linux/macOS browser and Windows
+  concurrency failures; fixes await same-revision native CI. Phase 5 remains
+  **PARTIAL**. Evidence: `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
 - **Phase 5 Windows rerun (2026-11-22):** rebuilt the current-source daemon and
   packaged Windows NSIS, portable, and MSI artifacts. Artifact/SBOM validation
   passed; NSIS install/uninstall and portable launch both completed the real
