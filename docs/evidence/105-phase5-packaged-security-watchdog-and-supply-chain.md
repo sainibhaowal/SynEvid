@@ -2,11 +2,11 @@
 
 ## Status
 
-**Local Windows packaged lifecycle/security smoke: PASS. Overall Phase 5 G5 and
-cross-platform supply-chain claim: PARTIAL pending exact-commit native Actions.**
-This evidence was collected from the working tree based on
-`42c6f48dafab1663d658ca1164952cd458bd2c35`; it is not yet a committed source
-revision and must not be cited as exact-SHA GitHub evidence.
+**Phase 5 G5 packaged lifecycle/security and release-bundle gates: PASS for
+tested targets on exact source commit `21ba6bf99f4b157dfbbb1db2c35315c169de7a4b`.**
+Native Windows, Linux, and macOS CI and the post-merge release-bundle workflow
+both completed successfully. This is evidence for the stated tested targets,
+not a claim that unsigned binaries avoid operating-system trust warnings.
 
 No paid OS signing or notarization is used. Windows/macOS artifacts remain
 unsigned and may show operating-system trust prompts. Sigstore keyless signing
@@ -51,31 +51,29 @@ was removed after validation. Machine output included
 `PACKAGED_TRAY_QUIT_ACTION_PASS`, `PACKAGED_SMOKE_RECEIPT_PASS`,
 `PACKAGED_SMOKE_SHUTDOWN_PASS`, and `ELECTRON_INSTALLER_SMOKE_PASS win32`.
 
-## Release supply-chain workflow
+## Exact-commit native and release-bundle evidence
 
-The workflow implementation is present, but this working-tree run did not
-produce GitHub OIDC signatures or SLSA attestations. Those require the workflow
-to run on the exact pushed commit. Required native evidence:
+- Tested source SHA: `21ba6bf99f4b157dfbbb1db2c35315c169de7a4b`.
+- Native CI matrix: [run 45044033733](https://github.com/sainibhaowal/SynEvid/actions/runs/45044033733) — success. Workspace tests on Windows, Ubuntu Linux, and macOS; packaged Electron smoke/security/lifecycle jobs on all three; browser daemon-restart replay; determinism, architecture, schemas, MSRV, cargo-deny, and 5,000-commit budgets all passed.
+- Post-merge build and supply-chain: [run 45044046615](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615) — success. Native Electron artifacts and platform release binaries built; aggregate manifest/SBOM bundle created; `sha256sum -c`, keyless `cosign verify-blob`, and per-file `gh attestation verify` passed.
+- Release bundle artifact: [autopsy-release-bundle, artifact 14763372530](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615/artifacts/14763372530) (1,349,317,860 bytes). The workflow generated CycloneDX SBOMs for Electron, cockpit, MCP, Rust CLI, and Rust daemon; the uploaded bundle includes the manifests, checksums, signature bundle, and release files.
+- Windows Electron artifact: [artifact 14762274644](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615/artifacts/14762274644). Linux: [artifact 14763128082](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615/artifacts/14763128082). macOS: [artifact 14763291701](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615/artifacts/14763291701).
+- SLSA provenance attestation: [GitHub attestation 70795215](https://github.com/sainibhaowal/SynEvid/attestations/70795215); Sigstore transparency entry: [Rekor log index 4046807272](https://search.sigstore.dev/?logIndex=4046807272).
+- The workflow was dispatched with `publish_release=false`; it produced downloadable CI artifacts and attestations but did **not** publish a GitHub Release.
 
-1. Windows, Ubuntu Linux, and macOS packaged installer jobs pass on the same
-   commit, including installer/portable smoke and platform security assertions.
-2. Release bundle contains validated CycloneDX inventories for Electron,
-   cockpit, MCP, Rust CLI, and Rust daemon.
-3. `sha256sum -c` passes for every release-bundle item covered by
-   `SHA256SUMS.txt`.
-4. `cosign verify-blob` validates the keyless signature of the checksum file
-   against the expected GitHub Actions OIDC identity.
-5. `gh attestation verify` validates SLSA provenance for every bundle file.
-6. The workflow artifact/log links and tested commit SHA are added to this
-   record and `docs/requirements/TRACEABILITY.md` before promoting statuses.
+The keyless Sigstore signature authenticates the checksum manifest and
+provenance, not the Windows/macOS executable as an OS-trusted publisher.
+Artifacts are intentionally unsigned at the OS level and may prompt users on
+first launch. No paid signing credential was used or required for these gates.
 
 ## Limitations and claim boundary
 
-- This proves the packaged Windows behavior on the local host only. Linux and
-  macOS security/lifecycle behavior for this changed source is not yet proven.
-- This local artifact validator confirms three Electron npm SBOMs. It does not
-  prove Rust SBOMs, release checksum bundle, Sigstore, or SLSA until Actions
-  runs on the exact commit.
+- These results apply to the listed runners and artifact formats; other OS
+  versions, CPU architectures, and future source revisions require their own
+  validation.
+- MSI was not the required Windows installer target and is not claimed as
+  installer-smoked. Required Windows NSIS/portable, Linux AppImage/DEB, and
+  macOS DMG/ZIP targets were built and exercised by the native matrix.
 - No OS code-signing or notarization claim is made.
 - This change does not modify the 2D/3D canvas renderer, camera, animation, or
   styling.
@@ -97,6 +95,12 @@ to run on the exact pushed commit. Required native evidence:
   the current sequence cursor. Local Windows browser workflow and web tests
   pass 21/21, and `tsc --noEmit` passes. This follow-up has not yet been run on
   native CI, so the issue is not claimed closed cross-platform.
-- Next: commit/push, run native CI and post-merge supply-chain workflow without
-  release publication, then append exact revision, job IDs, artifact links, and
-  logs. Keep statuses PARTIAL until all required jobs pass.
+- 2026-11-22: Follow-up commit `21ba6bf` added durable sequence catch-up when
+  SSE/WebSocket opens or reconnects. Native CI run `45044033733` passed the
+  Windows/Linux/macOS workspace and packaged smoke matrices, including the
+  previously failing macOS daemon-restart live cursor flow. Post-merge run
+  `45044046615` passed Windows NSIS/portable, Linux AppImage/DEB, macOS DMG/ZIP,
+  CycloneDX SBOM generation, checksum verification, keyless Sigstore signing
+  and verification, and per-file SLSA provenance verification. Release publish
+  was deliberately skipped. Phase 5 G5 is complete for these tested targets;
+  OS-level code signing/notarization remains intentionally out of scope.

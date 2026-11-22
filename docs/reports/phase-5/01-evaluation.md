@@ -2,9 +2,11 @@
 
 ## Evaluation status
 
-**PARTIAL overall.** Local Windows packaged acceptance passes; exact-commit
-Linux/macOS proof and release-bundle attestation are pending. This report makes
-no claim of universal production readiness.
+**PASS for the Phase 5 G5 acceptance on the tested Windows, Linux, and macOS
+runner targets.** Exact source SHA `21ba6bf99f4b157dfbbb1db2c35315c169de7a4b`
+passed the native matrix and release-bundle verification. The artifacts are
+unsigned by OS vendors; first-launch trust warnings remain expected and are
+documented. This is not a claim for untested OS versions or future revisions.
 
 ## Scope and method
 
@@ -32,19 +34,14 @@ invalid daemon tokens.
 - Watchdog recovery: pass; `ERR-DAEMON-301` emitted and the original repository
   was restored by ID in status and report.
 - Security/lifecycle smoke: pass on Windows.
-- Exact commit Actions run `45040294535` exposed a macOS browser replay timeout
-  after daemon restart, despite successful Windows/Linux packaged smoke and all
-  three platform workspace suites. A durable catch-up poll was added alongside
-  SSE/WebSocket; local Windows end-to-end web tests pass 21/21 and TypeScript
-  checking passes. Native CI for this follow-up is still pending.
+- Exact-SHA native matrix [run `45044033733`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044033733): all workspace tests on Windows/Linux/macOS, all packaged Electron/security/browser smoke jobs, replay after daemon restart, determinism, schemas, MSRV, architecture, dependency policy, and history budget passed.
+- Post-merge supply-chain [run `45044046615`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615): native Electron artifacts for all three OSes and release binaries built; CycloneDX inventories generated; checksum verification, keyless Sigstore signature verification, and SLSA provenance verification passed. Final bundle: [artifact `14763372530`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615/artifacts/14763372530); provenance: [attestation `70795215`](https://github.com/sainibhaowal/SynEvid/attestations/70795215).
+- Release publication was deliberately disabled. OS-level signing/notarization was not used; the keyless signature covers the checksum file/provenance, not the executable publisher identity.
 
 Detailed output and boundaries are in
 [`105-phase5-packaged-security-watchdog-and-supply-chain.md`](../../evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md).
 
-## Not yet evaluated
-
-- Changed-source native packaged lifecycle/security smoke on Linux and macOS.
-- Exact-commit aggregated daemon/Electron/cockpit/MCP SBOM release bundle.
-- Full checksum, Sigstore keyless signature, and SLSA provenance verification.
-
-These are required before changing Phase 5 traceability to fully verified.
+The prior macOS reconnect failure on `34fe80a` was fixed with sequence-based
+durable replay polling. The exact-source macOS browser workflow passed in
+`45044033733`; there are no remaining G5 acceptance gaps for the platform
+targets tested here. MSI installation and OS-level signing are not claimed.

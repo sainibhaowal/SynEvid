@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- **Live replay follow-up from native macOS evidence:** Actions run
-  `45040294535` passed Windows/Linux packaged smokes and all three platform
-  workspace tests, but macOS timed out waiting for the browser's persisted live
-  cursor after daemon restart. Added a durable sequence-based replay poll when
-  SSE/WebSocket connects or reconnects; local Windows Electron/daemon browser
-  workflow and web suite pass 21/21 with TypeScript checking. Exact-commit
-  native rerun is pending, so cross-platform replay remains PARTIAL. No canvas
-  renderer code changed. Evidence:
+- **Phase 5 exact-commit cross-platform closure:** added durable sequence-based
+  event catch-up when SSE/WebSocket connects or reconnects after Actions run
+  `45040294535` exposed a macOS cursor replay timeout. Native matrix
+  [`45044033733`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044033733)
+  and post-merge bundle verification
+  [`45044046615`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615)
+  passed on `21ba6bf99f4b157dfbbb1db2c35315c169de7a4b`. Windows/Linux/macOS
+  packaged smokes, workspace tests, SBOMs, checksums, keyless Sigstore, and
+  SLSA provenance verified; release publishing was intentionally skipped.
+  Artifacts remain unsigned for OS trust (first-launch prompts expected). The
+  2D/3D canvas renderer was not changed. Evidence:
   `docs/evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md`.
 
 - **Phase 5 packaged watchdog/security follow-up (local Windows):** fixed the
