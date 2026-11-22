@@ -6,6 +6,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { findLinuxInstalledExecutable } = require('./linux-installed-executable');
 
 const desktopDir = path.resolve(__dirname, '..');
 const distDir = path.join(desktopDir, 'dist');
@@ -117,7 +118,7 @@ function smokeLinux() {
   run('sudo', ['apt-get', 'install', '--yes', '--no-install-recommends', deb]);
   try {
     const installedFiles = run('dpkg-query', ['-L', packageName], { capture: true });
-    const executable = installedFiles.split(/\r?\n/).find((item) => /\/synevid$/.test(item) && fs.existsSync(item));
+    const executable = findLinuxInstalledExecutable(installedFiles);
     if (!executable) fail(`Installed Debian package ${packageName} has no synevid executable`);
     smokeExecutable(executable);
   } finally {

@@ -124,9 +124,24 @@ test('Phase 5 native install smoke covers required Windows, macOS, and Linux art
   assert.match(installerSmoke, /hdiutil/);
   assert.match(installerSmoke, /function smokeLinux/);
   assert.match(installerSmoke, /dpkg/);
+  assert.match(installerSmoke, /findLinuxInstalledExecutable\(installedFiles\)/);
   assert.match(installerSmoke, /apt-get', 'install', '--yes', '--no-install-recommends'/);
   assert.match(installerSmoke, /AppImage/);
   assert.match(installerSmoke, /smokeExecutable\(executable\)/);
+});
+
+test('Linux installer smoke chooses the executable file, not the package documentation directory', () => {
+  const { findLinuxInstalledExecutable } = require('../scripts/linux-installed-executable');
+  const files = new Map([
+    ['/usr/share/doc/synevid', { isFile: () => false }],
+    ['/usr/bin/synevid', { isFile: () => true }],
+  ]);
+  const fileSystem = { statSync: (item) => files.get(item) ?? { isFile: () => false } };
+  assert.equal(
+    findLinuxInstalledExecutable('/usr/share/doc/synevid\n/usr/bin/synevid\n', fileSystem),
+    '/usr/bin/synevid',
+  );
+  assert.equal(findLinuxInstalledExecutable('/usr/share/doc/synevid\n', fileSystem), undefined);
 });
 
 test('Phase 5 packaged UI smoke verifies the visible report matches daemon receipt', () => {

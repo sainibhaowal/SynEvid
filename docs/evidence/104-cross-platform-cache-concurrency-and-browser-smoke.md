@@ -51,3 +51,40 @@ installer, contents-manifest, SBOM, and pre-merge jobs on Windows, Linux, and
 macOS for the exact resulting commit. A failed or missing native gate keeps G5
 PARTIAL. Unsigned artifacts remain unsigned; no OS trust or notarization claim
 is made.
+
+## Follow-up from the latest native run
+
+Actions run `44988175938` on commit `8ac1052ce6f2bc3252967ab425b710f4bcdcdfe3`
+completed with three relevant failures:
+
+- Windows: the packaged Electron install/connect/analyze/receipt smoke passed;
+  the Windows loose-object performance job measured 168.37 ms against its
+  `<150 ms` gate.
+- Linux: packaging, artifact verification, and SBOM generation passed. The
+  installed `.deb` smoke selected `/usr/share/doc/synevid`, a documentation
+  directory, rather than the executable file.
+- macOS: the Electron browser smoke failed after the live event update, with
+  renderer load/GPU initialization diagnostics. The macOS packaging smoke did
+  not complete on this run.
+
+The Linux smoke now checks `statSync(...).isFile()` before choosing a path and
+has a test that rejects the documentation directory. The macOS browser runner
+now disables GPU compositing and WebGL only for its hidden CI window and includes
+renderer crash/load diagnostics. Neither change modifies production UI or the
+2D/3D canvas implementation.
+
+Local verification after these targeted changes:
+
+- `apps/web`: `npm test` — **21 passed, 0 failed**, including the real
+  Electron/daemon replay workflow.
+- `apps/desktop-electron`: `npm test` — **20 passed, 0 failed**, including the
+  Linux executable-selection regression test.
+- `apps/desktop-electron`: `npm run build:runtime` — current-source Rust daemon,
+  Next.js production cockpit, and MCP bridge assembled successfully.
+- Strict loose-object benchmark on the temporary Windows working tree measured
+  **2.86 s**, failing `<150 ms`. The exploratory Rust optimization was reverted
+  because it did not meet the target; no performance claim is made from it.
+
+The Linux and macOS changes are not verified until a new native Actions run
+finishes on the exact commit containing them. G5 remains **PARTIAL** until every
+required job is green; no cross-platform production-ready claim is made.

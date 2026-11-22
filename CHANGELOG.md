@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Phase 5 cross-platform smoke follow-up:** the last completed native matrix on
+  `8ac1052` (Actions run `44988175938`) passed the Windows packaged install,
+  real repository analysis, UI/daemon receipt, workspace, and platform checks.
+  Linux package creation and SBOM verification passed, but its `.deb` smoke chose
+  `/usr/share/doc/synevid` (a directory) as the executable. The macOS browser
+  smoke reached the live event flow, then Electron displayed its load-error page
+  with headless GPU/EGL failures. The Linux selector now requires a regular
+  executable file and has a behavioral regression test; the macOS test harness
+  disables GPU compositing/WebGL for its hidden CI window and records renderer
+  failure diagnostics. Local Windows verification: freshly built daemon and
+  production runtime succeeded, web tests 21/21, desktop tests 20/20. These
+  targeted fixes still require a new exact-revision Windows/Linux/macOS Actions
+  run; Phase 5 remains **PARTIAL**. The strict Windows loose-history benchmark
+  also failed on the temporary test run and must be re-established by the
+  committed native matrix; its target is unchanged. No production canvas,
+  camera, animation, or styling files were modified. Evidence:
+  `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
 - **Cross-platform follow-up:** fixed a race in concurrent content-addressed
   cache writes by assigning each writer an exclusive temporary file and cleaning
   it on errors. The Windows integration test verifies published bytes and no

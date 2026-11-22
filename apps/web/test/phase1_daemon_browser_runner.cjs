@@ -51,6 +51,7 @@ async function main() {
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-electron-phase1-')));
   if (process.platform === 'darwin') app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('disable-gpu');
+  if (process.platform === 'darwin') app.commandLine.appendSwitch('disable-gpu-compositing');
   if (process.platform !== 'darwin') app.commandLine.appendSwitch('headless');
   if (process.platform === 'linux' && process.env.CI) app.commandLine.appendSwitch('no-sandbox');
   await app.whenReady();
@@ -61,10 +62,17 @@ async function main() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webgl: process.platform !== 'darwin',
       offscreen: false,
     },
   });
   const rendererDiagnostics = [];
+  window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    rendererDiagnostics.push({ type: 'did-fail-load', code, description, url, isMainFrame });
+  });
+  window.webContents.on('render-process-gone', (_event, details) => {
+    rendererDiagnostics.push({ type: 'render-process-gone', ...details });
+  });
   window.webContents.on('console-message', (details) => {
     rendererDiagnostics.push({ level: details.level, message: details.message });
   });
@@ -115,7 +123,7 @@ async function main() {
   const liveCursor = Number(body.match(/LIVE #(\d+)/)?.[1] || 0);
   const canonicalPathVisible = repositoryIdentityVisible(body);
   if (!canonicalPathVisible) {
-    throw new Error(`Repository identity disappeared after load: expected=${expectedRoot}; marker=${expectedRootMarker}; body=${JSON.stringify(body.slice(-4000))}`);
+    throw new Error(`Repository identity disappeared after load: expected=${expectedRoot}; marker=${expectedRootMarker}; url=${window.webContents.getURL()}; diagnostics=${JSON.stringify(rendererDiagnostics.slice(-30))}; body=${JSON.stringify(body.slice(-4000))}`);
   }
   const result = {
     canonicalPathVisible,
