@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on failure. Local serialized web tests pass 21/21. The exact macOS cause and
   native macOS package smoke are still unproven; G5 remains **PARTIAL**.
 
+- **macOS canvas smoke correction:** run `44996712119` exposed that the hidden
+  browser harness itself disabled macOS WebGL (`app.disableHardwareAcceleration`,
+  `--disable-gpu`, and `webgl: false`). The captured renderer error was
+  `THREE.WebGLRenderer: Error creating WebGL context`, followed by the page
+  error view. The macOS test now uses the native GPU/WebGL path; Windows/Linux
+  test flags are unchanged. This is test-only and does not modify the canvas
+  implementation. A new native macOS run must still prove the fix; G5 remains
+  **PARTIAL**.
+
 - **Cross-platform follow-up:** fixed a race in concurrent content-addressed
   cache writes by assigning each writer an exclusive temporary file and cleaning
   it on errors. The Windows integration test verifies published bytes and no

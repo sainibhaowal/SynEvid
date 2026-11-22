@@ -123,3 +123,14 @@ console/navigation/crash diagnostics, and Next.js dev-server output on failure.
 A fresh native run is necessary to examine these details. The macOS installer
 smoke is skipped when this preceding browser workflow fails, so macOS packaging
 is still unverified. G5 remains **PARTIAL**.
+
+Diagnostics from run `44996712119` identified the remaining failure: the macOS
+test harness disabled hardware acceleration and WebGL, while `CodeUniverse3D`
+requires a WebGL context and raised an uncaught
+`THREE.WebGLRenderer: Error creating WebGL context`. This produced the generic
+page-error view before the live cursor could render. The test now leaves macOS
+hardware acceleration and WebGL enabled and does not pass `--disable-gpu` on
+that platform. Windows/Linux test flags remain unchanged. This removes the
+test-induced cause without changing any production canvas file. A new native
+macOS workflow/package smoke is required to verify the fix; G5 remains
+**PARTIAL**.

@@ -121,7 +121,7 @@ function runElectron(nextOrigin, daemonPort, rootPath, expectedSeq, publishEvent
       SYNEVID_BROWSER_PUBLISH_EVENT: publishEvent ? '1' : '0',
     };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const electronArgs = ['--disable-gpu'];
+    const electronArgs = process.platform === 'darwin' ? [] : ['--disable-gpu'];
     if (process.platform === 'linux' && process.env.CI) electronArgs.push('--no-sandbox');
     electronArgs.push(ELECTRON_RUNNER);
     const child = spawn(electronExecutable, electronArgs, {
