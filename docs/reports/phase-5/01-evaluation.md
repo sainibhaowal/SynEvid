@@ -32,6 +32,11 @@ invalid daemon tokens.
 - Watchdog recovery: pass; `ERR-DAEMON-301` emitted and the original repository
   was restored by ID in status and report.
 - Security/lifecycle smoke: pass on Windows.
+- Exact commit Actions run `45040294535` exposed a macOS browser replay timeout
+  after daemon restart, despite successful Windows/Linux packaged smoke and all
+  three platform workspace suites. A durable catch-up poll was added alongside
+  SSE/WebSocket; local Windows end-to-end web tests pass 21/21 and TypeScript
+  checking passes. Native CI for this follow-up is still pending.
 
 Detailed output and boundaries are in
 [`105-phase5-packaged-security-watchdog-and-supply-chain.md`](../../evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md).

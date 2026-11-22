@@ -88,6 +88,15 @@ to run on the exact pushed commit. Required native evidence:
   verified same-repository restart. A stdout-only tray-quit check proved brittle
   across installer launches; replaced it with a marker written only by the
   actual tray Quit callback. The final NSIS/portable packaged smoke passed.
+- 2026-11-22: Exact-commit Actions run `45040294535` on `34fe80a` passed the
+  Windows/Linux Electron packaged jobs, Windows/Linux/macOS workspace suites,
+  and all three loose-history budgets, but the macOS browser workflow timed out
+  waiting for the persisted live cursor after restart. The runner showed the
+  correct repository and a healthy page; the expected live cursor did not
+  arrive. Added a durable replay poll at SSE/WebSocket connection start using
+  the current sequence cursor. Local Windows browser workflow and web tests
+  pass 21/21, and `tsc --noEmit` passes. This follow-up has not yet been run on
+  native CI, so the issue is not claimed closed cross-platform.
 - Next: commit/push, run native CI and post-merge supply-chain workflow without
   release publication, then append exact revision, job IDs, artifact links, and
   logs. Keep statuses PARTIAL until all required jobs pass.

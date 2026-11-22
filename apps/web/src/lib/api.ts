@@ -1125,6 +1125,7 @@ export class SynevidApiClient {
     let reconnectTimer: number | null = null;
     let cancelled = false;
     let lastSeq = initialSeq;
+    let replayInFlight: Promise<void> | null = null;
 
     const deliver = (raw: Record<string, unknown>) => {
       const parsed = this.normalizeLiveEvent(raw);
@@ -1150,8 +1151,39 @@ export class SynevidApiClient {
       }, 250);
     };
 
+    // SSE/WebSocket are the low-latency path. Query the daemon's durable
+    // sequence log whenever a transport is opened so events emitted during a
+    // process restart or a short connection gap cannot be missed. `deliver`
+    // enforces the same monotonic cursor for both transports and this replay.
+    const replayMissedEvents = () => {
+      if (cancelled || replayInFlight) return;
+      replayInFlight = this.fetchWithTimeout<{
+        events?: Record<string, unknown>[];
+        replay_complete?: boolean;
+      }>(`/api/v1/live/poll?since_seq=${encodeURIComponent(String(lastSeq))}`)
+        .then((envelope) => {
+          const events = Array.isArray(envelope.events) ? envelope.events : [];
+          events
+            .map((event) => this.normalizeLiveEvent(event))
+            .sort((left, right) => left.seq_id - right.seq_id)
+            .forEach((event) => deliver({
+              seq_id: event.seq_id,
+              event: event.event_type,
+              data: event.payload,
+            }));
+          if (envelope.replay_complete === false && onError) onError();
+        })
+        .catch(() => {
+          if (!cancelled && onError) onError();
+        })
+        .finally(() => {
+          replayInFlight = null;
+        });
+    };
+
     const connectSse = () => {
       if (cancelled) return;
+      replayMissedEvents();
       try {
         const sseUrl = new URL(`${this.baseUrl}/api/v1/live`);
         sseUrl.searchParams.set('since', String(lastSeq));
@@ -1187,6 +1219,7 @@ export class SynevidApiClient {
         connectSse();
         return;
       }
+      replayMissedEvents();
       try {
         const url = new URL(`${this.baseUrl}/api/v1/live`);
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';

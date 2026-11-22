@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Live replay follow-up from native macOS evidence:** Actions run
+  `45040294535` passed Windows/Linux packaged smokes and all three platform
+  workspace tests, but macOS timed out waiting for the browser's persisted live
+  cursor after daemon restart. Added a durable sequence-based replay poll when
+  SSE/WebSocket connects or reconnects; local Windows Electron/daemon browser
+  workflow and web suite pass 21/21 with TypeScript checking. Exact-commit
+  native rerun is pending, so cross-platform replay remains PARTIAL. No canvas
+  renderer code changed. Evidence:
+  `docs/evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md`.
+
 - **Phase 5 packaged watchdog/security follow-up (local Windows):** fixed the
   desktop daemon treating its app-data directory as the active repository after
   a crash/restart by introducing explicit `--managed-runtime` startup. Added a
