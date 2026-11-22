@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { Michroma, Orbitron, Syncopate, Space_Grotesk, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -50,11 +51,16 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+// A strict per-response script nonce requires request-time rendering; the
+// cockpit shell intentionally opts out of static prerendering for that reason.
+export const instant = false;
+
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html
       lang="en"
@@ -63,6 +69,7 @@ export default function RootLayout({
     >
       <head>
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
               (function() {

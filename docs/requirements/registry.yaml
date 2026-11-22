@@ -1,10 +1,11 @@
 version: 1
-scope: phase0-phase4
+scope: phase0-phase5
 source_documents:
   - Resource/6.1 Fixing/00_MASTER_PRODUCTION_PROGRAM.md
   - Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md
   - Resource/6.1 Fixing/02_PHASE_1_CORE_DAEMON_STORAGE.md
   - Resource/6.1 Fixing/05_PHASE_4_UNIFIED_DAEMON_MCP_EVENTS.md
+  - Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md
 requirements:
   - id: R0.1
     source: "Resource/6.1 Fixing/01_TRUTH_GOVERNANCE_AND_REQUIREMENTS.md#r0.1-requirement-registry"
@@ -132,3 +133,33 @@ requirements:
     acceptance_test: schemas/runtime-envelope.schema.json
     evidence: docs/evidence/106-phase4-g4-ci-closure.md
     status: VERIFIED
+  - id: P5-SEC-001
+    source: "Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md#security-requirements"
+    owner: desktop-security
+    acceptance_test: apps/desktop-electron/test/security.test.js
+    evidence: docs/evidence/103-phase5-runtime-hardening-and-g5-status.md
+    status: IMPLEMENTED
+  - id: P5-E2E-002
+    source: "Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md#gate-g5"
+    owner: desktop-release
+    acceptance_test: apps/desktop-electron/scripts/smoke-packaged.js
+    evidence: docs/evidence/103-phase5-runtime-hardening-and-g5-status.md
+    status: PARTIAL
+  - id: P5-INSTALL-003
+    source: "Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md#packaging-matrix"
+    owner: release-engineering
+    acceptance_test: .github/workflows/post-merge.yml
+    evidence: docs/evidence/103-phase5-runtime-hardening-and-g5-status.md
+    status: PARTIAL
+  - id: P5-SUPPLY-004
+    source: "Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md#tests"
+    owner: release-engineering
+    acceptance_test: .github/workflows/post-merge.yml
+    evidence: docs/evidence/103-phase5-runtime-hardening-and-g5-status.md
+    status: PARTIAL
+  - id: P5-CONTENT-005
+    source: "Resource/6.1 Fixing/06_PHASE_5_ELECTRON_PACKAGING_SECURITY.md#tests"
+    owner: desktop-release
+    acceptance_test: apps/desktop-electron/test/runtime-manifest.test.js
+    evidence: docs/evidence/103-phase5-runtime-hardening-and-g5-status.md
+    status: PARTIAL

@@ -22,6 +22,13 @@ if (!executable) {
 }
 
 const smokeUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-packaged-smoke-'));
+const smokeRepository = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-smoke-repository-'));
+fs.mkdirSync(path.join(smokeRepository, 'src'));
+fs.writeFileSync(
+  path.join(smokeRepository, 'src', 'index.ts'),
+  'export function smokeEntry(value: string): string { return value.trim(); }\n',
+  'utf8',
+);
 
 // The host may itself be running under Electron's Node compatibility mode
 // (for example when launched from an Electron-based IDE). Never leak that
@@ -30,6 +37,7 @@ const smokeUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-packaged-sm
 const cleanEnvironment = { ...process.env };
 delete cleanEnvironment.ELECTRON_RUN_AS_NODE;
 const launchArgs = [`--user-data-dir=${smokeUserData}`];
+if (executable.toLowerCase().endsWith('.appimage')) launchArgs.unshift('--appimage-extract-and-run');
 // Linux CI smoke runs inside a virtual display and can be sandbox-restricted
 // by the hosted runner. These flags apply only to the disposable smoke child;
 // the packaged production launcher and its GPU/canvas defaults are unchanged.
@@ -39,6 +47,7 @@ const child = spawn(executable, launchArgs, {
   env: {
     ...cleanEnvironment,
     SYNEVID_SMOKE: '1',
+    SYNEVID_SMOKE_REPO: smokeRepository,
     SYNEVID_PORT: '3343',
     COCKPIT_URL: 'http://127.0.0.1:3344',
   },
@@ -46,21 +55,52 @@ const child = spawn(executable, launchArgs, {
   windowsHide: true,
 });
 let output = '';
+let timedOut = false;
 child.stdout.on('data', (chunk) => { output += chunk.toString(); process.stdout.write(chunk); });
 child.stderr.on('data', (chunk) => { output += chunk.toString(); process.stderr.write(chunk); });
 const timeout = setTimeout(() => {
-  child.kill();
+  timedOut = true;
+  if (process.platform === 'win32' && child.pid) {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  } else {
+    child.kill();
+  }
   console.error('[SynEvid Smoke] Timed out waiting for packaged health.');
-  process.exit(1);
-}, 45_000);
+  setTimeout(() => process.exit(1), 2_000).unref();
+}, 180_000);
 child.on('error', (error) => {
   clearTimeout(timeout);
   console.error(`[SynEvid Smoke] ${error.message}`);
+  fs.rmSync(smokeUserData, { recursive: true, force: true });
+  fs.rmSync(smokeRepository, { recursive: true, force: true });
   process.exit(1);
 });
-child.on('exit', (code) => {
+child.on('close', (code) => {
   clearTimeout(timeout);
-  if (code === 0 && output.includes('PACKAGED_SMOKE_PASS')) process.exit(0);
-  console.error(`[SynEvid Smoke] Failed with exit code ${code}.`);
+  let receipt = null;
+  try {
+    receipt = JSON.parse(fs.readFileSync(path.join(smokeRepository, '.synevid-smoke-receipt.json'), 'utf8'));
+  } catch {}
+  const digestPattern = /^blake3:[0-9a-f]{64}$/;
+  const repositoryPattern = /^[0-9a-f]{64}$/;
+  const validReceipt = receipt?.schema_version === 1 &&
+    receipt.status === 'PASS' &&
+    repositoryPattern.test(receipt.repository_id || '') &&
+    repositoryPattern.test(receipt.snapshot_id || '') &&
+    digestPattern.test(receipt.report_digest || '') &&
+    Number.isInteger(receipt.mcp_live_event_seq) && receipt.mcp_live_event_seq > 0 &&
+    Number.isInteger(receipt.mcp_trajectory_event_seq) && receipt.mcp_trajectory_event_seq > 0 &&
+    receipt.mcp_trajectory_persisted === true &&
+    receipt.ui_receipt_verified === true &&
+    Number.isInteger(receipt.runtime_files_verified) && receipt.runtime_files_verified > 0 &&
+    receipt.missing_token_status === 401 && receipt.invalid_token_status === 401 &&
+    Number.isInteger(receipt.files_scanned) && receipt.files_scanned > 0;
+  fs.rmSync(smokeUserData, { recursive: true, force: true });
+  fs.rmSync(smokeRepository, { recursive: true, force: true });
+  if (!timedOut && code === 0 && validReceipt) {
+    console.log('PACKAGED_SMOKE_RECEIPT_PASS', receipt);
+    process.exit(0);
+  }
+  console.error(`[SynEvid Smoke] Failed with exit code ${code}; receipt valid=${validReceipt}.`);
   process.exit(1);
 });

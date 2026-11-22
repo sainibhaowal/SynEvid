@@ -70,6 +70,10 @@ async function main() {
       offscreen: process.platform === 'darwin',
     },
   });
+  const rendererDiagnostics = [];
+  window.webContents.on('console-message', (details) => {
+    rendererDiagnostics.push({ level: details.level, message: details.message });
+  });
   const daemonOrigin = `http://127.0.0.1:${daemonPort}`;
   const pageUrl = `${nextOrigin}${nextOrigin.includes('?') ? '&' : '?'}synevid_daemon=${encodeURIComponent(daemonOrigin)}`;
   await window.loadURL(pageUrl);
@@ -82,7 +86,21 @@ async function main() {
     })()`);
   } catch (error) {
     const body = await window.webContents.executeJavaScript('document.body.innerText');
-    throw new Error(`${error.message}; body=${JSON.stringify(body.slice(-3000))}`);
+    const diagnostics = await window.webContents.executeJavaScript(`(async () => {
+      const configured = new URL(window.location.href).searchParams.get('synevid_daemon');
+      const requests = await Promise.all(['/api/v1/health', '/api/v1/status', '/api/v1/repos/list', '/api/v1/capabilities'].map(async (route) => {
+        try {
+          const response = await fetch(new URL(route, configured), {
+            headers: { 'X-Synevid-Client-Id': 'ui:web', 'X-Synevid-Client-Type': 'ui' },
+          });
+          return { route, status: response.status, body: (await response.text()).slice(0, 1000) };
+        } catch (failure) {
+          return { route, error: String(failure) };
+        }
+      }));
+      return { href: window.location.href, configured, stored: localStorage.getItem('synevid_api_url'), requests };
+    })()`);
+    throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}; console=${JSON.stringify(rendererDiagnostics.slice(-30))}; body=${JSON.stringify(body.slice(-3000))}`);
   }
   await waitForJavaScript(window, "document.body.innerText.includes('main.ts')");
   const publishedSeq = publishEvent ? await publishLiveEvent() : expectedSeq;

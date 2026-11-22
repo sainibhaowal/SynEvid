@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Phase 5 Windows rerun (2026-11-22):** rebuilt the current-source daemon and
+  packaged Windows NSIS, portable, and MSI artifacts. Artifact/SBOM validation
+  passed; NSIS install/uninstall and portable launch both completed the real
+  repository → analysis → MCP/UI receipt smoke. Electron tests 19/19, MCP tests
+  51/51 after clean lockfile install, and web tests 21/21 passed. The MCP lock
+  metadata for `concat-map` now matches its resolved `0.0.1` package, and the
+  Zod advisory is fixed; MCP/web/desktop production dependency audits report
+  zero vulnerabilities. Phase 5
+  remains partial until same-SHA native Linux/macOS Actions, Rust SBOM, aggregate
+  checksums/provenance, and native install smokes pass. Windows artifacts are
+  unsigned; signing is not claimed. No canvas renderer, camera, animation, or
+  styling files were changed. Evidence: `docs/evidence/103-phase5-runtime-hardening-and-g5-status.md`.
+
+- Hardened the Electron renderer boundary with exact loopback-origin IPC sender
+  checks, external navigation/webview denial, and child-process cleanup on quit.
+  Updated the unsupported Electron 33 dependency to Electron 45.4.1, upgraded
+  Next.js/eslint-config-next to 16.4.6, and raised the developer/build Node.js
+  floor to 22.12.0.
+  Runtime assembly now includes the public JSON schemas with the sidecar and
+  bundled MCP bridge, plus a deterministic contents manifest that the
+  packaged smoke verifies against actual bytes.
+  Expanded packaged smoke behavior to reject unauthenticated daemon access,
+  connect and index a temporary repository, and verify the analytics snapshot
+  and BLAKE3 digest. Desktop tests pass 19/19 and MCP tests pass 51/51. The
+  production Next build and focused nonce-CSP behavior test pass. The full web
+  suite is 20/21: the Phase 1 Electron browser workflow used a stale daemon
+  binary (Nov 6) against Rust source modified Nov 20; the current source allows
+  the reported preflight header. A fresh daemon build and browser rerun remain
+  unverified because the MSVC C runtime libraries are unavailable locally.
+  This expanded packaged
+  smoke has not yet run on native artifacts; Phase 5 G5 remains partial pending native
+  installed-artifact execution and verification. Native CI now installs/tests
+  NSIS plus portable on Windows, DMG plus ZIP on macOS, and DEB plus AppImage on
+  Linux before accepting release artifacts. CycloneDX SBOMs are generated for
+  Electron, cockpit, MCP, and Rust daemon components and included in the signed
+  checksum bundle.
+- Added a per-request nonce CSP for Next-rendered scripts and made Electron
+  preserve the server policy. Packaged report smoke now verifies the visible
+  UI receipt against the daemon response. Runtime assembly includes the Rust
+  CLI used by MCP, and generated MCP configuration uses a loopback endpoint plus
+  a user-data token file rather than placing the bearer secret in IDE config.
+
 - Verified the Phase 4 authenticated runtime authority across native Windows,
   Ubuntu, and macOS CI: daemon identity, client leases, shared CLI/TUI/MCP/UI
   request identity, explicit offline mode, replay-gap reporting, source-client

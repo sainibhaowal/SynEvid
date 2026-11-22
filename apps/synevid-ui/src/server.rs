@@ -315,7 +315,7 @@ pub struct DashboardServer {
     fs_browse_cache: Arc<Mutex<BTreeMap<PathBuf, FsBrowseCacheEntry>>>,
     pub live_events: Arc<Mutex<Vec<serde_json::Value>>>,
     live_event_signal: Arc<(Mutex<u64>, Condvar)>,
-    live_event_persist_tx: Option<SyncSender<PersistLiveEvent>>,
+    live_event_persist_tx: Option<SyncSender<LiveEventPersistenceCommand>>,
     pub active_ai_session_id: Arc<Mutex<String>>,
     /// Stable identity for this local daemon authority. It is derived from
     /// the daemon root, not from a process timestamp, so clients can detect
@@ -332,6 +332,11 @@ struct PersistLiveEvent {
     seq_id: i64,
     event_type: String,
     data_json: String,
+}
+
+enum LiveEventPersistenceCommand {
+    Event(PersistLiveEvent),
+    Flush(SyncSender<Result<(), String>>),
 }
 
 fn terminal_flag_value<'a>(parts: &'a [&'a str], flag: &str) -> Option<&'a str> {
@@ -619,24 +624,40 @@ impl DashboardServer {
             // The bounded queue makes storage pressure observable as producer
             // back-pressure instead of allowing unbounded memory growth. Dropping
             // the last sender closes the receiver and cancels the worker loop.
-            let (sender, receiver) = sync_channel::<PersistLiveEvent>(1024);
+            let (sender, receiver) = sync_channel::<LiveEventPersistenceCommand>(1024);
             std::thread::spawn(move || {
-                while let Ok(event) = receiver.recv() {
-                    // Open and close the daemon database per queued write. This
-                    // keeps the writer off the live path and avoids holding a
-                    // Windows file handle after the owning daemon/test exits.
-                    let options = autopsy_storage::StorageOptions {
-                        use_wal: true,
-                        cache_dir: Some(live_event_cache_dir.clone()),
-                    };
-                    if let Ok(storage) =
-                        StorageEngine::open_or_recover(&live_event_database_path, options)
-                    {
-                        let _ = storage.record_live_event_with_seq(
-                            event.seq_id,
-                            &event.event_type,
-                            &event.data_json,
-                        );
+                let mut persistence_error = None;
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        LiveEventPersistenceCommand::Event(event) => {
+                            // Open and close the daemon database per queued write. This
+                            // keeps the writer off the live path and avoids holding a
+                            // Windows file handle after the owning daemon/test exits.
+                            let options = autopsy_storage::StorageOptions {
+                                use_wal: true,
+                                cache_dir: Some(live_event_cache_dir.clone()),
+                            };
+                            let result =
+                                StorageEngine::open_or_recover(&live_event_database_path, options)
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|storage| {
+                                        storage
+                                            .record_live_event_with_seq(
+                                                event.seq_id,
+                                                &event.event_type,
+                                                &event.data_json,
+                                            )
+                                            .map(|_| ())
+                                            .map_err(|error| error.to_string())
+                                    });
+                            if let Err(error) = result {
+                                persistence_error = Some(error);
+                            }
+                        }
+                        LiveEventPersistenceCommand::Flush(acknowledgement) => {
+                            let result = persistence_error.take().map_or(Ok(()), Err);
+                            let _ = acknowledgement.send(result);
+                        }
                     }
                 }
             });
@@ -941,17 +962,30 @@ impl DashboardServer {
             // applies bounded back-pressure while explicit sequence IDs preserve
             // replay order.
             if sender
-                .send(PersistLiveEvent {
+                .send(LiveEventPersistenceCommand::Event(PersistLiveEvent {
                     seq_id: seq,
                     event_type: event_name.to_string(),
                     data_json,
-                })
+                }))
                 .is_err()
             {
                 eprintln!("SynEvid: live-event persistence worker is unavailable");
             }
         }
         seq
+    }
+
+    fn flush_live_event_persistence(&self) -> Result<(), String> {
+        let Some(sender) = &self.live_event_persist_tx else {
+            return Ok(());
+        };
+        let (acknowledgement, response) = sync_channel(1);
+        sender
+            .send(LiveEventPersistenceCommand::Flush(acknowledgement))
+            .map_err(|_| "live-event persistence worker is unavailable".to_string())?;
+        response.recv().map_err(|_| {
+            "live-event persistence worker stopped before flush completed".to_string()
+        })?
     }
 
     fn live_event_storage(&self) -> Result<StorageEngine, String> {
@@ -1085,6 +1119,7 @@ impl DashboardServer {
         }
 
         self.stop_repository_watcher();
+        self.flush_live_event_persistence()?;
         Ok(())
     }
 
@@ -1746,6 +1781,15 @@ impl DashboardServer {
             &b"application/json; charset=utf-8"[..],
         )
         .unwrap();
+        // Keep the authenticated browser client able to read the structured
+        // 401 envelope. CORS is not authorization: the bearer token check above
+        // remains mandatory for every non-preflight request.
+        let origin = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+        let methods = Header::from_bytes(
+            &b"Access-Control-Allow-Methods"[..],
+            &b"GET, POST, OPTIONS"[..],
+        )
+        .unwrap();
         let allow = Header::from_bytes(
             &b"Access-Control-Allow-Headers"[..],
             &b"Content-Type, Authorization, X-Synevid-Client-Id, X-Synevid-Client-Type, X-Synevid-Lease-Id"[..],
@@ -1756,6 +1800,8 @@ impl DashboardServer {
         )
         .with_status_code(StatusCode(401))
         .with_header(content)
+        .with_header(origin)
+        .with_header(methods)
         .with_header(allow);
         self.log_api_result(&req, "ERROR", Some("ERR-AUTH-401"), None);
         let _ = req.respond(response);
@@ -6698,13 +6744,50 @@ impl DashboardServer {
             .unwrap_or(repo_dir)
             .to_string_lossy()
             .to_string();
-        let mcp_bundle_path = format!(
-            "{}/apps/mcp-server/dist/index.bundle.js",
-            self.repo_root
-                .canonicalize()
-                .unwrap_or(self.repo_root.clone())
-                .to_string_lossy()
+        let mcp_bundle_path = std::env::var("SYNEVID_MCP_BUNDLE_PATH").unwrap_or_else(|_| {
+            format!(
+                "{}/apps/mcp-server/dist/index.bundle.js",
+                self.repo_root
+                    .canonicalize()
+                    .unwrap_or(self.repo_root.clone())
+                    .to_string_lossy()
+            )
+        });
+        let command = std::env::var("SYNEVID_MCP_COMMAND").unwrap_or_else(|_| "node".to_string());
+        let mut mcp_env = serde_json::Map::new();
+        mcp_env.insert(
+            "SYNEVID_DAEMON_URL".to_string(),
+            serde_json::Value::String(
+                std::env::var("SYNEVID_DAEMON_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:3333".to_string()),
+            ),
         );
+        if let Ok(token_file) = std::env::var("SYNEVID_MCP_TOKEN_FILE") {
+            mcp_env.insert(
+                "SYNEVID_MCP_TOKEN_FILE".to_string(),
+                serde_json::Value::String(token_file),
+            );
+        }
+        if let Ok(autopsy_bin) = std::env::var("AUTOPSY_BIN") {
+            mcp_env.insert(
+                "AUTOPSY_BIN".to_string(),
+                serde_json::Value::String(autopsy_bin),
+            );
+        }
+        if matches!(
+            std::env::var("SYNEVID_MCP_ELECTRON_NODE").as_deref(),
+            Ok("1")
+        ) {
+            mcp_env.insert(
+                "ELECTRON_RUN_AS_NODE".to_string(),
+                serde_json::Value::String("1".to_string()),
+            );
+        }
+        let mcp_server_config = serde_json::json!({
+            "command": command.clone(),
+            "args": [mcp_bundle_path.clone(), "--repo", abs_repo.clone()],
+            "env": mcp_env.clone()
+        });
 
         match client.to_lowercase().as_str() {
             "claude" => serde_json::json!({
@@ -6712,10 +6795,7 @@ impl DashboardServer {
                 "filename": "claude.json",
                 "config": {
                     "mcpServers": {
-                        "synevid": {
-                            "command": "node",
-                            "args": [mcp_bundle_path, "--repo", abs_repo]
-                        }
+                        "synevid": mcp_server_config.clone()
                     }
                 }
             })
@@ -6725,10 +6805,7 @@ impl DashboardServer {
                 "filename": "~/.codeium/windsurf/mcp_config.json",
                 "config": {
                     "mcpServers": {
-                        "synevid": {
-                            "command": "node",
-                            "args": [mcp_bundle_path, "--repo", abs_repo]
-                        }
+                        "synevid": mcp_server_config.clone()
                     }
                 }
             })
@@ -6740,8 +6817,9 @@ impl DashboardServer {
                     "servers": [
                         {
                             "name": "synevid",
-                            "command": "node",
-                            "args": [mcp_bundle_path, "--repo", abs_repo]
+                            "command": command.clone(),
+                            "args": [mcp_bundle_path.clone(), "--repo", abs_repo.clone()],
+                            "env": mcp_env.clone()
                         }
                     ]
                 }
@@ -6752,10 +6830,7 @@ impl DashboardServer {
                 "filename": ".vscode/settings.json",
                 "config": {
                     "mcp.servers": {
-                        "synevid": {
-                            "command": "node",
-                            "args": [mcp_bundle_path, "--repo", abs_repo]
-                        }
+                        "synevid": mcp_server_config.clone()
                     }
                 }
             })
@@ -6767,10 +6842,7 @@ impl DashboardServer {
                     "filename": ".cursor/mcp.json",
                     "config": {
                         "mcpServers": {
-                            "synevid": {
-                                "command": "node",
-                                "args": [mcp_bundle_path, "--repo", abs_repo]
-                            }
+                            "synevid": mcp_server_config.clone()
                         }
                     }
                 })
@@ -7680,6 +7752,7 @@ mod tests {
                 >= 2
         );
         server.broadcast_event("test.persisted", serde_json::json!({ "value": 3 }));
+        server.flush_live_event_persistence().unwrap();
         let invalid_event = server.handle_live_broadcast(
             &serde_json::json!({ "event": "unsafe\r\nevent", "data": {} }).to_string(),
         );
@@ -8797,6 +8870,7 @@ mod tests {
                     .to_string()
                     .contains("apps/mcp-server/dist/index.bundle.js")
             );
+            assert!(snip_val.to_string().contains("SYNEVID_DAEMON_URL"));
         }
 
         // 8. Test live broadcast & poll
@@ -8992,6 +9066,7 @@ mod tests {
             serde_json::json!({ "repository_id": status["active_repo_id"].clone() }),
         );
         assert!(first_seq > 0);
+        server.flush_live_event_persistence().unwrap();
         drop(server);
 
         let restarted = DashboardServer::new_with_loopback_token(

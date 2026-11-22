@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import fs from 'node:fs';
 import path from 'node:path';
 import { runAutopsy, type AutopsyExecutionResult } from './cli.js';
 import { asText, evidenceEnvelope, refusedEnvelope } from './evidence.js';
@@ -30,9 +31,32 @@ type DaemonResult = Record<string, any>;
 const MCP_CLIENT_ID = process.env.SYNEVID_CLIENT_ID?.trim() || 'mcp:default';
 let mcpLeaseId = process.env.SYNEVID_LEASE_ID?.trim() || '';
 
-function daemonHeaders(): Record<string, string> {
+export function resolveDaemonEndpoint(route: string): string {
+  const baseValue = process.env.SYNEVID_DAEMON_URL?.trim() || 'http://127.0.0.1:3333';
+  const base = new URL(baseValue);
+  if (base.protocol !== 'http:' ||
+      !['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname.toLowerCase()) ||
+      base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
+    throw new Error('ERR-DAEMON-URL-400: daemon URL must be a plain HTTP loopback origin');
+  }
+  if (!route.startsWith('/') || route.startsWith('//')) {
+    throw new Error('ERR-DAEMON-URL-400: daemon route must be an absolute local path');
+  }
+  return new URL(route, base).toString();
+}
+
+export function daemonHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const token = process.env.SYNEVID_LOOPBACK_TOKEN?.trim();
+  const tokenFile = process.env.SYNEVID_MCP_TOKEN_FILE?.trim();
+  let token = process.env.SYNEVID_LOOPBACK_TOKEN?.trim();
+  if (!token && tokenFile) {
+    try {
+      token = fs.readFileSync(tokenFile, 'utf8').trim();
+    } catch {
+      // Leave the request unauthenticated; the daemon's 401 remains the
+      // authoritative result and cannot be converted into a local success.
+    }
+  }
   if (token) headers.Authorization = `Bearer ${token}`;
   headers['X-Synevid-Client-Id'] = MCP_CLIENT_ID;
   headers['X-Synevid-Client-Type'] = 'mcp';
@@ -45,7 +69,7 @@ async function postDaemonJson(
   body: Record<string, unknown>,
   timeoutMs = 1500
 ): Promise<DaemonResult> {
-  const response = await fetch(`http://127.0.0.1:3333${route}`, {
+  const response = await fetch(resolveDaemonEndpoint(route), {
     method: 'POST',
     headers: daemonHeaders(),
     body: JSON.stringify(body),
@@ -67,7 +91,7 @@ async function postDaemonJson(
 }
 
 async function getDaemonJson(route: string, timeoutMs = 1500): Promise<DaemonResult> {
-  const response = await fetch(`http://127.0.0.1:3333${route}`, {
+  const response = await fetch(resolveDaemonEndpoint(route), {
     method: 'GET',
     headers: daemonHeaders(),
     signal: AbortSignal.timeout(timeoutMs),
@@ -1574,7 +1598,7 @@ export function createAutopsyMcpServer(): McpServer {
 
       // Attempt to query daemon AI working cache
       try {
-        const resp = await fetch('http://127.0.0.1:3333/api/v1/ai/cache/query', {
+        const resp = await fetch(resolveDaemonEndpoint('/api/v1/ai/cache/query'), {
           method: 'POST',
           headers: daemonHeaders(),
           body: JSON.stringify({

@@ -22,7 +22,7 @@ repos:
 
       - id: cargo-test
         name: Workspace Test Stack (Unit & Integration)
-        entry: bash -c 'export TMPDIR="${TMPDIR:-$HOME/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --all-targets -- --nocapture'
+        entry: bash -c 'export TMPDIR="${TMPDIR:-$HOME/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --all-targets -- --nocapture --test-threads=1'
         language: system
         types: [rust]
         pass_filenames: false

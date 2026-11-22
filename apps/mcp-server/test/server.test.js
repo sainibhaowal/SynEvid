@@ -14,11 +14,44 @@ import {
   resolveMaxBufferBytes,
 } from '../dist/cli.js';
 import { evidenceEnvelope, refusedEnvelope, repairAdviceFromStderr } from '../dist/evidence.js';
-import { resolveAgainstRepoRoot } from '../dist/server.js';
+import { resolveAgainstRepoRoot, resolveDaemonEndpoint, daemonHeaders } from '../dist/server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_API_ROOT = path.resolve(__dirname, '../../../benchmarks/corpus/repo-api');
+
+test('MCP daemon endpoint honors only explicit loopback origins', () => {
+  const saved = process.env.SYNEVID_DAEMON_URL;
+  try {
+    process.env.SYNEVID_DAEMON_URL = 'http://127.0.0.1:3343';
+    assert.equal(resolveDaemonEndpoint('/api/v1/health'), 'http://127.0.0.1:3343/api/v1/health');
+    process.env.SYNEVID_DAEMON_URL = 'http://example.com:3343';
+    assert.throws(() => resolveDaemonEndpoint('/api/v1/health'), /loopback origin/);
+    process.env.SYNEVID_DAEMON_URL = 'http://127.0.0.1:3343/base';
+    assert.throws(() => resolveDaemonEndpoint('/api/v1/health'), /loopback origin/);
+  } finally {
+    if (saved === undefined) delete process.env.SYNEVID_DAEMON_URL;
+    else process.env.SYNEVID_DAEMON_URL = saved;
+  }
+});
+
+test('MCP daemon reads the current bearer credential from the configured token file', () => {
+  const tokenFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-mcp-token-')), 'token');
+  const savedToken = process.env.SYNEVID_LOOPBACK_TOKEN;
+  const savedTokenFile = process.env.SYNEVID_MCP_TOKEN_FILE;
+  try {
+    fs.writeFileSync(tokenFile, 'credential-for-test\n', { mode: 0o600 });
+    delete process.env.SYNEVID_LOOPBACK_TOKEN;
+    process.env.SYNEVID_MCP_TOKEN_FILE = tokenFile;
+    assert.equal(daemonHeaders().Authorization, 'Bearer credential-for-test');
+  } finally {
+    if (savedToken === undefined) delete process.env.SYNEVID_LOOPBACK_TOKEN;
+    else process.env.SYNEVID_LOOPBACK_TOKEN = savedToken;
+    if (savedTokenFile === undefined) delete process.env.SYNEVID_MCP_TOKEN_FILE;
+    else process.env.SYNEVID_MCP_TOKEN_FILE = savedTokenFile;
+    fs.rmSync(path.dirname(tokenFile), { recursive: true, force: true });
+  }
+});
 
 async function withDaemonFetch(handler, callback) {
   const originalFetch = globalThis.fetch;

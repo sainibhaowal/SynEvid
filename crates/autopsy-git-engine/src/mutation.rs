@@ -1426,7 +1426,7 @@ impl GitMutationManager {
         }
     }
 
-    /// Instantaneous rollback using refs/autopsy/undo/<id> safety stack (Cmd+Z).
+    /// Instantaneous rollback using `refs/autopsy/undo/<id>` safety stack (Cmd+Z).
     pub fn undo(&self) -> Result<GitMutationResult, GitError> {
         let git_dir = self.git_dir()?;
         let undo_dir = git_dir.join("refs").join("autopsy").join("undo");

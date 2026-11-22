@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the machine-readable Phase 0/1 requirement registry."""
+"""Validate the machine-readable cross-phase requirement registry."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def main() -> int:
     # A registry entry is not allowed to be an unowned wildcard.
     if any(re.fullmatch(r"[A-Z0-9._/-]+", item) is None for item in seen):
         fail("all IDs must be stable ASCII requirement identifiers")
-    print(f"Validated {len(requirements)} Phase 0/1 requirements with complete ownership, test, evidence, and status metadata.")
+    print(f"Validated {len(requirements)} requirements with complete ownership, test, evidence, and status metadata.")
     return 0
 
 

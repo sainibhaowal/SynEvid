@@ -11,11 +11,13 @@ test('FR-P5-001: Electron Desktop App Package Configuration', () => {
 
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   assert.equal(pkg.main, 'src/main.js');
-  assert.ok(pkg.devDependencies.electron, 'Must specify electron dependency');
+  assert.match(pkg.devDependencies.electron, /^\^45\./, 'Must use a currently supported Electron major line');
   assert.equal(pkg.scripts.dev, 'node scripts/dev.js');
   assert.equal(pkg.scripts.start, 'node scripts/dev.js');
-  assert.ok(pkg.engines.node.startsWith('>=20'), 'Must declare the supported Node.js floor');
+  assert.equal(pkg.engines.node, '>=22.12.0', 'Must declare Electron 45 compatible Node.js floor');
   assert.ok(pkg.engines.npm.startsWith('>=10'), 'Must declare the supported npm floor');
+  const devLauncher = fs.readFileSync(path.join(PKG_ROOT, 'scripts/dev.js'), 'utf8');
+  assert.match(devLauncher, /nodeMajor < 22 \|\| \(nodeMajor === 22 && nodeMinor < 12\)/);
 });
 
 test('FR-P5-001: Main Process & Hardened Security Architecture (INV-SANDBOX-004)', () => {

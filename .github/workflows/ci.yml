@@ -223,17 +223,23 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
+            command: dist:win
           - name: macOS
             os: macos-latest
+            command: dist:mac
           - name: Linux
             os: ubuntu-latest
+            command: dist:linux
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Install Linux headless display
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb fakeroot rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -276,21 +282,39 @@ jobs:
         working-directory: apps/web
         run: npm test
 
-      - name: Build unsigned unpacked Electron runtime
+      - name: Build unsigned native Electron installers
         working-directory: apps/desktop-electron
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run dist:dir
+        run: npm run ${{ matrix.command }}
 
-      - name: Run packaged smoke on Linux virtual display
+      - name: Generate Electron dependency SBOM
+        working-directory: apps/desktop-electron
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "dist/sbom-synevid-electron-${{ matrix.name }}.cdx.json"
+
+      - name: Generate cockpit dependency SBOM
+        working-directory: apps/web
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-cockpit-${{ matrix.name }}.cdx.json"
+
+      - name: Generate MCP dependency SBOM
+        working-directory: apps/mcp-server
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-mcp-${{ matrix.name }}.cdx.json"
+
+      - name: Verify native Electron release artifacts
+        working-directory: apps/desktop-electron
+        env:
+          SYNEVID_RELEASE_OS: ${{ runner.os == 'Windows' && 'win32' || runner.os == 'macOS' && 'darwin' || 'linux' }}
+        run: npm run verify:artifacts
+
+      - name: Install and smoke native artifacts on Linux virtual display
         if: runner.os == 'Linux'
         working-directory: apps/desktop-electron
-        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:packaged
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:installers
 
-      - name: Run packaged smoke on Windows and macOS
+      - name: Install and smoke native artifacts on Windows and macOS
         if: runner.os != 'Linux'
         working-directory: apps/desktop-electron
-        run: npm run smoke:packaged
+        run: npm run smoke:installers
 
   phase3-loose-history-performance:
     name: Phase 3 Loose Git History Budget (${{ matrix.os }})

@@ -251,21 +251,33 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run ${{ matrix.command }}
 
+      - name: Generate Electron dependency SBOM
+        working-directory: apps/desktop-electron
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "dist/sbom-synevid-electron-${{ matrix.name }}.cdx.json"
+
+      - name: Generate cockpit dependency SBOM
+        working-directory: apps/web
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-cockpit-${{ matrix.name }}.cdx.json"
+
+      - name: Generate MCP dependency SBOM
+        working-directory: apps/mcp-server
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-mcp-${{ matrix.name }}.cdx.json"
+
       - name: Verify all native Electron artifacts exist
         working-directory: apps/desktop-electron
         env:
           SYNEVID_RELEASE_OS: ${{ runner.os == 'Windows' && 'win32' || runner.os == 'macOS' && 'darwin' || 'linux' }}
         run: npm run verify:artifacts
 
-      - name: Run packaged smoke test on Linux virtual display
+      - name: Install and smoke native Electron artifacts on Linux
         if: runner.os == 'Linux'
         working-directory: apps/desktop-electron
-        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:packaged
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:installers
 
-      - name: Run packaged smoke test on Windows and macOS
+      - name: Install and smoke native Electron artifacts on Windows and macOS
         if: runner.os != 'Linux'
         working-directory: apps/desktop-electron
-        run: npm run smoke:packaged
+        run: npm run smoke:installers
 
       - name: Upload Electron artifacts
         uses: actions/upload-artifact@v4
@@ -279,6 +291,7 @@ jobs:
             apps/desktop-electron/dist/*.AppImage
             apps/desktop-electron/dist/*.deb
             apps/desktop-electron/dist/*.rpm
+            apps/desktop-electron/dist/sbom-*.cdx.json
           if-no-files-found: error
 
   release-manifest:
@@ -300,7 +313,8 @@ jobs:
         run: |
           cargo install cargo-sbom --locked
           cargo sbom --cargo-package autopsy-cli --output-format cyclone_dx_json_1_5 > sbom-autopsy-cli.cdx.json
-          python3 -c "import json; d=json.load(open('sbom-autopsy-cli.cdx.json')); print('SBOM components:', len(d.get('components', [])))"
+          cargo sbom --cargo-package synevid-ui --output-format cyclone_dx_json_1_5 > sbom-synevid-ui.cdx.json
+          python3 -c "import json; fs=['sbom-autopsy-cli.cdx.json','sbom-synevid-ui.cdx.json']; bs=[json.load(open(f)) for f in fs]; assert all(b.get('bomFormat') == 'CycloneDX' and b.get('specVersion') and b.get('components') for b in bs); print({f: len(b['components']) for f,b in zip(fs,bs)})"
 
       - name: Download All Platform Artifacts
         uses: actions/download-artifact@v4
@@ -310,16 +324,18 @@ jobs:
       - name: Consolidate Release Bundle, Manifests & SHA256SUMS
         run: |
           mkdir -p release-bundle
-          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-bundle/ \;
+          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "sbom-*.cdx.json" \) -exec cp {} release-bundle/ \;
           cp sbom-autopsy-cli.cdx.json release-bundle/
+          cp sbom-synevid-ui.cdx.json release-bundle/
           cd release-bundle
-          sha256sum * > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
           cd ..
           VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
           python3 scripts/render-package-manifests.py --sums release-bundle/SHA256SUMS.txt --version "$VERSION" --out-dir release-bundle/
           cd release-bundle
-          sha256sum * > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt | sort | xargs sha256sum > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
           echo "## Synevid Multi-Platform Release Manifest" >> $GITHUB_STEP_SUMMARY
           echo "| Filename | SHA256 Checksum |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
@@ -339,7 +355,7 @@ jobs:
       - name: Generate SLSA Build Provenance Attestation
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: "release-bundle/autopsy-*"
+          subject-path: "release-bundle/*"
 
       - name: Upload Final Release Bundle
         uses: actions/upload-artifact@v4

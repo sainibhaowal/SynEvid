@@ -21,14 +21,15 @@
     "dist:mac": "npm run build:runtime && electron-builder --mac dmg zip",
     "dist:linux": "npm run build:runtime && electron-builder --linux AppImage deb rpm",
     "verify:artifacts": "node scripts/verify-artifacts.js",
-    "smoke:packaged": "node scripts/smoke-packaged.js"
+    "smoke:packaged": "node scripts/smoke-packaged.js",
+    "smoke:installers": "node scripts/smoke-installers.js"
   },
   "engines": {
-    "node": ">=20.9.0",
+    "node": ">=22.12.0",
     "npm": ">=10.0.0"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
+    "electron": "^45.4.1",
     "electron-builder": "^26.18.0"
   },
   "license": "Apache-2.0",
@@ -90,6 +91,14 @@
       {
         "from": "build/runtime/mcp-server",
         "to": "mcp-server"
+      },
+      {
+        "from": "build/runtime/schemas",
+        "to": "schemas"
+      },
+      {
+        "from": "build/runtime/runtime-manifest.json",
+        "to": "runtime-manifest.json"
       }
     ],
     "npmRebuild": false

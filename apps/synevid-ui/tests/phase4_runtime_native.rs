@@ -55,6 +55,14 @@ fn request(
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse::<u16>().ok())
         .unwrap_or(0);
+    if status == 401 {
+        assert!(
+            response
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("Access-Control-Allow-Origin: *")),
+            "authenticated browser clients must be able to read structured 401 responses"
+        );
+    }
     let payload = response
         .split_once("\r\n\r\n")
         .map(|(_, payload)| payload)

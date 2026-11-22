@@ -2,8 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, session, Menu, Tray, nativeImage } 
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const readline = require('readline');
 const http = require('http');
 const crypto = require('crypto');
+const { isTrustedIpcSender, isTrustedRendererUrl } = require('./security');
+const { verifyRuntimeManifest } = require('./runtime-manifest');
 
 // In virtualized / WSL2 / multi-GPU environments, avoid crashing GPU child process
 // app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -28,6 +31,13 @@ let shuttingDown = false;
 let daemonRestartTimer = null;
 let daemonRestartAttempts = 0;
 let tray = null;
+let mcpTokenFilePath = null;
+
+function cockpitRendererUrl() {
+  const url = new URL(COCKPIT_URL);
+  url.searchParams.set('synevid_daemon', `http://127.0.0.1:${DAEMON_PORT}`);
+  return url.toString();
+}
 
 // React's development build uses eval() only to reconstruct cross-environment
 // call stacks. Keep that capability limited to the source-run development
@@ -36,11 +46,11 @@ function buildContentSecurityPolicy(liveDevelopment) {
   const developmentEvaluation = liveDevelopment ? " 'unsafe-eval'" : '';
   return [
     "default-src 'self' data: blob: http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001 http://127.0.0.1:3333",
-    `script-src 'self' 'unsafe-inline'${developmentEvaluation} http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001`,
+    `script-src 'self'${developmentEvaluation} http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001`,
     "style-src 'self' 'unsafe-inline' http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001",
     "img-src 'self' data: blob: http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001",
     "font-src 'self' data: http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001",
-    'connect-src \'self\' http://localhost:3000 http://127.0.0.1:3000 http://localhost:3001 http://127.0.0.1:3001 http://127.0.0.1:3333 ws://localhost:3000 ws://127.0.0.1:3000 ws://localhost:3001 ws://127.0.0.1:3001 ws://127.0.0.1:3333',
+    'connect-src \'self\' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*',
   ].join('; ');
 }
 
@@ -173,6 +183,156 @@ function stopFrameMeter() {
   return readFrameMeterStats();
 }
 
+function shutdownChildren() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (daemonRestartTimer) {
+    clearTimeout(daemonRestartTimer);
+    daemonRestartTimer = null;
+  }
+  for (const child of [daemonProcess, webProcess]) {
+    if (!child) continue;
+    try {
+      child.kill();
+    } catch (error) {
+      console.warn('[SynEvid Desktop] Child shutdown warning:', error.message);
+    }
+  }
+  daemonProcess = null;
+  webProcess = null;
+  if (mcpTokenFilePath) {
+    try {
+      fs.rmSync(mcpTokenFilePath, { force: true });
+    } catch (error) {
+      console.warn('[SynEvid Desktop] MCP credential cleanup warning:', error.message);
+    }
+    mcpTokenFilePath = null;
+  }
+}
+
+function writeMcpTokenFile() {
+  const userDataDir = app.getPath('userData');
+  fs.mkdirSync(userDataDir, { recursive: true });
+  if (process.platform !== 'win32') fs.chmodSync(userDataDir, 0o700);
+  mcpTokenFilePath = path.join(userDataDir, 'mcp-loopback-token');
+  const existing = fs.lstatSync(mcpTokenFilePath, { throwIfNoEntry: false });
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) {
+    throw new Error('MCP credential path must be a regular file inside the private user-data directory');
+  }
+  if (existing) fs.rmSync(mcpTokenFilePath);
+  fs.writeFileSync(mcpTokenFilePath, `${LOOPBACK_TOKEN}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  if (process.platform !== 'win32') fs.chmodSync(mcpTokenFilePath, 0o600);
+  return mcpTokenFilePath;
+}
+
+function mcpBundlePath() {
+  return app.isPackaged
+    ? packagedRuntimePath('mcp-server', 'index.bundle.js')
+    : path.join(sourceRepositoryRoot(), 'apps', 'mcp-server', 'dist', 'index.bundle.js');
+}
+
+function runPackagedMcpImpact(repoPath, symbol, sessionId) {
+  return new Promise((resolve, reject) => {
+    const cliPath = app.isPackaged
+      ? packagedRuntimePath('sidecars', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy')
+      : path.join(sourceRepositoryRoot(), 'target', 'debug', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy');
+    const child = spawn(process.execPath, [mcpBundlePath(), '--repo', repoPath], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        SYNEVID_DAEMON_URL: `http://127.0.0.1:${DAEMON_PORT}`,
+        SYNEVID_MCP_TOKEN_FILE: mcpTokenFilePath || writeMcpTokenFile(),
+        AUTOPSY_BIN: cliPath,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const lines = readline.createInterface({ input: child.stdout });
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => finish(new Error('Packaged MCP impact timed out')), 45_000);
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      lines.close();
+      child.kill();
+      if (error) reject(new Error(`${error.message}${stderr ? `; MCP stderr: ${stderr.slice(-2000)}` : ''}`));
+      else resolve(value);
+    };
+    const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code) => {
+      if (!settled) finish(new Error(`MCP process exited before response (code=${code})`));
+    });
+    lines.on('line', (line) => {
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        finish(new Error('Packaged MCP emitted invalid JSON-RPC on stdout'));
+        return;
+      }
+      if (message.id === 1) {
+        if (message.error) {
+          finish(new Error(`MCP initialization failed: ${JSON.stringify(message.error)}`));
+          return;
+        }
+        send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+        send({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: {
+            name: 'autopsy_impact',
+            arguments: {
+              symbol,
+              repo_root: repoPath,
+              direction: 'backward',
+              detail: 'full',
+              session_id: sessionId,
+            },
+          },
+        });
+      } else if (message.id === 2) {
+        if (message.error || message.result?.isError) {
+          finish(new Error(`MCP impact was refused: ${JSON.stringify(message.error || message.result)}`));
+          return;
+        }
+        const text = message.result?.content?.find((item) => item.type === 'text')?.text;
+        let envelope;
+        try {
+          envelope = JSON.parse(text || '');
+        } catch {
+          finish(new Error('MCP impact returned no parseable evidence envelope'));
+          return;
+        }
+        if (envelope.actionable !== true || envelope.trajectory?.live_published !== true ||
+            !Number.isInteger(envelope.trajectory?.live_seq) ||
+            envelope.trajectory?.trajectory_persisted !== true ||
+            !Number.isInteger(envelope.trajectory?.event_seq)) {
+          finish(new Error(`MCP impact did not persist authenticated daemon evidence: ${JSON.stringify(envelope)}`));
+          return;
+        }
+        finish(null, envelope);
+      }
+    });
+    send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'synevid-packaged-smoke', version: '0.6.0' },
+      },
+    });
+  });
+}
+
 function markNextPresentedFrame() {
   if (!frameMeter.active) return readFrameMeterStats();
   frameMeter.markStartedAt = process.hrtime.bigint();
@@ -298,6 +458,253 @@ function checkServiceHealth(targetUrl, timeoutMs = 1500, headers = {}) {
   });
 }
 
+function requestJson(targetUrl, { method = 'GET', token, body, timeoutMs = 30_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(targetUrl);
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = String(payload.length);
+    }
+    const req = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method,
+      headers,
+      timeout: timeoutMs,
+    }, (res) => {
+      let responseBody = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { responseBody += chunk; });
+      res.on('end', () => {
+        let json;
+        try {
+          json = JSON.parse(responseBody);
+        } catch (error) {
+          reject(new Error(`Expected JSON from ${target.pathname}: ${error.message}`));
+          return;
+        }
+        resolve({ statusCode: res.statusCode || 0, json });
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error(`Request timed out: ${target.pathname}`)));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function verifyVisibleAnalyticsReceipt(expected) {
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Packaged smoke window is unavailable');
+  await mainWindow.loadURL(cockpitRendererUrl());
+  const deadline = Date.now() + 30_000;
+  let lastState = 'cockpit did not render the analytics panel';
+  while (Date.now() < deadline) {
+    if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Packaged smoke window closed before receipt render');
+    const state = await mainWindow.webContents.executeJavaScript(`(() => {
+      const panel = document.querySelector('section[aria-label="Analytics reports"]');
+      if (!panel) {
+        const repositoriesWorkspace = [...document.querySelectorAll('button')]
+          .find((button) => button.title.startsWith('Repositories ('));
+        if (repositoriesWorkspace && !repositoriesWorkspace.className.includes('bg-cyan-500/15')) {
+          repositoriesWorkspace.click();
+          return { ready: false, reason: 'opening repositories workspace' };
+        }
+        return { ready: false, reason: 'analytics panel missing from repositories workspace' };
+      }
+      const jsonButton = [...panel.querySelectorAll('button')].find((button) => button.textContent.trim().toLowerCase() === 'json');
+      if (!jsonButton) return { ready: false, reason: 'JSON report control missing' };
+      if (!panel.querySelector('pre')) jsonButton.click();
+      const content = panel.querySelector('pre')?.textContent || '';
+      if (!content) {
+        const reportError = panel.querySelector('[class*="text-rose"]')?.textContent?.trim();
+        return { ready: false, reason: reportError || 'report content not rendered', panelText: panel.innerText.slice(-1200) };
+      }
+      return { ready: true, content };
+    })()`, true).catch((error) => ({ ready: false, reason: error.message }));
+    if (state.ready) {
+      let rendered;
+      try {
+        rendered = JSON.parse(state.content);
+      } catch {
+        throw new Error('Visible analytics report was not valid JSON');
+      }
+      const visibleDigest = rendered.result_digest || rendered.digest;
+      if (rendered.repository?.repo_id !== expected.repositoryId ||
+          rendered.snapshot?.snapshot_id !== expected.snapshotId ||
+          visibleDigest !== expected.digest) {
+        const differingFields = Object.keys(expected.report || {}).filter((key) =>
+          JSON.stringify(rendered[key]) !== JSON.stringify(expected.report[key]));
+        throw new Error(`Visible analytics receipt does not match the daemon result: ${JSON.stringify({
+          repository_id: rendered.repository?.repo_id,
+          snapshot_id: rendered.snapshot?.snapshot_id,
+          digest: visibleDigest,
+          expected_repository_id: expected.repositoryId,
+          expected_snapshot_id: expected.snapshotId,
+          expected_digest: expected.digest,
+          differing_report_fields: Object.fromEntries(differingFields.map((key) => [key, {
+            visible: JSON.stringify(rendered[key]).slice(0, 800),
+            expected: JSON.stringify(expected.report[key]).slice(0, 800),
+          }])),
+        })}`);
+      }
+      return;
+    }
+    lastState = state.reason || lastState;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`Visible analytics receipt did not become ready: ${lastState}`);
+}
+
+async function runPackagedSmokeWorkflow() {
+  const runtimeIntegrity = app.isPackaged
+    ? verifyRuntimeManifest(process.resourcesPath)
+    : null;
+  const repoPath = process.env.SYNEVID_SMOKE_REPO;
+  if (!repoPath || !fs.statSync(repoPath, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error('SYNEVID_SMOKE_REPO must point to a real smoke repository');
+  }
+  const daemonUrl = `http://127.0.0.1:${DAEMON_PORT}`;
+  const unauthenticated = await requestJson(`${daemonUrl}/api/v1/health`);
+  const invalidToken = await requestJson(`${daemonUrl}/api/v1/health`, { token: 'invalid-smoke-token' });
+  if (unauthenticated.statusCode !== 401 || invalidToken.statusCode !== 401) {
+    throw new Error(`Daemon auth rejection mismatch: missing=${unauthenticated.statusCode}, invalid=${invalidToken.statusCode}; expected 401 for both`);
+  }
+  const connected = await requestJson(`${daemonUrl}/api/v1/repos/connect`, {
+    method: 'POST',
+    token: LOOPBACK_TOKEN,
+    body: { root_path: repoPath, display_name: 'Phase 5 packaged smoke fixture' },
+  });
+  const scan = connected.json.scan;
+  if (connected.statusCode < 200 || connected.statusCode >= 300 ||
+      connected.json.status !== 'connected' || !connected.json.repo_id ||
+      !scan?.snapshot_id || scan.files_scanned < 1) {
+    throw new Error(`Packaged repository connect/index failed: ${JSON.stringify(connected.json)}`);
+  }
+
+  const reportResponse = await requestJson(`${daemonUrl}/api/v1/analytics/report?format=json`, {
+    token: LOOPBACK_TOKEN,
+  });
+  const reportEnvelope = reportResponse.json;
+  const report = reportEnvelope.report;
+  if (reportResponse.statusCode < 200 || reportResponse.statusCode >= 300 ||
+      reportEnvelope.error_code || !reportEnvelope.digest?.startsWith('blake3:') ||
+      !report || report.result_digest !== reportEnvelope.digest ||
+      reportEnvelope.evidence_receipt?.digest !== reportEnvelope.blake3_digest ||
+      report?.repository?.repo_id !== connected.json.repo_id ||
+      report?.snapshot?.snapshot_id !== scan.snapshot_id ||
+      !Number.isInteger(report?.structural_health?.total_files) ||
+      report.structural_health.total_files < 1) {
+    throw new Error(`Packaged analysis/report verification failed: ${JSON.stringify(reportEnvelope)}`);
+  }
+  const graphResponse = await requestJson(`${daemonUrl}/api/v1/repos/export`, {
+    token: LOOPBACK_TOKEN,
+  });
+  const exportedNodes = graphResponse.json?.export?.nodes;
+  const impactSeed = Array.isArray(exportedNodes)
+    ? exportedNodes.find((node) =>
+      node.file_path === 'src/index.ts' &&
+      node.node_kind === 'function' &&
+      typeof node.stable_id === 'string' &&
+      node.stable_id.length > 0)
+    : null;
+  if (graphResponse.statusCode < 200 || graphResponse.statusCode >= 300 || !impactSeed) {
+    throw new Error(`Packaged smoke could not resolve a function seed from the indexed graph: ${JSON.stringify({
+      status: graphResponse.statusCode,
+      graph_error: graphResponse.json?.error,
+      node_count: Array.isArray(exportedNodes) ? exportedNodes.length : null,
+    })}`);
+  }
+  const sessionStart = await requestJson(`${daemonUrl}/api/v1/forensics/sessions/start`, {
+    method: 'POST',
+    token: LOOPBACK_TOKEN,
+    body: {
+      repo_id: connected.json.repo_id,
+      baseline_snap_id: scan.snapshot_id,
+      actor_kind: 'HUMAN',
+      actor_name: 'Phase 5 packaged smoke',
+    },
+  });
+  const sessionId = sessionStart.json?.session_id;
+  if (sessionStart.statusCode < 200 || sessionStart.statusCode >= 300 ||
+      sessionStart.json?.status !== 'ACTIVE' || typeof sessionId !== 'string' || !sessionId) {
+    throw new Error(`Packaged smoke could not start a persisted forensic session: ${JSON.stringify(sessionStart.json)}`);
+  }
+  const mcpImpact = await runPackagedMcpImpact(repoPath, impactSeed.stable_id, sessionId);
+  const mcpConfigResponse = await requestJson(`${daemonUrl}/api/v1/ai/config-snippet?client=cursor`, {
+    token: LOOPBACK_TOKEN,
+  });
+  const configuredMcp = mcpConfigResponse.json?.config?.mcpServers?.synevid;
+  if (mcpConfigResponse.statusCode < 200 || mcpConfigResponse.statusCode >= 300 ||
+      configuredMcp?.command !== process.execPath ||
+      configuredMcp?.args?.[0] !== mcpBundlePath() ||
+      configuredMcp?.env?.SYNEVID_DAEMON_URL !== daemonUrl ||
+      configuredMcp?.env?.SYNEVID_MCP_TOKEN_FILE !== mcpTokenFilePath ||
+      configuredMcp?.env?.AUTOPSY_BIN !== (app.isPackaged
+        ? packagedRuntimePath('sidecars', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy')
+        : path.join(sourceRepositoryRoot(), 'target', 'debug', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy')) ||
+      configuredMcp?.env?.SYNEVID_LOOPBACK_TOKEN) {
+    throw new Error(`Packaged MCP configuration is incomplete or exposes its bearer token: ${JSON.stringify(mcpConfigResponse.json)}`);
+  }
+  // MCP has just persisted an AI-analysis event, which is part of the report's
+  // real session ledger. Fetch the final report after that write so the UI and
+  // daemon are compared against one identical source state, not a stale digest.
+  const finalReportResponse = await requestJson(`${daemonUrl}/api/v1/analytics/report?format=json`, {
+    token: LOOPBACK_TOKEN,
+  });
+  const finalReportEnvelope = finalReportResponse.json;
+  if (finalReportResponse.statusCode < 200 || finalReportResponse.statusCode >= 300 ||
+      !finalReportEnvelope?.digest?.startsWith('blake3:') ||
+      finalReportEnvelope.report?.repository?.repo_id !== connected.json.repo_id ||
+      finalReportEnvelope.report?.snapshot?.snapshot_id !== scan.snapshot_id) {
+    throw new Error(`Final packaged analytics report did not match the connected snapshot: ${JSON.stringify(finalReportEnvelope)}`);
+  }
+  await verifyVisibleAnalyticsReceipt({
+    repositoryId: connected.json.repo_id,
+    snapshotId: scan.snapshot_id,
+    digest: finalReportEnvelope.digest,
+    report: finalReportEnvelope.report,
+  });
+  console.log('PACKAGED_SMOKE_UI_RECEIPT_PASS', {
+    repository_id: connected.json.repo_id,
+    snapshot_id: scan.snapshot_id,
+    report_digest: finalReportEnvelope.digest,
+  });
+  console.log('PACKAGED_SMOKE_MCP_PASS', {
+    live_event_seq: mcpImpact.trajectory.live_seq,
+    trajectory_event_seq: mcpImpact.trajectory.event_seq,
+    report_digest: finalReportEnvelope.digest,
+    bearer_secret_embedded: false,
+  });
+  console.log('PACKAGED_SMOKE_ANALYSIS_PASS', {
+    repository_id: connected.json.repo_id,
+    snapshot_id: scan.snapshot_id,
+    files_scanned: scan.files_scanned,
+    report_digest: finalReportEnvelope.digest,
+    runtime_files_verified: runtimeIntegrity?.files_verified ?? null,
+    missing_token_status: unauthenticated.statusCode,
+    invalid_token_status: invalidToken.statusCode,
+  });
+  return {
+    schema_version: 1,
+    status: 'PASS',
+    repository_id: connected.json.repo_id,
+    snapshot_id: scan.snapshot_id,
+    files_scanned: scan.files_scanned,
+    report_digest: finalReportEnvelope.digest,
+    mcp_live_event_seq: mcpImpact.trajectory.live_seq,
+    mcp_trajectory_event_seq: mcpImpact.trajectory.event_seq,
+    mcp_trajectory_persisted: mcpImpact.trajectory.trajectory_persisted,
+    ui_receipt_verified: true,
+    runtime_files_verified: runtimeIntegrity?.files_verified ?? null,
+    missing_token_status: unauthenticated.statusCode,
+    invalid_token_status: invalidToken.statusCode,
+  };
+}
+
 async function checkApplicationHealth() {
   const [daemonHealthy, cockpitHealthy] = await Promise.all([
     checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`, 1500, {
@@ -345,7 +752,18 @@ async function ensureSidecarDaemon() {
         stdio: 'ignore',
         detached: false,
         windowsHide: true,
-        env: { ...process.env, SYNEVID_LOOPBACK_TOKEN: LOOPBACK_TOKEN },
+        env: {
+          ...process.env,
+          SYNEVID_LOOPBACK_TOKEN: LOOPBACK_TOKEN,
+          SYNEVID_MCP_TOKEN_FILE: mcpTokenFilePath || writeMcpTokenFile(),
+          SYNEVID_DAEMON_URL: `http://127.0.0.1:${DAEMON_PORT}`,
+          SYNEVID_MCP_BUNDLE_PATH: mcpBundlePath(),
+          SYNEVID_MCP_COMMAND: process.execPath,
+          SYNEVID_MCP_ELECTRON_NODE: '1',
+          AUTOPSY_BIN: app.isPackaged
+            ? packagedRuntimePath('sidecars', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy')
+            : path.join(sourceRepositoryRoot(), 'target', 'debug', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy'),
+        },
       });
     } else if (existingBinary) {
       daemonProcess = spawn(existingBinary, ['--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot()], {
@@ -353,7 +771,18 @@ async function ensureSidecarDaemon() {
         stdio: 'ignore',
         detached: false,
         windowsHide: true,
-        env: { ...process.env, SYNEVID_LOOPBACK_TOKEN: LOOPBACK_TOKEN },
+        env: {
+          ...process.env,
+          SYNEVID_LOOPBACK_TOKEN: LOOPBACK_TOKEN,
+          SYNEVID_MCP_TOKEN_FILE: mcpTokenFilePath || writeMcpTokenFile(),
+          SYNEVID_DAEMON_URL: `http://127.0.0.1:${DAEMON_PORT}`,
+          SYNEVID_MCP_BUNDLE_PATH: mcpBundlePath(),
+          SYNEVID_MCP_COMMAND: process.execPath,
+          SYNEVID_MCP_ELECTRON_NODE: '1',
+          AUTOPSY_BIN: app.isPackaged
+            ? packagedRuntimePath('sidecars', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy')
+            : path.join(sourceRepositoryRoot(), 'target', 'debug', process.platform === 'win32' ? 'autopsy.exe' : 'autopsy'),
+        },
       });
     } else {
       const cargoCmd = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
@@ -487,12 +916,14 @@ async function ensureWebCockpit() {
 
 function createWindow() {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const hasServerCsp = Object.keys(details.responseHeaders || {})
+      .some((name) => name.toLowerCase() === 'content-security-policy');
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          buildContentSecurityPolicy(LIVE_DEVELOPMENT),
-        ],
+        ...(hasServerCsp ? {} : {
+          'Content-Security-Policy': [buildContentSecurityPolicy(LIVE_DEVELOPMENT)],
+        }),
       },
     });
   });
@@ -540,6 +971,11 @@ function createWindow() {
 
   const shellWindow = mainWindow;
   const shellWebContents = shellWindow.webContents;
+  shellWebContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  shellWebContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url, COCKPIT_URL)) event.preventDefault();
+  });
+  shellWebContents.on('will-attach-webview', (event) => event.preventDefault());
   shellWebContents.on('before-input-event', (event, input) => {
     const isToggleShortcut =
       input.type === 'keyDown' &&
@@ -566,7 +1002,7 @@ function createWindow() {
     while (mainWindow === shellWindow && !shellWindow.isDestroyed()) {
       if (ready) {
         try {
-          await shellWindow.loadURL(COCKPIT_URL);
+          await shellWindow.loadURL(cockpitRendererUrl());
           return;
         } catch (err) {
           console.warn('Cockpit load failed; returning to splash:', err.message);
@@ -602,7 +1038,8 @@ function createWindow() {
 }
 
 // IPC Handlers
-ipcMain.handle('dialog:openDirectory', async () => {
+ipcMain.handle('dialog:openDirectory', async (event) => {
+  if (!isTrustedIpcSender(event, COCKPIT_URL)) return null;
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
@@ -614,7 +1051,8 @@ ipcMain.handle('dialog:openDirectory', async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle('daemon:status', async () => {
+ipcMain.handle('daemon:status', async (event) => {
+  if (!isTrustedIpcSender(event, COCKPIT_URL)) return { error_code: 'ERR-IPC-403' };
   const daemonHealthy = await checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`, 1500, {
     Authorization: `Bearer ${LOOPBACK_TOKEN}`,
   });
@@ -624,28 +1062,31 @@ ipcMain.handle('daemon:status', async () => {
     daemonOnline: daemonHealthy,
     cockpitOnline: webHealthy,
     cockpitUrl: COCKPIT_URL,
-    loopbackToken: LOOPBACK_TOKEN,
   };
 });
 
-ipcMain.handle('daemon:token', () => LOOPBACK_TOKEN);
+ipcMain.handle('daemon:token', (event) => (
+  isTrustedIpcSender(event, COCKPIT_URL) ? LOOPBACK_TOKEN : null
+));
 ipcMain.on('daemon:token-sync', (event) => {
-  event.returnValue = LOOPBACK_TOKEN;
+  event.returnValue = isTrustedIpcSender(event, COCKPIT_URL) ? LOOPBACK_TOKEN : null;
 });
 
-ipcMain.handle('frame-meter:start', () => startFrameMeter());
-ipcMain.handle('frame-meter:stats', () => readFrameMeterStats());
-ipcMain.handle('frame-meter:stop', () => stopFrameMeter());
-ipcMain.handle('frame-meter:mark', () => markNextPresentedFrame());
+ipcMain.handle('frame-meter:start', (event) => (isTrustedIpcSender(event, COCKPIT_URL) ? startFrameMeter() : { error_code: 'ERR-IPC-403' }));
+ipcMain.handle('frame-meter:stats', (event) => (isTrustedIpcSender(event, COCKPIT_URL) ? readFrameMeterStats() : { error_code: 'ERR-IPC-403' }));
+ipcMain.handle('frame-meter:stop', (event) => (isTrustedIpcSender(event, COCKPIT_URL) ? stopFrameMeter() : { error_code: 'ERR-IPC-403' }));
+ipcMain.handle('frame-meter:mark', (event) => (isTrustedIpcSender(event, COCKPIT_URL) ? markNextPresentedFrame() : { error_code: 'ERR-IPC-403' }));
 ipcMain.on('frame-meter:mark-sync', (event) => {
-  event.returnValue = markNextPresentedFrame();
+  event.returnValue = isTrustedIpcSender(event, COCKPIT_URL) ? markNextPresentedFrame() : { error_code: 'ERR-IPC-403' };
 });
 
-ipcMain.on('window:minimize', () => {
+ipcMain.on('window:minimize', (event) => {
+  if (!isTrustedIpcSender(event, COCKPIT_URL)) return;
   if (mainWindow) mainWindow.minimize();
 });
 
-ipcMain.on('window:maximize', () => {
+ipcMain.on('window:maximize', (event) => {
+  if (!isTrustedIpcSender(event, COCKPIT_URL)) return;
   if (mainWindow) {
     if (mainWindow.isMaximized()) {
       mainWindow.unmaximize();
@@ -655,7 +1096,8 @@ ipcMain.on('window:maximize', () => {
   }
 });
 
-ipcMain.on('window:close', () => {
+ipcMain.on('window:close', (event) => {
+  if (!isTrustedIpcSender(event, COCKPIT_URL)) return;
   if (mainWindow) mainWindow.close();
 });
 
@@ -675,6 +1117,7 @@ if (!gotSingleInstanceLock) {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return;
+  writeMcpTokenFile();
   createWindow();
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'SynEvid', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
@@ -694,16 +1137,24 @@ app.whenReady().then(async () => {
   await ensureWebCockpit();
 
   if (process.env.SYNEVID_SMOKE === '1') {
-    const smokeReady = await waitForApplicationHealth();
-    console.log('PACKAGED_SMOKE_COMPONENTS', {
-      daemon: await checkServiceHealth(`http://127.0.0.1:${DAEMON_PORT}/api/v1/health`, 1500, {
-        Authorization: `Bearer ${LOOPBACK_TOKEN}`,
-      }),
-      cockpit: await checkServiceHealth(COCKPIT_URL),
-    });
-    console.log(smokeReady ? 'PACKAGED_SMOKE_PASS' : 'PACKAGED_SMOKE_FAIL');
-    if (!smokeReady) showDaemonErrorBanner('Packaged runtime health check failed');
-    setTimeout(() => app.quit(), smokeReady ? 50 : 250);
+    try {
+      const smokeReady = await waitForApplicationHealth();
+      if (!smokeReady) throw new Error('Packaged daemon or cockpit did not become healthy');
+      const smokeReceipt = await runPackagedSmokeWorkflow();
+      const smokeReceiptPath = path.join(process.env.SYNEVID_SMOKE_REPO, '.synevid-smoke-receipt.json');
+      fs.writeFileSync(smokeReceiptPath, JSON.stringify(smokeReceipt), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      console.log('PACKAGED_SMOKE_COMPONENTS', { daemon: true, cockpit: true });
+      console.log('PACKAGED_SMOKE_PASS');
+      setTimeout(() => {
+        shutdownChildren();
+        app.exit(0);
+      }, 50);
+    } catch (error) {
+      console.error('PACKAGED_SMOKE_FAIL', error.message);
+      showDaemonErrorBanner(error.message);
+      shutdownChildren();
+      setTimeout(() => app.exit(1), 250);
+    }
   }
 
   app.on('activate', () => {
@@ -714,19 +1165,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  shuttingDown = true;
-  if (daemonRestartTimer) clearTimeout(daemonRestartTimer);
-  if (daemonProcess) {
-    try {
-      daemonProcess.kill();
-    } catch {}
-  }
-  if (webProcess) {
-    try {
-      webProcess.kill();
-    } catch {}
-  }
   if (process.platform !== 'darwin') {
+    shutdownChildren();
     app.quit();
   }
 });
+
+app.on('before-quit', shutdownChildren);
