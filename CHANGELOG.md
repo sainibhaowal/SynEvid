@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   camera, animation, or styling files were modified. Evidence:
   `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
 
+- **macOS browser-smoke follow-up:** Actions run `44993378733` on
+  `0ba93f5ca0ace120f467e4082bd7b69e6efdc528` passed the strict 5,000-loose-
+  commit performance jobs on Windows, Linux, and macOS. The macOS packaged
+  smoke still failed because `phase1_daemon_browser.behavior.test.mjs` retained
+  SwiftShader/SwANGLE command-line switches; the native log showed Vulkan/EGL
+  initialization failure and a browser-expression timeout. Those macOS-only
+  test-launch switches are now removed, while the hidden test window keeps
+  hardware acceleration/WebGL disabled. The web test command now runs serially:
+  concurrent Next.js E2E servers were racing while rewriting the shared
+  `tsconfig.json`; the parallel run failed 3/21, while the serialized rerun
+  passed 21/21. A new exact-revision native run is required; G5 remains
+  **PARTIAL**. Production canvas behavior is untouched.
+
 - **Cross-platform follow-up:** fixed a race in concurrent content-addressed
   cache writes by assigning each writer an exclusive temporary file and cleaning
   it on errors. The Windows integration test verifies published bytes and no

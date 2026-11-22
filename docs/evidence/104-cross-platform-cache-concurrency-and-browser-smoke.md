@@ -88,3 +88,25 @@ Local verification after these targeted changes:
 The Linux and macOS changes are not verified until a new native Actions run
 finishes on the exact commit containing them. G5 remains **PARTIAL** until every
 required job is green; no cross-platform production-ready claim is made.
+
+## macOS runner correction (run 44993378733)
+
+Run `44993378733` on `0ba93f5ca0ace120f467e4082bd7b69e6efdc528` passed the
+strict 5,000-loose-commit performance test on Windows, Linux, and macOS. The
+macOS Electron browser smoke nevertheless failed. Its log showed SwANGLE/Vulkan
+`EGL_NOT_INITIALIZED` errors and a browser-expression timeout. Inspection found
+that the behavior test's parent launcher still passed
+`--use-gl=swiftshader`, `--use-angle=swiftshader`, and
+`--enable-unsafe-swiftshader`; changing only the child runner had not removed
+those switches. The macOS-only command-line switches have now been removed from
+`apps/web/test/phase1_daemon_browser.behavior.test.mjs`. A follow-up native run
+on the new exact commit is required. G5 remains **PARTIAL**.
+
+The first local web-suite rerun after that diagnosis also exposed a test
+isolation race: all three Next.js browser E2E files were starting dev servers
+concurrently, and each could rewrite the shared `apps/web/tsconfig.json`. The
+parallel run failed 3/21; its temporary config had lost strict mode and the
+`@/*` alias while Next generated per-test types. `apps/web/package.json` now
+sets `--test-concurrency=1`; the full serialized suite passed **21/21** on
+Windows. This serializes test execution only and does not change application
+runtime or rendering behavior.
