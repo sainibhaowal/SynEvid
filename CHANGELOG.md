@@ -15,10 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata for `concat-map` now matches its resolved `0.0.1` package, and the
   Zod advisory is fixed; MCP/web/desktop production dependency audits report
   zero vulnerabilities. Phase 5
-  remains partial until same-SHA native Linux/macOS Actions, Rust SBOM, aggregate
-  checksums/provenance, and native install smokes pass. Windows artifacts are
-  unsigned; signing is not claimed. No canvas renderer, camera, animation, or
-  styling files were changed. Evidence: `docs/evidence/103-phase5-runtime-hardening-and-g5-status.md`.
+  Windows and macOS same-SHA native package smokes passed; Linux build, browser
+  workflow, and artifact/SBOM checks passed, but `.deb` installation initially
+  failed because the smoke used `dpkg -i` without resolving declared runtime
+  dependencies. The smoke now uses `apt-get install` and awaits a new native
+  Linux run. Rust daemon SBOM and aggregate checksums/provenance also remain
+  pending. Windows artifacts are unsigned; signing is not claimed. No canvas
+  renderer, camera, animation, or styling files were changed. Evidence:
+  `docs/evidence/103-phase5-runtime-hardening-and-g5-status.md`.
 
 - Hardened the Electron renderer boundary with exact loopback-origin IPC sender
   checks, external navigation/webview denial, and child-process cleanup on quit.

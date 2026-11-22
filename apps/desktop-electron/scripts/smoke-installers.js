@@ -112,14 +112,16 @@ function smokeLinux() {
   const deb = findArtifact(/\.deb$/i, 'Linux DEB package');
   const packageName = run('dpkg-deb', ['-f', deb, 'Package'], { capture: true }).trim();
   if (!packageName) fail('Could not read Debian package name');
-  run('sudo', ['dpkg', '-i', deb]);
+  // Let the package manager resolve the native runtime dependencies exactly
+  // as a user installation would, rather than invoking dpkg without them.
+  run('sudo', ['apt-get', 'install', '--yes', '--no-install-recommends', deb]);
   try {
     const installedFiles = run('dpkg-query', ['-L', packageName], { capture: true });
     const executable = installedFiles.split(/\r?\n/).find((item) => /\/synevid$/.test(item) && fs.existsSync(item));
     if (!executable) fail(`Installed Debian package ${packageName} has no synevid executable`);
     smokeExecutable(executable);
   } finally {
-    run('sudo', ['dpkg', '-r', packageName]);
+    run('sudo', ['apt-get', 'remove', '--yes', packageName]);
   }
 
   const appImage = findArtifact(/\.AppImage$/i, 'Linux AppImage');

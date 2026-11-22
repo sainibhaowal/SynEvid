@@ -124,6 +124,7 @@ test('Phase 5 native install smoke covers required Windows, macOS, and Linux art
   assert.match(installerSmoke, /hdiutil/);
   assert.match(installerSmoke, /function smokeLinux/);
   assert.match(installerSmoke, /dpkg/);
+  assert.match(installerSmoke, /apt-get', 'install', '--yes', '--no-install-recommends'/);
   assert.match(installerSmoke, /AppImage/);
   assert.match(installerSmoke, /smokeExecutable\(executable\)/);
 });
