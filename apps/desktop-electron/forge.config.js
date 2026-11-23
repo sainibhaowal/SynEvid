@@ -118,8 +118,8 @@ module.exports = {
       const resourcesDir = resolve(options.appOutDir, 'resources');
       
       // Copy daemon binary
-      const daemonSrc = resolve(__dirname, '..', '..', '..', 'target', 'release', 'synevid-ui');
-      const daemonDest = resolve(resourcesDir, process.platform === 'win32' ? 'synevid-ui.exe' : 'synevid-ui');
+      const daemonSrc = resolve(__dirname, '..', '..', '..', 'target', 'release', 'autopsy-daemon');
+      const daemonDest = resolve(resourcesDir, process.platform === 'win32' ? 'autopsy-daemon.exe' : 'autopsy-daemon');
       if (existsSync(daemonSrc)) {
         copyFileSync(daemonSrc, daemonDest);
       }

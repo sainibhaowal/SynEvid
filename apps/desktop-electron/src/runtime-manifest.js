@@ -51,7 +51,7 @@ function writeRuntimeManifest(runtimeDir, { version, platform, arch }) {
   const files = roots.flatMap((dir) => listFiles(runtimeDir, dir)).sort((a, b) => compareText(a.path, b.path));
   const required = [
     'cockpit/server.js',
-    `sidecars/${platform === 'win32' ? 'synevid-ui.exe' : 'synevid-ui'}`,
+    `sidecars/${platform === 'win32' ? 'autopsy-daemon.exe' : 'autopsy-daemon'}`,
     `sidecars/${platform === 'win32' ? 'autopsy.exe' : 'autopsy'}`,
     'mcp-server/index.bundle.js',
     'schemas/evidence-envelope.schema.json',
@@ -65,7 +65,7 @@ function writeRuntimeManifest(runtimeDir, { version, platform, arch }) {
     application_version: version,
     platform,
     architecture: arch,
-    sqlite_migrations: 'embedded-in-synevid-ui-sidecar',
+    sqlite_migrations: 'embedded-in-autopsy-daemon-sidecar',
     files,
   };
   fs.writeFileSync(path.join(runtimeDir, 'runtime-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -83,7 +83,7 @@ function verifyRuntimeManifest(resourcesDir, suppliedManifest) {
   }
   const required = [
     'cockpit/server.js',
-    `sidecars/${manifest.platform === 'win32' ? 'synevid-ui.exe' : 'synevid-ui'}`,
+    `sidecars/${manifest.platform === 'win32' ? 'autopsy-daemon.exe' : 'autopsy-daemon'}`,
     `sidecars/${manifest.platform === 'win32' ? 'autopsy.exe' : 'autopsy'}`,
     'mcp-server/index.bundle.js',
     'schemas/evidence-envelope.schema.json',

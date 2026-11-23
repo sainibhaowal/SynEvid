@@ -71,7 +71,7 @@ function daemonRepositoryRoot() {
 }
 
 function daemonExecutableCandidates() {
-  const executableName = process.platform === 'win32' ? 'synevid-ui.exe' : 'synevid-ui';
+  const executableName = process.platform === 'win32' ? 'autopsy-daemon.exe' : 'autopsy-daemon';
   const repoRoot = sourceRepositoryRoot();
   const candidates = [];
   if (app.isPackaged) candidates.push(packagedRuntimePath('sidecars', executableName));
@@ -978,14 +978,14 @@ async function ensureSidecarDaemon() {
     Authorization: `Bearer ${LOOPBACK_TOKEN}`,
   });
   if (isHealthy) {
-    console.log(`[SynEvid Desktop] Reusing active synevid-ui daemon on port ${DAEMON_PORT}`);
+    console.log(`[SynEvid Desktop] Reusing active autopsy-daemon on port ${DAEMON_PORT}`);
     recordDaemonHealthy();
     return;
   }
 
   const repoRoot = sourceRepositoryRoot();
   const existingBinary = daemonExecutableCandidates().find((candidate) => fs.existsSync(candidate));
-  console.log(`[SynEvid Desktop] Spawning synevid-ui sidecar for ${daemonRepositoryRoot()}`);
+  console.log(`[SynEvid Desktop] Spawning autopsy-daemon sidecar for ${daemonRepositoryRoot()}`);
 
   try {
     // The live Electron shell must exercise the current Rust source. A
@@ -994,8 +994,8 @@ async function ensureSidecarDaemon() {
     // are not hidden by a stale release executable.
     if (LIVE_DEVELOPMENT) {
       const cargoCmd = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
-      console.log('[SynEvid Desktop] Live development: starting synevid-ui from source via Cargo.');
-      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
+      console.log('[SynEvid Desktop] Live development: starting autopsy-daemon from source via Cargo.');
+      daemonProcess = spawn(cargoCmd, ['run', '-p', 'autopsy-daemon', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
         cwd: repoRoot,
         stdio: 'ignore',
         detached: false,
@@ -1034,7 +1034,7 @@ async function ensureSidecarDaemon() {
       });
     } else {
       const cargoCmd = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
-      daemonProcess = spawn(cargoCmd, ['run', '-p', 'synevid-ui', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
+      daemonProcess = spawn(cargoCmd, ['run', '-p', 'autopsy-daemon', '--', '--host', '127.0.0.1', '--port', String(DAEMON_PORT), '--repo-root', daemonRepositoryRoot(), '--managed-runtime'], {
         cwd: repoRoot,
         stdio: 'ignore',
         detached: false,
