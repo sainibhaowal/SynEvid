@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::report_types::{PerformanceResources, ErrorsRecovery};
+
 /// Canonical finding state for evidence-backed analytics
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -237,6 +239,17 @@ pub struct GitRiskFinding {
     pub finding_state: FindingState,
     pub evidence: FindingEvidence,
     pub risk_score: f64,
+    pub semantic_impact: Option<SemanticImpact>,
+}
+
+/// Semantic impact analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticImpact {
+    pub direct_symbols_affected: usize,
+    pub transitive_symbols_affected: usize,
+    pub contracts_broken: usize,
+    pub api_surface_changed: bool,
+    pub blast_radius_score: f64,
 }
 
 /// Analytics report with full evidence
@@ -248,6 +261,8 @@ pub struct AnalyticsReport {
     pub static_unreferenced: Vec<StaticUnreferencedCandidate>,
     pub runtime_unobserved: Vec<RuntimeUnobservedCandidate>,
     pub git_evolution: GitEvolutionResult,
+    pub performance_resources: Option<PerformanceResources>,
+    pub errors_recovery: Option<ErrorsRecovery>,
     pub coverage_state: CoverageState,
     pub generated_at: u64,
 }

@@ -28,8 +28,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
+use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -665,6 +666,36 @@ impl TuiApp {
                     self.blast_selected = 0;
                 }
             }
+            KeyCode::Enter => {
+                // In Analytics tab, focus on the selected finding's file/symbol
+                if self.selected_tab == 5 {
+                    if let Some(report) = &self.analytics_report_data {
+                        let finding = match self.analytics_tab_selected {
+                            0 => report["static_unreferenced"]["verified_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            1 => report["static_unreferenced"]["unknown_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            2 => report["runtime_unobserved"]["unobserved_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            3 => report["git_evolution"]["semantic_git_risk"]["verified_findings"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            _ => None,
+                        };
+                        if let Some(f) = finding {
+                            let file_path = f["file_path"].as_str().unwrap_or("");
+                            let line = f["line"].as_u64().unwrap_or(0);
+                            let symbol = f["qualified_name"].as_str().unwrap_or("");
+                            self.freshness = format!("FOCUS: {}:{}:{}", file_path, line, symbol);
+                            // In a real implementation, this would open the file in an editor
+                            // For now, we just show the focus target
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -723,6 +754,35 @@ impl TuiApp {
                     let clicked = (row - 7) as usize;
                     if clicked < self.runs.len() {
                         self.runs_selected = clicked;
+                    }
+                }
+                // Click on Analytics Tab (Tab 5) - Sub-tabs
+                else if self.selected_tab == 5 && (3..=5).contains(&row) {
+                    if col < 15 {
+                        self.analytics_tab_selected = 0;
+                    } else if col < 30 {
+                        self.analytics_tab_selected = 1;
+                    } else if col < 45 {
+                        self.analytics_tab_selected = 2;
+                    } else {
+                        self.analytics_tab_selected = 3;
+                    }
+                    self.analytics_findings_selected = 0;
+                }
+                // Click on Findings List in Analytics Tab
+                else if self.selected_tab == 5 && row >= 7 {
+                    let clicked = (row - 7) as usize;
+                    if let Some(report) = &self.analytics_report_data {
+                        let max_idx = match self.analytics_tab_selected {
+                            0 => report["static_unreferenced"]["verified_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            1 => report["static_unreferenced"]["unknown_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            2 => report["runtime_unobserved"]["unobserved_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            3 => report["git_evolution"]["semantic_git_risk"]["verified_findings"].as_array().map(|a| a.len()).unwrap_or(0),
+                            _ => 0,
+                        };
+                        if max_idx > 0 && clicked < max_idx {
+                            self.analytics_findings_selected = clicked;
+                        }
                     }
                 }
             }
@@ -942,6 +1002,11 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
         } else {
             "○ [5] Shortcuts"
         }),
+        Line::from(if app.selected_tab == 5 {
+            "● [6] ANALYTICS"
+        } else {
+            "○ [6] Analytics"
+        }),
     ];
 
     let tabs = Tabs::new(tab_titles)
@@ -969,6 +1034,8 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
         1 => render_verify(f, app, chunks[2]),
         2 => render_blast(f, app, chunks[2]),
         3 => render_trajectory(f, app, chunks[2]),
+        4 => render_help(f, chunks[2]),
+        5 => render_analytics(f, app, chunks[2]),
         _ => render_help(f, chunks[2]),
     }
 
@@ -1777,6 +1844,282 @@ fn render_trajectory(f: &mut Frame, app: &TuiApp, area: Rect) {
             .border_style(Style::default().fg(Color::Rgb(71, 85, 105))),
     );
     f.render_widget(details, cols[1]);
+}
+
+fn render_analytics(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let report_data = app.analytics_report_data.as_ref();
+    
+    let (left_area, right_area) = {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (cols[0], cols[1])
+    };
+    
+    // Left panel: Findings list with sub-tabs
+    let sub_tabs = vec![
+        "Verified",
+        "Unknown",
+        "Runtime",
+        "Git Risk",
+    ];
+    let sub_tab_titles: Vec<Line> = sub_tabs.iter().enumerate().map(|(i, title)| {
+        Line::from(if app.analytics_tab_selected == i {
+            format!("● [{}] {}", i + 1, title)
+        } else {
+            format!("○ [{}] {}", i + 1, title)
+        })
+    }).collect();
+    
+    let sub_tabs_widget = Tabs::new(sub_tab_titles)
+        .block(Block::default().title(" Analytics Findings ").borders(Borders::ALL))
+        .select(app.analytics_tab_selected);
+    
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(left_area);
+    
+    f.render_widget(sub_tabs_widget, left_chunks[0]);
+    
+    // Render findings list based on selected sub-tab
+    let findings_list = match (app.analytics_tab_selected, report_data) {
+        (0, Some(report)) => render_static_verified_list(report),
+        (1, Some(report)) => render_static_unknown_list(report),
+        (2, Some(report)) => render_runtime_unobserved_list(report),
+        (3, Some(report)) => render_git_risk_list(report),
+        _ => vec![ListItem::new(Line::from(Span::styled(
+            "No analytics report loaded. Press 'a' to fetch.",
+            Style::default().fg(Color::DarkGray),
+        )))],
+    };
+    
+    let mut findings_state = ListState::default();
+    findings_state.select(Some(app.analytics_findings_selected));
+    let findings_widget = List::new(findings_list)
+        .block(Block::default()
+            .title(" Findings ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan)))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(findings_widget, left_chunks[1], &mut findings_state);
+    
+    // Right panel: Evidence drill-down detail
+    let detail_text = match (app.analytics_tab_selected, report_data, app.analytics_findings_selected) {
+        (0, Some(report), idx) => render_finding_detail(report, "static_unreferenced", "verified_candidates", idx),
+        (1, Some(report), idx) => render_finding_detail(report, "static_unreferenced", "unknown_candidates", idx),
+        (2, Some(report), idx) => render_finding_detail(report, "runtime_unobserved", "unobserved_candidates", idx),
+        (3, Some(report), idx) => render_finding_detail(report, "git_evolution", "semantic_git_risk", idx),
+        _ => vec![Line::from("Select a finding to view evidence details.")],
+    };
+    
+    // Check if report is unavailable
+    let is_unavailable = app.analytics_report_status == "UNAVAILABLE" || app.analytics_report_status == "ERROR";
+    let detail_title = if is_unavailable {
+        " Evidence Detail (UNAVAILABLE) "
+    } else {
+        " Evidence Detail "
+    };
+    let detail_border_color = if is_unavailable {
+        Color::Rgb(244, 63, 94)
+    } else {
+        Color::Rgb(71, 85, 105)
+    };
+    
+    let detail_widget = Paragraph::new(detail_text)
+        .block(Block::default()
+            .title(detail_title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(detail_border_color))
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(detail_widget, right_area);
+}
+
+fn render_static_verified_list(report: &Value) -> Vec<ListItem> {
+    if let Some(candidates) = report["static_unreferenced"]["verified_candidates"].as_array() {
+        candidates.iter().enumerate().map(|(i, c)| {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let state = c["finding_state"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            let color = match state {
+                "verified" => Color::Green,
+                "candidate" => Color::Yellow,
+                "fail" => Color::Red,
+                "warn" => Color::Rgb(245, 158, 11),
+                _ => Color::White,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" [{}]", state.to_uppercase()), Style::default().fg(color)),
+            ]))
+        }).collect()
+    } else {
+        vec![ListItem::new(Line::from(Span::styled("No verified candidates", Style::default().fg(Color::DarkGray))))]
+    }
+}
+
+fn render_static_unknown_list(report: &Value) -> Vec<ListItem> {
+    if let Some(candidates) = report["static_unreferenced"]["unknown_candidates"].as_array() {
+        candidates.iter().enumerate().map(|(i, c)| {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let state = c["finding_state"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(Color::Rgb(244, 63, 94)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" [{}]", state.to_uppercase()), Style::default().fg(Color::Rgb(244, 63, 94))),
+            ]))
+        }).collect()
+    } else {
+        vec![ListItem::new(Line::from(Span::styled("No unknown candidates", Style::default().fg(Color::DarkGray))))]
+    }
+}
+
+fn render_runtime_unobserved_list(report: &Value) -> Vec<ListItem> {
+    let status = report["runtime_unobserved"]["status"].as_str().unwrap_or("UNKNOWN");
+    let windows = report["runtime_unobserved"]["windows_analyzed"].as_u64().unwrap_or(0);
+    let mut items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("Windows Analyzed: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(windows.to_string(), Style::default().fg(Color::White)),
+        ])),
+    ];
+    if let Some(candidates) = report["runtime_unobserved"]["unobserved_candidates"].as_array() {
+        for (i, c) in candidates.iter().enumerate() {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(Color::Rgb(245, 158, 11)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+            ])));
+        }
+    }
+    items
+}
+
+fn render_git_risk_list(report: &Value) -> Vec<ListItem> {
+    let status = report["git_evolution"]["semantic_git_risk"]["status"].as_str().unwrap_or("UNKNOWN");
+    let score = report["git_evolution"]["semantic_git_risk"]["risk_score"].as_f64().unwrap_or(0.0);
+    let mut items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("Semantic Git Risk: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("Risk Score: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:.2}", score), Style::default().fg(Color::White)),
+        ])),
+    ];
+    if let Some(findings) = report["git_evolution"]["semantic_git_risk"]["verified_findings"].as_array() {
+        for (i, f) in findings.iter().enumerate() {
+            let file = f["file_path"].as_str().unwrap_or("UNKNOWN");
+            let commit = f["commit_short"].as_str().unwrap_or("UNKNOWN");
+            let state = f["finding_state"].as_str().unwrap_or("UNKNOWN");
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(commit, Style::default().fg(Color::Cyan)),
+                Span::styled(" ", Style::default()),
+                Span::styled(file, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" [{}]", state), Style::default().fg(Color::Yellow)),
+            ])));
+        }
+    }
+    items
+}
+
+fn render_finding_detail<'a>(report: &'a Value, section: &'a str, subsection: &'a str, idx: usize) -> Vec<Line<'a>> {
+    if let Some(candidates) = report[section][subsection].as_array() {
+        if let Some(candidate) = candidates.get(idx) {
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("Finding: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["qualified_name"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Stable ID: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["stable_id"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::styled("File: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["file_path"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Line: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["line"].as_u64().unwrap_or(0).to_string(), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("State: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["finding_state"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![Span::styled("EVIDENCE BASIS:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
+                Line::from(vec![
+                    Span::styled("Basis: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["evidence_basis"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Coverage: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["coverage_state"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Method: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["analysis_method"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Reason: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["reason"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(""),
+            ];
+            
+            if let Some(residual) = candidate["evidence"]["residual_unknowns"].as_array() {
+                if !residual.is_empty() {
+                    lines.push(Line::from(vec![Span::styled("RESIDUAL UNKNOWNS:", Style::default().fg(Color::Rgb(244, 63, 94)).add_modifier(Modifier::BOLD))]));
+                    for r in residual {
+                        lines.push(Line::from(vec![
+                            Span::styled("  - ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(r.as_str().unwrap_or(""), Style::default().fg(Color::Rgb(244, 63, 94))),
+                        ]));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+            
+            if let Some(controls) = candidate["evidence"]["false_positive_controls"].as_array() {
+                if !controls.is_empty() {
+                    lines.push(Line::from(vec![Span::styled("FALSE-POSITIVE CONTROLS:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]));
+                    for c in controls {
+                        lines.push(Line::from(vec![
+                            Span::styled("  - ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(format!("{}: ", c["category"].as_str().unwrap_or("UNKNOWN")), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                            Span::styled(c["description"].as_str().unwrap_or(""), Style::default().fg(Color::White)),
+                        ]));
+                    }
+                }
+            }
+            
+            lines
+        } else {
+            vec![Line::from("Invalid finding index")]
+        }
+    } else {
+        vec![Line::from("No data available for this section")]
+    }
 }
 
 fn render_help(f: &mut Frame, area: Rect) {
