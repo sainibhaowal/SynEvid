@@ -5,7 +5,7 @@
 //! registry: the daemon remains the authority for the active repository,
 //! snapshot, event cursor, and storage health.
 
-use crate::{Cli, CliError, EXIT_PASS, OutputFormat, CliImpactDirection, Commands};
+use crate::{Cli, CliError, CliImpactDirection, Commands, EXIT_PASS, OutputFormat};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -160,28 +160,48 @@ pub fn fetch_live_events_for_client(since_seq: i64, client_type: &str) -> Result
     )
 }
 
-pub fn fetch_analytics_report_for_client(client_type: &str) -> Result<Value, CliError> {
-    daemon_request_as(
-        "GET",
-        "/api/v1/analytics/report?format=json",
-        None,
-        ATTACH_TIMEOUT,
-        client_type,
-    )
+pub fn fetch_analytics_report_for_client(
+    client_type: &str,
+    compact: bool,
+    evidence: bool,
+) -> Result<Value, CliError> {
+    let mut query = "/api/v1/analytics/report?format=json".to_string();
+    if compact {
+        query.push_str("&compact=true");
+    }
+    if evidence {
+        query.push_str("&evidence=true");
+    }
+    daemon_request_as("GET", &query, None, ATTACH_TIMEOUT, client_type)
 }
 
-pub fn handle_analytics_report(cli: &Cli, format: &str) -> Result<i32, CliError> {
+pub fn handle_analytics_report(
+    cli: &Cli,
+    format: &str,
+    compact: bool,
+    evidence: bool,
+    state: Option<&str>,
+    severity: Option<&str>,
+) -> Result<i32, CliError> {
     if !matches!(format, "json" | "markdown" | "html" | "sarif" | "bundle") {
         return Err(CliError::Config(
             "analytics format must be json, markdown, html, sarif, or bundle".into(),
         ));
     }
-    let value = daemon_request(
-        "GET",
-        &format!("/api/v1/analytics/report?format={format}"),
-        None,
-        ATTACH_TIMEOUT,
-    )?;
+    let mut query = format!("/api/v1/analytics/report?format={format}");
+    if compact {
+        query.push_str("&compact=true");
+    }
+    if evidence {
+        query.push_str("&evidence=true");
+    }
+    if let Some(s) = state {
+        query.push_str(&format!("&state={}", encode_query_component(s)));
+    }
+    if let Some(s) = severity {
+        query.push_str(&format!("&severity={}", encode_query_component(s)));
+    }
+    let value = daemon_request("GET", &query, None, ATTACH_TIMEOUT)?;
     match cli.format {
         OutputFormat::Json | OutputFormat::Sarif => println!(
             "{}",
@@ -208,24 +228,164 @@ pub fn handle_analytics_report(cli: &Cli, format: &str) -> Result<i32, CliError>
                 report["scope"]["snapshot_id"].as_str().unwrap_or("UNKNOWN")
             );
             println!(
-                "static_candidates: {}",
-                report["static_unreferenced"]["candidate_count"]
+                "generated_at: {}",
+                report["generated_at"].as_u64().unwrap_or(0)
             );
+
+            // Print evidence-backed findings
+            if evidence {
+                println!("\n=== EVIDENCE-BACKED FINDINGS ===");
+                print_evidence_findings(report, "static_unreferenced", "verified_candidates");
+                print_evidence_findings(report, "static_unreferenced", "unknown_candidates");
+                print_evidence_findings(report, "runtime_unobserved", "unobserved_candidates");
+            } else {
+                println!(
+                    "static_verified_candidates: {}",
+                    report["static_unreferenced"]["verified_candidates"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "static_unknown_candidates: {}",
+                    report["static_unreferenced"]["unknown_candidates"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "static_excluded_count: {}",
+                    report["static_unreferenced"]["excluded_count"]
+                        .as_u64()
+                        .unwrap_or(0)
+                );
+                println!(
+                    "runtime_unobserved_status: {}",
+                    report["runtime_unobserved"]["status"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN")
+                );
+                println!(
+                    "runtime_windows_analyzed: {}",
+                    report["runtime_unobserved"]["windows_analyzed"]
+                        .as_u64()
+                        .unwrap_or(0)
+                );
+                println!(
+                    "runtime_unobserved_candidates: {}",
+                    report["runtime_unobserved"]["unobserved_candidates"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "semantic_git_status: {}",
+                    report["git_evolution"]["semantic_git_risk"]["status"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN")
+                );
+                println!(
+                    "semantic_git_risk_score: {:.2}",
+                    report["git_evolution"]["semantic_git_risk"]["risk_score"]
+                        .as_f64()
+                        .unwrap_or(0.0)
+                );
+                println!(
+                    "git_velocity_commits: {}",
+                    report["git_evolution"]["velocity"]["commits_analyzed"]
+                        .as_u64()
+                        .unwrap_or(0)
+                );
+                println!(
+                    "change_concentration_hot_files: {}",
+                    report["git_evolution"]["change_concentration"]["hot_files"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0)
+                );
+            }
+
             println!(
-                "runtime_unobserved_status: {}",
-                report["runtime_unobserved"]["status"]
-                    .as_str()
-                    .unwrap_or("UNKNOWN")
-            );
-            println!(
-                "semantic_git_status: {}",
-                report["git_evolution"]["semantic_git_risk"]["status"]
-                    .as_str()
-                    .unwrap_or("UNKNOWN")
+                "coverage_state: {:?}",
+                report["coverage_state"].as_str().unwrap_or("unknown")
             );
         }
     }
     Ok(EXIT_PASS)
+}
+
+fn print_evidence_findings(report: &Value, section: &str, subsection: &str) {
+    if let Some(candidates) = report[section][subsection].as_array() {
+        for candidate in candidates {
+            println!(
+                "\n  Finding: {}",
+                candidate["qualified_name"].as_str().unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    stable_id: {}",
+                candidate["stable_id"].as_str().unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    file: {}",
+                candidate["file_path"].as_str().unwrap_or("UNKNOWN")
+            );
+            println!("    line: {}", candidate["line"].as_u64().unwrap_or(0));
+            println!(
+                "    state: {}",
+                candidate["finding_state"].as_str().unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    evidence_basis: {}",
+                candidate["evidence"]["evidence_basis"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    coverage: {:?}",
+                candidate["evidence"]["coverage_state"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    reason: {}",
+                candidate["evidence"]["reason"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+            );
+            println!(
+                "    analysis_method: {}",
+                candidate["evidence"]["analysis_method"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+            );
+
+            if let Some(residual) = candidate["evidence"]["residual_unknowns"].as_array()
+                && !residual.is_empty()
+            {
+                println!(
+                    "    residual_unknowns: {:?}",
+                    residual
+                        .iter()
+                        .map(|v| v.as_str().unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+
+            if let Some(controls) = candidate["false_positive_controls"].as_array()
+                && !controls.is_empty()
+            {
+                println!("    false_positive_controls:");
+                for control in controls {
+                    println!(
+                        "      - {}: {}",
+                        control["category"].as_str().unwrap_or("UNKNOWN"),
+                        control["description"].as_str().unwrap_or("")
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn encode_query_component(value: &str) -> String {
@@ -263,7 +423,7 @@ pub fn fetch_impact_for_client(seed: &str, client_type: &str) -> Result<Value, C
 
 /// Fetch baseline from daemon
 pub fn fetch_baseline(
-    cli: &Cli,
+    _cli: &Cli,
     revision: Option<&str>,
     incremental: bool,
     baseline_id: Option<&str>,
@@ -277,12 +437,17 @@ pub fn fetch_baseline(
     if let Some(id) = baseline_id {
         body["baseline_id"] = serde_json::Value::String(id.to_string());
     }
-    daemon_request("POST", "/api/v1/baseline", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/baseline",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch diff from daemon
 pub fn fetch_diff(
-    cli: &Cli,
+    _cli: &Cli,
     before: Option<&str>,
     after: Option<&str>,
 ) -> Result<Value, CliError> {
@@ -293,12 +458,17 @@ pub fn fetch_diff(
     if let Some(a) = after {
         body["after"] = serde_json::Value::String(a.to_string());
     }
-    daemon_request("POST", "/api/v1/diff", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/diff",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch verify from daemon
 pub fn fetch_verify(
-    cli: &Cli,
+    _cli: &Cli,
     strict: bool,
     invariants_file: Option<&Path>,
     baseline_id: Option<&str>,
@@ -312,12 +482,17 @@ pub fn fetch_verify(
     if let Some(file) = invariants_file {
         body["invariants_file"] = serde_json::Value::String(file.to_string_lossy().to_string());
     }
-    daemon_request("POST", "/api/v1/verify", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/verify",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch symbols from daemon
 pub fn fetch_symbols(
-    cli: &Cli,
+    _cli: &Cli,
     limit: usize,
     offset: usize,
     kind: Option<&str>,
@@ -335,7 +510,7 @@ pub fn fetch_symbols(
 
 /// Fetch find from daemon
 pub fn fetch_find(
-    cli: &Cli,
+    _cli: &Cli,
     pattern: &str,
     kind: Option<&str>,
     name_only: bool,
@@ -343,7 +518,12 @@ pub fn fetch_find(
     offset: usize,
     snapshot_id: Option<&str>,
 ) -> Result<Value, CliError> {
-    let mut query = format!("/api/v1/find?pattern={}&limit={}&offset={}", encode_query_component(pattern), limit, offset);
+    let mut query = format!(
+        "/api/v1/find?pattern={}&limit={}&offset={}",
+        encode_query_component(pattern),
+        limit,
+        offset
+    );
     if let Some(k) = kind {
         query.push_str(&format!("&kind={}", encode_query_component(k)));
     }
@@ -358,7 +538,7 @@ pub fn fetch_find(
 
 /// Fetch edges from daemon
 pub fn fetch_edges(
-    cli: &Cli,
+    _cli: &Cli,
     source: &str,
     direction: CliImpactDirection,
     kind: Option<&str>,
@@ -366,12 +546,20 @@ pub fn fetch_edges(
     offset: usize,
     snapshot_id: Option<&str>,
 ) -> Result<Value, CliError> {
-    let mut query = format!("/api/v1/edges?source={}&limit={}&offset={}", encode_query_component(source), limit, offset);
-    query.push_str(&format!("&direction={}", match direction {
-        CliImpactDirection::Forward => "forward",
-        CliImpactDirection::Backward => "backward",
-        CliImpactDirection::Bidirectional => "bidirectional",
-    }));
+    let mut query = format!(
+        "/api/v1/edges?source={}&limit={}&offset={}",
+        encode_query_component(source),
+        limit,
+        offset
+    );
+    query.push_str(&format!(
+        "&direction={}",
+        match direction {
+            CliImpactDirection::Forward => "forward",
+            CliImpactDirection::Backward => "backward",
+            CliImpactDirection::Bidirectional => "bidirectional",
+        }
+    ));
     if let Some(k) = kind {
         query.push_str(&format!("&kind={}", encode_query_component(k)));
     }
@@ -383,7 +571,7 @@ pub fn fetch_edges(
 
 /// Fetch map from daemon
 pub fn fetch_map(
-    cli: &Cli,
+    _cli: &Cli,
     top: usize,
     under: Option<&str>,
     snapshot_id: Option<&str>,
@@ -400,7 +588,7 @@ pub fn fetch_map(
 
 /// Fetch session from daemon
 pub fn fetch_session(
-    cli: &Cli,
+    _cli: &Cli,
     action: &str,
     session_id: Option<&str>,
     invoked: Option<Vec<String>>,
@@ -415,7 +603,8 @@ pub fn fetch_session(
         body["session_id"] = serde_json::Value::String(id.to_string());
     }
     if let Some(inv) = invoked {
-        body["invoked"] = serde_json::Value::Array(inv.into_iter().map(serde_json::Value::String).collect());
+        body["invoked"] =
+            serde_json::Value::Array(inv.into_iter().map(serde_json::Value::String).collect());
     }
     if let Some(code) = exit_code {
         body["exit_code"] = serde_json::Value::Number(code.into());
@@ -426,39 +615,72 @@ pub fn fetch_session(
     if let Some(n) = note {
         body["note"] = serde_json::Value::String(n.to_string());
     }
-    daemon_request("POST", "/api/v1/forensics/sessions", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/forensics/sessions",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch git command from daemon
-pub fn fetch_git(
-    cli: &Cli,
-    subcommand: &str,
-    args: &[String],
-) -> Result<Value, CliError> {
+pub fn fetch_git(_cli: &Cli, subcommand: &str, args: &[String]) -> Result<Value, CliError> {
     let mut body = serde_json::json!({
         "command": subcommand,
     });
     if !args.is_empty() {
-        body["args"] = serde_json::Value::Array(args.iter().map(|a| serde_json::Value::String(a.clone())).collect());
+        body["args"] = serde_json::Value::Array(
+            args.iter()
+                .map(|a| serde_json::Value::String(a.clone()))
+                .collect(),
+        );
     }
-    daemon_request("POST", "/api/v1/git", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/git",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch analytics report from daemon
-pub fn fetch_analytics_report(cli: &Cli, format: &str) -> Result<Value, CliError> {
-    daemon_request("GET", &format!("/api/v1/analytics/report?format={}", format), None, ATTACH_TIMEOUT)
+pub fn fetch_analytics_report(
+    _cli: &Cli,
+    format: &str,
+    compact: bool,
+    evidence: bool,
+    state: Option<&str>,
+    severity: Option<&str>,
+) -> Result<Value, CliError> {
+    let mut query = format!("/api/v1/analytics/report?format={}", format);
+    if compact {
+        query.push_str("&compact=true");
+    }
+    if evidence {
+        query.push_str("&evidence=true");
+    }
+    if let Some(s) = state {
+        query.push_str(&format!("&state={}", encode_query_component(s)));
+    }
+    if let Some(s) = severity {
+        query.push_str(&format!("&severity={}", encode_query_component(s)));
+    }
+    daemon_request("GET", &query, None, ATTACH_TIMEOUT)
 }
 
 /// Fetch temporal from daemon
 pub fn fetch_temporal(
-    cli: &Cli,
+    _cli: &Cli,
     at: Option<&str>,
     max_commits: usize,
     strict: bool,
     compact: bool,
     top_k: Option<usize>,
 ) -> Result<Value, CliError> {
-    let mut query = format!("/api/v1/temporal?max_commits={}&strict={}&compact={}", max_commits, strict, compact);
+    let mut query = format!(
+        "/api/v1/temporal?max_commits={}&strict={}&compact={}",
+        max_commits, strict, compact
+    );
     if let Some(a) = at {
         query.push_str(&format!("&at={}", encode_query_component(a)));
     }
@@ -469,8 +691,9 @@ pub fn fetch_temporal(
 }
 
 /// Fetch lineage from daemon
+#[allow(clippy::too_many_arguments)]
 pub fn fetch_lineage(
-    cli: &Cli,
+    _cli: &Cli,
     from: Option<&str>,
     to: Option<&str>,
     threshold: Option<f64>,
@@ -502,12 +725,18 @@ pub fn fetch_lineage(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/lineage", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/lineage",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch cochange from daemon
+#[allow(clippy::too_many_arguments)]
 pub fn fetch_cochange(
-    cli: &Cli,
+    _cli: &Cli,
     window_seconds: i64,
     max_commits: usize,
     max_files_per_commit: usize,
@@ -527,12 +756,17 @@ pub fn fetch_cochange(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/cochange", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/cochange",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch contract-dist from daemon
 pub fn fetch_contract_dist(
-    cli: &Cli,
+    _cli: &Cli,
     from: &Path,
     to: &Path,
     protocol: crate::extensions::ContractProtocol,
@@ -550,29 +784,39 @@ pub fn fetch_contract_dist(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/contract-dist", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/contract-dist",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch test-select from daemon
 pub fn fetch_test_select(
-    cli: &Cli,
+    _cli: &Cli,
     changed: Vec<String>,
     lcov: Vec<PathBuf>,
     fail_if_all_tests_required: bool,
     strict: bool,
 ) -> Result<Value, CliError> {
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "changed": changed,
         "lcov": lcov.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
         "fail_if_all_tests_required": fail_if_all_tests_required,
         "strict": strict,
     });
-    daemon_request("POST", "/api/v1/test-select", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/test-select",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch catalog from daemon
 pub fn fetch_catalog(
-    cli: &Cli,
+    _cli: &Cli,
     root: Option<&Path>,
     max_file_bytes: Option<u64>,
     strict: bool,
@@ -592,12 +836,17 @@ pub fn fetch_catalog(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/catalog", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/catalog",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch blast-radius from daemon
 pub fn fetch_blast_radius(
-    cli: &Cli,
+    _cli: &Cli,
     reference: &str,
     root: Option<&Path>,
     max_file_bytes: Option<u64>,
@@ -619,12 +868,18 @@ pub fn fetch_blast_radius(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/blast-radius", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/blast-radius",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Fetch telemetry from daemon
+#[allow(clippy::too_many_arguments)]
 pub fn fetch_telemetry(
-    cli: &Cli,
+    _cli: &Cli,
     traces: &Path,
     salt: &str,
     surface: Option<&Path>,
@@ -650,7 +905,12 @@ pub fn fetch_telemetry(
     if let Some(k) = top_k {
         body["top_k"] = serde_json::Value::Number(k.into());
     }
-    daemon_request("POST", "/api/v1/telemetry", Some(&body.to_string()), ATTACH_TIMEOUT)
+    daemon_request(
+        "POST",
+        "/api/v1/telemetry",
+        Some(&body.to_string()),
+        ATTACH_TIMEOUT,
+    )
 }
 
 /// Handle command via daemon (for offline=false default)
@@ -670,19 +930,43 @@ pub fn handle_via_daemon(cli: &Cli) -> Result<i32, CliError> {
 
     // Route to appropriate daemon handler
     match &cli.command {
-        Commands::Baseline { revision, incremental, baseline_id } => {
-            let value = fetch_baseline(cli, revision.as_deref(), *incremental, baseline_id.as_deref())?;
+        Commands::Baseline {
+            revision,
+            incremental,
+            baseline_id,
+        } => {
+            let value = fetch_baseline(
+                cli,
+                revision.as_deref(),
+                *incremental,
+                baseline_id.as_deref(),
+            )?;
             print_result(cli, &value)
         }
         Commands::Diff { before, after } => {
             let value = fetch_diff(cli, before.as_deref(), after.as_deref())?;
             print_result(cli, &value)
         }
-        Commands::Impact { symbol, direction, max_depth, budget, snapshot_id, edge_kinds, profile, top_k, detail } => {
-            let mut query = format!("/api/impact?seed={}&direction={}&max_depth={}&budget={}&profile={:?}&detail={:?}",
+        Commands::Impact {
+            symbol,
+            direction,
+            max_depth,
+            budget,
+            snapshot_id,
+            edge_kinds,
+            profile,
+            top_k,
+            detail,
+        } => {
+            let mut query = format!(
+                "/api/impact?seed={}&direction={}&max_depth={}&budget={}&profile={:?}&detail={:?}",
                 encode_query_component(&symbol[0]),
-                match direction { Some(d) => format!("{:?}", d).to_lowercase(), None => "forward".to_string() },
-                max_depth, budget,
+                match direction {
+                    Some(d) => format!("{:?}", d).to_lowercase(),
+                    None => "forward".to_string(),
+                },
+                max_depth,
+                budget,
                 profile,
                 detail
             );
@@ -698,23 +982,77 @@ pub fn handle_via_daemon(cli: &Cli) -> Result<i32, CliError> {
             let value = daemon_request("GET", &query, None, ATTACH_TIMEOUT)?;
             print_result(cli, &value)
         }
-        Commands::Verify { strict, invariants_file, baseline_id } => {
-            let value = fetch_verify(cli, *strict, invariants_file.as_deref(), baseline_id.as_deref())?;
+        Commands::Verify {
+            strict,
+            invariants_file,
+            baseline_id,
+        } => {
+            let value = fetch_verify(
+                cli,
+                *strict,
+                invariants_file.as_deref(),
+                baseline_id.as_deref(),
+            )?;
             print_result(cli, &value)
         }
-        Commands::Symbols { limit, offset, kind, snapshot_id } => {
-            let value = fetch_symbols(cli, *limit, *offset, kind.as_deref(), snapshot_id.as_deref())?;
+        Commands::Symbols {
+            limit,
+            offset,
+            kind,
+            snapshot_id,
+        } => {
+            let value = fetch_symbols(
+                cli,
+                *limit,
+                *offset,
+                kind.as_deref(),
+                snapshot_id.as_deref(),
+            )?;
             print_result(cli, &value)
         }
-        Commands::Find { pattern, kind, name_only, limit, offset, snapshot_id } => {
-            let value = fetch_find(cli, pattern, kind.as_deref(), *name_only, *limit, *offset, snapshot_id.as_deref())?;
+        Commands::Find {
+            pattern,
+            kind,
+            name_only,
+            limit,
+            offset,
+            snapshot_id,
+        } => {
+            let value = fetch_find(
+                cli,
+                pattern,
+                kind.as_deref(),
+                *name_only,
+                *limit,
+                *offset,
+                snapshot_id.as_deref(),
+            )?;
             print_result(cli, &value)
         }
-        Commands::Edges { source, direction, kind, limit, offset, snapshot_id } => {
-            let value = fetch_edges(cli, source, *direction, kind.as_deref(), *limit, *offset, snapshot_id.as_deref())?;
+        Commands::Edges {
+            source,
+            direction,
+            kind,
+            limit,
+            offset,
+            snapshot_id,
+        } => {
+            let value = fetch_edges(
+                cli,
+                source,
+                *direction,
+                kind.as_deref(),
+                *limit,
+                *offset,
+                snapshot_id.as_deref(),
+            )?;
             print_result(cli, &value)
         }
-        Commands::Map { top, under, snapshot_id } => {
+        Commands::Map {
+            top,
+            under,
+            snapshot_id,
+        } => {
             let value = fetch_map(cli, *top, under.as_deref(), snapshot_id.as_deref())?;
             print_result(cli, &value)
         }
@@ -723,8 +1061,22 @@ pub fn handle_via_daemon(cli: &Cli) -> Result<i32, CliError> {
                 let value = fetch_session(cli, "start", None, None, None, None, None)?;
                 print_result(cli, &value)
             }
-            crate::session::SessionAction::Record { session_id, cli_arg, exit_code, snapshot_id, note } => {
-                let value = fetch_session(cli, "record", Some(session_id), Some(cli_arg.clone()), Some(*exit_code), snapshot_id.as_deref(), note.as_deref())?;
+            crate::session::SessionAction::Record {
+                session_id,
+                cli_arg,
+                exit_code,
+                snapshot_id,
+                note,
+            } => {
+                let value = fetch_session(
+                    cli,
+                    "record",
+                    Some(session_id),
+                    Some(cli_arg.clone()),
+                    Some(*exit_code),
+                    snapshot_id.as_deref(),
+                    note.as_deref(),
+                )?;
                 print_result(cli, &value)
             }
             crate::session::SessionAction::Show { session_id } => {
@@ -736,91 +1088,277 @@ pub fn handle_via_daemon(cli: &Cli) -> Result<i32, CliError> {
                 print_result(cli, &value)
             }
             crate::session::SessionAction::Report { session_id } => {
-                let value = fetch_session(cli, "report", session_id.as_deref(), None, None, None, None)?;
+                let value =
+                    fetch_session(cli, "report", session_id.as_deref(), None, None, None, None)?;
                 print_result(cli, &value)
             }
             crate::session::SessionAction::List => {
                 let value = fetch_session(cli, "list", None, None, None, None, None)?;
                 print_result(cli, &value)
             }
-        }
+        },
         Commands::Git { command } => {
             let args: Vec<String> = match command {
                 crate::git_cmd::GitSubcommands::Status => vec!["status".to_string()],
-                crate::git_cmd::GitSubcommands::Galaxy { limit } => vec!["galaxy".to_string(), "--limit".to_string(), limit.to_string()],
-                crate::git_cmd::GitSubcommands::Diff { base, head } => vec!["diff".to_string(), "--base".to_string(), base.to_string(), "--head".to_string(), head.to_string()],
-                crate::git_cmd::GitSubcommands::Stage { paths } => vec!["stage".to_string()].into_iter().chain(paths.iter().cloned()).collect(),
-                crate::git_cmd::GitSubcommands::Commit { message, tag, author, email } => {
-                    let mut v = vec!["commit".to_string(), "--message".to_string(), message.to_string()];
-                    if let Some(t) = tag { v.push("--tag".to_string()); v.push(t.to_string()); }
-                    if let Some(a) = author { v.push("--author".to_string()); v.push(a.to_string()); }
-                    if let Some(e) = email { v.push("--email".to_string()); v.push(e.to_string()); }
+                crate::git_cmd::GitSubcommands::Galaxy { limit } => vec![
+                    "galaxy".to_string(),
+                    "--limit".to_string(),
+                    limit.to_string(),
+                ],
+                crate::git_cmd::GitSubcommands::Diff { base, head } => vec![
+                    "diff".to_string(),
+                    "--base".to_string(),
+                    base.to_string(),
+                    "--head".to_string(),
+                    head.to_string(),
+                ],
+                crate::git_cmd::GitSubcommands::Stage { paths } => vec!["stage".to_string()]
+                    .into_iter()
+                    .chain(paths.iter().cloned())
+                    .collect(),
+                crate::git_cmd::GitSubcommands::Commit {
+                    message,
+                    tag,
+                    author,
+                    email,
+                } => {
+                    let mut v = vec![
+                        "commit".to_string(),
+                        "--message".to_string(),
+                        message.to_string(),
+                    ];
+                    if let Some(t) = tag {
+                        v.push("--tag".to_string());
+                        v.push(t.to_string());
+                    }
+                    if let Some(a) = author {
+                        v.push("--author".to_string());
+                        v.push(a.to_string());
+                    }
+                    if let Some(e) = email {
+                        v.push("--email".to_string());
+                        v.push(e.to_string());
+                    }
                     v
                 }
                 crate::git_cmd::GitSubcommands::Branch { name, action } => {
                     let mut v = vec!["branch".to_string()];
-                    if let Some(n) = name { v.push(n.to_string()); }
+                    if let Some(n) = name {
+                        v.push(n.to_string());
+                    }
                     v.push(action.to_string());
                     v
                 }
-                crate::git_cmd::GitSubcommands::Tag { name, target, delete } => {
+                crate::git_cmd::GitSubcommands::Tag {
+                    name,
+                    target,
+                    delete,
+                } => {
                     let mut v = vec!["tag".to_string(), name.to_string()];
-                    if let Some(t) = target { v.push("--target".to_string()); v.push(t.to_string()); }
-                    if *delete { v.push("--delete".to_string()); }
+                    if let Some(t) = target {
+                        v.push("--target".to_string());
+                        v.push(t.to_string());
+                    }
+                    if *delete {
+                        v.push("--delete".to_string());
+                    }
                     v
                 }
-                crate::git_cmd::GitSubcommands::Merge { source } => vec!["merge".to_string(), "--source".to_string(), source.to_string()],
-                crate::git_cmd::GitSubcommands::DiffFile { path } => vec!["diff-file".to_string(), "--path".to_string(), path.to_string()],
+                crate::git_cmd::GitSubcommands::Merge { source } => vec![
+                    "merge".to_string(),
+                    "--source".to_string(),
+                    source.to_string(),
+                ],
+                crate::git_cmd::GitSubcommands::DiffFile { path } => vec![
+                    "diff-file".to_string(),
+                    "--path".to_string(),
+                    path.to_string(),
+                ],
                 crate::git_cmd::GitSubcommands::Unstage { paths } => {
                     let mut v = vec!["unstage".to_string()];
                     v.extend(paths.iter().cloned());
                     v
-                },
-                crate::git_cmd::GitSubcommands::Bisect { good, bad } => vec!["bisect".to_string(), "--good".to_string(), good.to_string(), "--bad".to_string(), bad.to_string()],
+                }
+                crate::git_cmd::GitSubcommands::Bisect { good, bad } => vec![
+                    "bisect".to_string(),
+                    "--good".to_string(),
+                    good.to_string(),
+                    "--bad".to_string(),
+                    bad.to_string(),
+                ],
                 crate::git_cmd::GitSubcommands::Undo => vec!["undo".to_string()],
             };
             let value = fetch_git(cli, "git", &args)?;
             print_result(cli, &value)
         }
-        Commands::AnalyticsReport { format } => {
-            let value = fetch_analytics_report(cli, format)?;
+        Commands::AnalyticsReport {
+            format,
+            compact,
+            evidence,
+            state,
+            severity,
+        } => {
+            let value = fetch_analytics_report(
+                cli,
+                format,
+                *compact,
+                *evidence,
+                state.as_deref(),
+                severity.as_deref(),
+            )?;
             print_result(cli, &value)
         }
-        Commands::Temporal { at, max_commits, strict, compact, top_k } => {
-            let value = fetch_temporal(cli, at.as_deref(), *max_commits, *strict, *compact, *top_k)?;
+        Commands::Temporal {
+            at,
+            max_commits,
+            strict,
+            compact,
+            top_k,
+        } => {
+            let value =
+                fetch_temporal(cli, at.as_deref(), *max_commits, *strict, *compact, *top_k)?;
             print_result(cli, &value)
         }
-        Commands::Lineage { from, to, threshold, margin, max_files, max_file_bytes, strict, compact, top_k } => {
-            let value = fetch_lineage(cli, from.as_deref(), to.as_deref(), *threshold, *margin, *max_files, *max_file_bytes, *strict, *compact, *top_k)?;
+        Commands::Lineage {
+            from,
+            to,
+            threshold,
+            margin,
+            max_files,
+            max_file_bytes,
+            strict,
+            compact,
+            top_k,
+        } => {
+            let value = fetch_lineage(
+                cli,
+                from.as_deref(),
+                to.as_deref(),
+                *threshold,
+                *margin,
+                *max_files,
+                *max_file_bytes,
+                *strict,
+                *compact,
+                *top_k,
+            )?;
             print_result(cli, &value)
         }
-        Commands::Cochange { window_seconds, max_commits, max_files_per_commit, min_pair_commits, strict, compact, top_k } => {
-            let value = fetch_cochange(cli, *window_seconds, *max_commits, *max_files_per_commit, *min_pair_commits, *strict, *compact, *top_k)?;
+        Commands::Cochange {
+            window_seconds,
+            max_commits,
+            max_files_per_commit,
+            min_pair_commits,
+            strict,
+            compact,
+            top_k,
+        } => {
+            let value = fetch_cochange(
+                cli,
+                *window_seconds,
+                *max_commits,
+                *max_files_per_commit,
+                *min_pair_commits,
+                *strict,
+                *compact,
+                *top_k,
+            )?;
             print_result(cli, &value)
         }
-        Commands::ContractDist { from, to, protocol, strict, compact, top_k } => {
+        Commands::ContractDist {
+            from,
+            to,
+            protocol,
+            strict,
+            compact,
+            top_k,
+        } => {
             let value = fetch_contract_dist(cli, from, to, *protocol, *strict, *compact, *top_k)?;
             print_result(cli, &value)
         }
-        Commands::TestSelect { changed, lcov, fail_if_all_tests_required, strict } => {
-            let value = fetch_test_select(cli, changed.clone(), lcov.clone(), *fail_if_all_tests_required, *strict)?;
+        Commands::TestSelect {
+            changed,
+            lcov,
+            fail_if_all_tests_required,
+            strict,
+        } => {
+            let value = fetch_test_select(
+                cli,
+                changed.clone(),
+                lcov.clone(),
+                *fail_if_all_tests_required,
+                *strict,
+            )?;
             print_result(cli, &value)
         }
-        Commands::Catalog { root, max_file_bytes, strict, compact, top_k } => {
-            let value = fetch_catalog(cli, root.as_deref(), *max_file_bytes, *strict, *compact, *top_k)?;
+        Commands::Catalog {
+            root,
+            max_file_bytes,
+            strict,
+            compact,
+            top_k,
+        } => {
+            let value = fetch_catalog(
+                cli,
+                root.as_deref(),
+                *max_file_bytes,
+                *strict,
+                *compact,
+                *top_k,
+            )?;
             print_result(cli, &value)
         }
-        Commands::BlastRadius { reference, root, max_file_bytes, strict, compact, top_k } => {
-            let value = fetch_blast_radius(cli, reference, root.as_deref(), *max_file_bytes, *strict, *compact, *top_k)?;
+        Commands::BlastRadius {
+            reference,
+            root,
+            max_file_bytes,
+            strict,
+            compact,
+            top_k,
+        } => {
+            let value = fetch_blast_radius(
+                cli,
+                reference,
+                root.as_deref(),
+                *max_file_bytes,
+                *strict,
+                *compact,
+                *top_k,
+            )?;
             print_result(cli, &value)
         }
-        Commands::Telemetry { input, salt, salt_file, surface, windows, complete_observation, dispatch_static, strict, compact, top_k } => {
+        Commands::Telemetry {
+            input,
+            salt,
+            salt_file,
+            surface,
+            windows,
+            complete_observation,
+            dispatch_static,
+            strict,
+            compact,
+            top_k,
+        } => {
             let salt_str = if let Some(sf) = salt_file {
-                std::fs::read_to_string(sf).map_err(|e| CliError::Analysis(e.to_string()))?.trim().to_string()
+                std::fs::read_to_string(sf)
+                    .map_err(|e| CliError::Analysis(e.to_string()))?
+                    .trim()
+                    .to_string()
             } else {
                 salt.clone().unwrap_or_default()
             };
-            let value = fetch_telemetry(cli, input, &salt_str, surface.as_deref(), *windows, *complete_observation, *dispatch_static, *strict, *compact, *top_k)?;
+            let value = fetch_telemetry(
+                cli,
+                input,
+                &salt_str,
+                surface.as_deref(),
+                *windows,
+                *complete_observation,
+                *dispatch_static,
+                *strict,
+                *compact,
+                *top_k,
+            )?;
             print_result(cli, &value)
         }
         _ => {

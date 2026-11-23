@@ -45,24 +45,36 @@ fn python_command() -> (String, Vec<String>) {
         return (explicit, Vec::new());
     }
 
-    let candidates: Vec<(&str, Vec<&str>)> = if cfg!(windows) {
-        vec![
-            ("python3", Vec::new()),
-            ("python", Vec::new()),
-            ("py", vec!["-3"]),
-        ]
+    let candidates: Vec<(String, Vec<String>)> = if cfg!(windows) {
+        let mut list = vec![
+            ("python3".to_string(), Vec::new()),
+            ("python".to_string(), Vec::new()),
+            ("py".to_string(), vec!["-3".to_string()]),
+        ];
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            let py_dir = Path::new(&local_app_data).join("Programs").join("Python");
+            if let Ok(entries) = std::fs::read_dir(&py_dir) {
+                for entry in entries.flatten() {
+                    let py_exe = entry.path().join("python.exe");
+                    if py_exe.exists() {
+                        list.push((py_exe.to_string_lossy().to_string(), Vec::new()));
+                    }
+                }
+            }
+        }
+        list
     } else {
-        vec![("python3", Vec::new()), ("python", Vec::new())]
+        vec![
+            ("python3".to_string(), Vec::new()),
+            ("python".to_string(), Vec::new()),
+        ]
     };
 
     for (program, prefix_args) in candidates {
-        let mut probe = Command::new(program);
+        let mut probe = Command::new(&program);
         probe.args(&prefix_args).arg("--version");
         if probe.output().is_ok_and(|output| output.status.success()) {
-            return (
-                program.to_owned(),
-                prefix_args.into_iter().map(str::to_owned).collect(),
-            );
+            return (program, prefix_args);
         }
     }
 

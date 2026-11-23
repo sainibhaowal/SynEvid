@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&args.log_level));
-    
+
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
@@ -67,16 +67,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_thread_ids(true)
         .with_file(true)
         .with_line_number(true);
-    
+
     if args.json_logs {
-        subscriber
-            .with_ansi(false)
-            .init();
+        subscriber.with_ansi(false).init();
     } else {
         subscriber.init();
     }
 
-    tracing::info!("Starting SynEvid Authenticated Daemon v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!(
+        "Starting SynEvid Authenticated Daemon v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     tracing::info!("Managed runtime: {}", args.managed_runtime);
     tracing::info!("Auth enabled: {}", !args.no_auth);
 
@@ -101,14 +102,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Generate a loopback token if not already set
         if std::env::var("SYNEVID_LOOPBACK_TOKEN").is_err() {
             let token = blake3::hash(
-                format!("synevid-loopback-{}-{}", 
-                    std::process::id(), 
+                format!(
+                    "synevid-loopback-{}-{}",
+                    std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_nanos()
-                ).as_bytes()
-            ).to_hex().to_string();
+                )
+                .as_bytes(),
+            )
+            .to_hex()
+            .to_string();
             std::env::set_var("SYNEVID_LOOPBACK_TOKEN", &token);
         }
     }
@@ -117,10 +122,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = if args.managed_runtime {
         data_dir.clone()
     } else {
-        args.repo_root.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        args.repo_root
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     };
 
-    tracing::info!("Starting SynEvid Authenticated Daemon v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!(
+        "Starting SynEvid Authenticated Daemon v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     tracing::info!("Managed runtime: {}", args.managed_runtime);
     tracing::info!("Auth enabled: {}", !args.no_auth);
 
@@ -131,13 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         DashboardServer::new(repo_root, args.host.clone(), args.port)
     };
-    
+
     tracing::info!("Daemon listening on http://{}", addr);
     tracing::info!("Data directory: {}", data_dir.display());
     tracing::info!("Press Ctrl+C to stop");
 
     // Run server (blocks until shutdown)
     server.run()?;
-    
+
     Ok(())
 }

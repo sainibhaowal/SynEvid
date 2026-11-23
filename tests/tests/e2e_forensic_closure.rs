@@ -103,6 +103,7 @@ invariants:
 fn cli(root: &Path, extra: &[&str]) -> i32 {
     let mut args = vec![
         "autopsy".to_string(),
+        "--offline".to_string(),
         "--repo-root".to_string(),
         root.display().to_string(),
         "--format".to_string(),
@@ -626,6 +627,7 @@ fn test_symbols_and_edges_browsing_commands() {
     // is exercised, not clap duplicate-flag rejection.)
     let args = vec![
         "autopsy".to_string(),
+        "--offline".to_string(),
         "--repo-root".to_string(),
         temp.path.display().to_string(),
         "--format".to_string(),

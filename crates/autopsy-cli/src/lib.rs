@@ -540,6 +540,18 @@ pub enum Commands {
     AnalyticsReport {
         #[arg(long, default_value = "json")]
         format: String,
+        /// Show only compact summary (for MCP/agent consumption)
+        #[arg(long)]
+        compact: bool,
+        /// Show evidence drill-down for findings
+        #[arg(long)]
+        evidence: bool,
+        /// Filter by finding state (verified, candidate, partial, unknown, error, unavailable)
+        #[arg(long)]
+        state: Option<String>,
+        /// Filter by severity (error, warning, info)
+        #[arg(long)]
+        severity: Option<String>,
     },
     /// Read the daemon-owned active repository and runtime identity.
     #[command(name = "active-repo")]
@@ -1049,7 +1061,20 @@ pub fn execute(cli: &Cli) -> Result<i32, CliError> {
             daemon::handle_attach(cli, path, display_name.as_deref())
         }
         Commands::Status => daemon::handle_status(cli),
-        Commands::AnalyticsReport { format } => daemon::handle_analytics_report(cli, format),
+        Commands::AnalyticsReport {
+            format,
+            compact,
+            evidence,
+            state,
+            severity,
+        } => daemon::handle_analytics_report(
+            cli,
+            format,
+            *compact,
+            *evidence,
+            state.as_deref(),
+            severity.as_deref(),
+        ),
         Commands::ActiveRepo => daemon::handle_active_repo(cli),
         Commands::Events { since_seq } => daemon::handle_events(cli, *since_seq),
         Commands::Disconnect => daemon::handle_disconnect(cli),

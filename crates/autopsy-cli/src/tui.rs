@@ -71,6 +71,9 @@ pub struct TuiApp {
     pub freshness: String,
     pub analytics_report_id: String,
     pub analytics_report_status: String,
+    pub analytics_report_data: Option<serde_json::Value>,
+    pub analytics_tab_selected: usize,
+    pub analytics_findings_selected: usize,
     pub impact_verdict: String,
     pub impact_coverage: String,
     pub impact_truncated: bool,
@@ -147,6 +150,9 @@ impl TuiApp {
             freshness: "offline analysis not synchronized".to_string(),
             analytics_report_id: String::new(),
             analytics_report_status: "UNKNOWN".to_string(),
+            analytics_report_data: None,
+            analytics_tab_selected: 0,
+            analytics_findings_selected: 0,
             impact_verdict: "UNKNOWN".to_string(),
             impact_coverage: "unknown".to_string(),
             impact_truncated: false,
@@ -615,30 +621,32 @@ impl TuiApp {
                     self.refresh();
                 }
             }
-            KeyCode::Char('a') => match crate::daemon::fetch_analytics_report_for_client("tui") {
-                Ok(response) => {
-                    let report = response.get("report").unwrap_or(&response);
-                    self.analytics_report_id = report
-                        .get("report_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("UNKNOWN")
-                        .to_string();
-                    self.analytics_report_status = report["static_unreferenced"]["status"]
-                        .as_str()
-                        .unwrap_or("UNKNOWN")
-                        .to_string();
-                    self.freshness = format!(
-                        "analytics {} ({})",
-                        &self.analytics_report_id[..12.min(self.analytics_report_id.len())],
-                        self.analytics_report_status
-                    );
+            KeyCode::Char('a') => {
+                match crate::daemon::fetch_analytics_report_for_client("tui", false, false) {
+                    Ok(response) => {
+                        let report = response.get("report").unwrap_or(&response);
+                        self.analytics_report_id = report
+                            .get("report_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("UNKNOWN")
+                            .to_string();
+                        self.analytics_report_status = report["static_unreferenced"]["status"]
+                            .as_str()
+                            .unwrap_or("UNKNOWN")
+                            .to_string();
+                        self.freshness = format!(
+                            "analytics {} ({})",
+                            &self.analytics_report_id[..12.min(self.analytics_report_id.len())],
+                            self.analytics_report_status
+                        );
+                    }
+                    Err(_) => {
+                        self.analytics_report_id.clear();
+                        self.analytics_report_status = "UNAVAILABLE".to_string();
+                        self.freshness = "daemon analytics report unavailable".to_string();
+                    }
                 }
-                Err(_) => {
-                    self.analytics_report_id.clear();
-                    self.analytics_report_status = "UNAVAILABLE".to_string();
-                    self.freshness = "daemon analytics report unavailable".to_string();
-                }
-            },
+            }
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.input_buffer.clear();
@@ -1893,6 +1901,9 @@ mod tests {
             freshness: "offline analysis not synchronized".to_string(),
             analytics_report_id: String::new(),
             analytics_report_status: "UNKNOWN".to_string(),
+            analytics_report_data: None,
+            analytics_tab_selected: 0,
+            analytics_findings_selected: 0,
             impact_verdict: "UNKNOWN".to_string(),
             impact_coverage: "unknown".to_string(),
             impact_truncated: false,

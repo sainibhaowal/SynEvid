@@ -251,6 +251,7 @@ directory = ".autopsy/cache"
     let cli = |extra: &[&str]| -> String {
         let mut args = vec![
             "autopsy".to_string(),
+            "--offline".to_string(),
             "--repo-root".to_string(),
             root.display().to_string(),
             "--format".to_string(),

@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use blake3;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -90,6 +89,12 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.expires_at.map(|exp| Utc::now() > exp).unwrap_or(false)
+    }
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -305,7 +310,7 @@ pub struct CommandDefinition {
     pub command_id: CommandId,
     pub name: String,
     pub description: String,
-    pub args_schema: serde_json::Value, // JSON Schema for args
+    pub args_schema: serde_json::Value,   // JSON Schema for args
     pub output_schema: serde_json::Value, // JSON Schema for output
     pub requires_daemon: bool,
     pub supports_offline: bool,
@@ -358,6 +363,44 @@ pub fn all_commands() -> Vec<CommandDefinition> {
                     "storage_health": { "type": "string" }
                 }
             }),
+            requires_daemon: true,
+            supports_offline: false,
+            supports_snapshot_pin: false,
+            supports_session: false,
+        },
+        CommandDefinition {
+            command_id: "active-repo".to_string(),
+            name: "active-repo".to_string(),
+            description: "Read the daemon-owned active repository and runtime identity".to_string(),
+            args_schema: json!({ "type": "object", "properties": {} }),
+            output_schema: json!({ "type": "object" }),
+            requires_daemon: true,
+            supports_offline: false,
+            supports_snapshot_pin: false,
+            supports_session: false,
+        },
+        CommandDefinition {
+            command_id: "events".to_string(),
+            name: "events".to_string(),
+            description: "Replay persisted daemon events after a sequence cursor".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "since_seq": { "type": "integer", "minimum": 0 }
+                }
+            }),
+            output_schema: json!({ "type": "object" }),
+            requires_daemon: true,
+            supports_offline: false,
+            supports_snapshot_pin: false,
+            supports_session: false,
+        },
+        CommandDefinition {
+            command_id: "disconnect".to_string(),
+            name: "disconnect".to_string(),
+            description: "Release this client's daemon lease".to_string(),
+            args_schema: json!({ "type": "object", "properties": {} }),
+            output_schema: json!({ "type": "object" }),
             requires_daemon: true,
             supports_offline: false,
             supports_snapshot_pin: false,
@@ -435,6 +478,23 @@ pub fn all_commands() -> Vec<CommandDefinition> {
                 "properties": {
                     "before": { "type": "string" },
                     "after": { "type": "string" }
+                }
+            }),
+            output_schema: json!({ "type": "object" }),
+            requires_daemon: true,
+            supports_offline: true,
+            supports_snapshot_pin: true,
+            supports_session: false,
+        },
+        CommandDefinition {
+            command_id: "explain".to_string(),
+            name: "explain".to_string(),
+            description: "Explain why an architectural invariant failed or passed".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "rule": { "type": "string" },
+                    "receipt_id": { "type": "string" }
                 }
             }),
             output_schema: json!({ "type": "object" }),
@@ -854,6 +914,39 @@ pub fn all_commands() -> Vec<CommandDefinition> {
             supports_session: false,
         },
         CommandDefinition {
+            command_id: "workspace".to_string(),
+            name: "workspace".to_string(),
+            description: "Multi-repo workspace registration, listing, and removal".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["register", "list", "remove"] },
+                    "path": { "type": "string" }
+                }
+            }),
+            output_schema: json!({ "type": "object" }),
+            requires_daemon: true,
+            supports_offline: true,
+            supports_snapshot_pin: false,
+            supports_session: false,
+        },
+        CommandDefinition {
+            command_id: "suggestions".to_string(),
+            name: "suggestions".to_string(),
+            description: "Manage agent suggestions and hints".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "clear"] }
+                }
+            }),
+            output_schema: json!({ "type": "object" }),
+            requires_daemon: true,
+            supports_offline: true,
+            supports_snapshot_pin: false,
+            supports_session: false,
+        },
+        CommandDefinition {
             command_id: "version".to_string(),
             name: "version".to_string(),
             description: "Display engine version and adapter capabilities".to_string(),
@@ -902,7 +995,7 @@ mod tests {
     fn test_all_commands_defined() {
         let commands = all_commands();
         assert!(commands.len() >= 30, "Should have at least 30 commands");
-        
+
         // Check for required commands
         let names: Vec<_> = commands.iter().map(|c| c.name.clone()).collect();
         assert!(names.contains(&"impact".to_string()));
@@ -918,7 +1011,7 @@ mod tests {
         let v = Verdict::Pass;
         let json = serde_json::to_string(&v).unwrap();
         assert_eq!(json, "\"PASS\"");
-        
+
         let parsed: Verdict = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, Verdict::Pass);
     }

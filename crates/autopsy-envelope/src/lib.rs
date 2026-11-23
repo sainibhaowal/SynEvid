@@ -10,17 +10,15 @@
 
 use std::collections::BTreeMap;
 
-use blake3;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use thiserror::Error;
 
 /// Custom serde module for DateTime<Utc> serialized as seconds since epoch
 pub mod ts_seconds {
     use chrono::{DateTime, Utc};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(dt: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -34,14 +32,14 @@ pub mod ts_seconds {
         D: Deserializer<'de>,
     {
         let ts = i64::deserialize(deserializer)?;
-        Ok(DateTime::from_timestamp(ts, 0).unwrap_or_else(|| Utc::now()))
+        Ok(DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now))
     }
 }
 
 /// Custom serde module for Option<DateTime<Utc>> serialized as seconds since epoch
 pub mod ts_seconds_option {
     use chrono::{DateTime, Utc};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(dt: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -65,13 +63,13 @@ pub mod ts_seconds_option {
         }
 
         match TimestampOrNull::deserialize(deserializer)? {
-            TimestampOrNull::Timestamp(ts) => Ok(Some(DateTime::from_timestamp(ts, 0).unwrap_or_else(|| Utc::now()))),
+            TimestampOrNull::Timestamp(ts) => Ok(Some(
+                DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now),
+            )),
             TimestampOrNull::Null => Ok(None),
         }
     }
 }
-
-
 
 /// Canonical evidence envelope - the single source of truth for all responses
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -193,7 +191,10 @@ pub struct EvidenceReceipt {
     pub test_reference: String,
 
     /// Timestamp of envelope creation (operational metadata only)
-    #[serde(serialize_with = "ts_seconds::serialize", deserialize_with = "ts_seconds::deserialize")]
+    #[serde(
+        serialize_with = "ts_seconds::serialize",
+        deserialize_with = "ts_seconds::deserialize"
+    )]
     #[schemars(with = "String")]
     pub timestamp: DateTime<Utc>,
 
@@ -204,8 +205,6 @@ pub struct EvidenceReceipt {
     #[serde(default)]
     pub adapter_versions: BTreeMap<String, String>,
 }
-
-
 
 /// Envelope builder for constructing valid envelopes
 pub struct EnvelopeBuilder {
@@ -316,7 +315,9 @@ impl EnvelopeBuilder {
         }
 
         // HARD BOUNDARY: FAIL/ERROR verdict must have non-verified coverage
-        if matches!(self.verdict, Verdict::Fail | Verdict::Error) && self.coverage_state == CoverageState::Verified {
+        if matches!(self.verdict, Verdict::Fail | Verdict::Error)
+            && self.coverage_state == CoverageState::Verified
+        {
             // This is allowed - FAIL with verified coverage means verified violation
         }
 
@@ -326,7 +327,10 @@ impl EnvelopeBuilder {
 
         // Generate operation_id if not provided (BLAKE3 over canonical request)
         let operation_id = if self.operation_id.is_empty() {
-            format!("blake3:{}", blake3::hash(&canonical_payload).to_hex()[..16].to_string())
+            format!(
+                "blake3:{}",
+                &blake3::hash(&canonical_payload).to_hex()[..16]
+            )
         } else {
             self.operation_id
         };
@@ -361,11 +365,11 @@ impl EnvelopeBuilder {
 
     fn canonical_payload(&self) -> Result<Vec<u8>, EnvelopeError> {
         // Create canonical JSON for digest (sorted keys, no timestamps)
-        let mut payload = self.payload.clone();
-        
+        let payload = self.payload.clone();
+
         // Ensure deterministic ordering by using BTreeMap internally
         // serde_json with serde::Serialize on BTreeMap guarantees sorted keys
-        
+
         Ok(serde_json::to_vec(&payload)?)
     }
 }
@@ -373,8 +377,13 @@ impl EnvelopeBuilder {
 /// Errors that can occur during envelope construction
 #[derive(Debug, Error)]
 pub enum EnvelopeError {
-    #[error("PASS verdict not allowed with coverage state {coverage:?} (only VERIFIED allows PASS)")]
-    CoverageVerdictMismatch { verdict: Verdict, coverage: CoverageState },
+    #[error(
+        "PASS verdict not allowed with coverage state {coverage:?} (only VERIFIED allows PASS)"
+    )]
+    CoverageVerdictMismatch {
+        verdict: Verdict,
+        coverage: CoverageState,
+    },
 
     #[error("JSON serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -484,11 +493,11 @@ pub fn verify_envelope(envelope: &EvidenceEnvelope) -> Result<(), EnvelopeError>
     // Recompute digest from payload
     let canonical = serde_json::to_vec(&envelope.payload)?;
     let expected_digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
-    
+
     if envelope.blake3_digest != expected_digest {
-        return Err(EnvelopeError::Serialization(
-            serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Digest mismatch"))
-        ));
+        return Err(EnvelopeError::Serialization(serde_json::Error::io(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Digest mismatch"),
+        )));
     }
 
     // Verify verdict/coverage consistency
@@ -502,8 +511,6 @@ pub fn verify_envelope(envelope: &EvidenceEnvelope) -> Result<(), EnvelopeError>
     Ok(())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,7 +523,8 @@ mod tests {
             serde_json::json!({ "result": "ok" }),
             Some("repo-123".to_string()),
             Some("snap-456".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(envelope.verdict, Verdict::Pass);
         assert_eq!(envelope.coverage_state, CoverageState::Verified);
@@ -532,7 +540,10 @@ mod tests {
             .build();
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), EnvelopeError::CoverageVerdictMismatch { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            EnvelopeError::CoverageVerdictMismatch { .. }
+        ));
     }
 
     #[test]
@@ -542,7 +553,8 @@ mod tests {
             "0.6.0".to_string(),
             serde_json::json!({ "result": "unknown" }),
             "Dynamic import not supported".to_string(),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(envelope.verdict, Verdict::Unknown);
         assert_eq!(envelope.coverage_state, CoverageState::Unknown);
@@ -557,11 +569,12 @@ mod tests {
             serde_json::json!({ "data": "test" }),
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Verify digest matches
         verify_envelope(&envelope).unwrap();
-        
+
         // Digest should be deterministic
         let envelope2 = helpers::success(
             "test-op".to_string(),
@@ -569,8 +582,9 @@ mod tests {
             serde_json::json!({ "data": "test" }),
             None,
             None,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         assert_eq!(envelope.blake3_digest, envelope2.blake3_digest);
     }
 }

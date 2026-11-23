@@ -2590,6 +2590,14 @@ impl DashboardServer {
         let format = Self::parse_query_param(url, "format")
             .unwrap_or_else(|| "json".to_string())
             .to_lowercase();
+        let compact = Self::parse_query_param(url, "compact")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let evidence = Self::parse_query_param(url, "evidence")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let state_filter = Self::parse_query_param(url, "state").map(|v| v.to_lowercase());
+        let severity_filter = Self::parse_query_param(url, "severity").map(|v| v.to_lowercase());
         if !matches!(
             format.as_str(),
             "json" | "markdown" | "html" | "sarif" | "bundle"
@@ -3135,15 +3143,175 @@ impl DashboardServer {
                 .to_string();
             }
         }
+
+        // Apply query parameter filters
+        let filtered_report = Self::filter_analytics_report(
+            &report,
+            compact,
+            evidence,
+            state_filter.as_deref(),
+            severity_filter.as_deref(),
+        );
+
+        // Re-serialize content if report was filtered
+        let (final_content, final_digest) = if filtered_report != report {
+            let json_content =
+                serde_json::to_string_pretty(&filtered_report).unwrap_or_else(|_| "{}".to_string());
+            let digest = format!("blake3:{}", blake3::hash(json_content.as_bytes()).to_hex());
+            (json_content, digest)
+        } else {
+            (content, digest)
+        };
+
         serde_json::json!({
             "format": format.clone(),
             "filename": format!("synevid-analytics-{}.{}", record.display_name.to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"), extension),
             "content_type": content_type,
-            "digest": digest,
-            "content": content,
-            "report": report
+            "digest": final_digest,
+            "content": final_content,
+            "report": filtered_report
         })
         .to_string()
+    }
+
+    /// Filter analytics report based on query parameters
+    fn filter_analytics_report(
+        report: &Value,
+        compact: bool,
+        evidence: bool,
+        state_filter: Option<&str>,
+        severity_filter: Option<&str>,
+    ) -> Value {
+        let mut filtered = report.clone();
+
+        if compact {
+            // Compact mode: only include summary counts and essential metadata
+            if let Some(static_ref) = filtered.get_mut("static_unreferenced") {
+                if let Some(obj) = static_ref.as_object_mut() {
+                    obj.retain(|key, _| {
+                        matches!(
+                            key.as_str(),
+                            "status"
+                                | "candidate_count"
+                                | "unknown_count"
+                                | "excluded_count"
+                                | "evidence_basis"
+                                | "finding_language"
+                        )
+                    });
+                }
+            }
+            if let Some(runtime_ref) = filtered.get_mut("runtime_unobserved") {
+                if let Some(obj) = runtime_ref.as_object_mut() {
+                    obj.retain(|key, _| {
+                        matches!(
+                            key.as_str(),
+                            "status" | "complete_window_count" | "evidence_basis" | "reason"
+                        )
+                    });
+                }
+            }
+            if let Some(git_ref) = filtered.get_mut("git_evolution") {
+                if let Some(obj) = git_ref.as_object_mut() {
+                    obj.retain(|key, _| {
+                        matches!(
+                            key.as_str(),
+                            "status" | "verdict" | "coverage_state" | "semantic_git_risk"
+                        )
+                    });
+                    if let Some(semantic) = obj.get_mut("semantic_git_risk") {
+                        if let Some(sem_obj) = semantic.as_object_mut() {
+                            sem_obj.retain(|key, _| {
+                                matches!(
+                                    key.as_str(),
+                                    "status"
+                                        | "verdict"
+                                        | "coverage_state"
+                                        | "evidence_basis"
+                                        | "risk_score"
+                                )
+                            });
+                        }
+                    }
+                }
+            }
+            if let Some(ai_ref) = filtered.get_mut("ai_session_audit") {
+                if let Some(obj) = ai_ref.as_object_mut() {
+                    obj.retain(|key, _| {
+                        matches!(
+                            key.as_str(),
+                            "status"
+                                | "sessions"
+                                | "queries"
+                                | "cache_hits"
+                                | "tokens_spent"
+                                | "tokens_saved"
+                        )
+                    });
+                }
+            }
+        }
+
+        if evidence && !compact {
+            // Evidence mode: ensure evidence fields are present and detailed
+            // This is the default behavior for full reports
+        }
+
+        // Filter by finding state
+        if let Some(state) = state_filter {
+            if let Some(static_ref) = filtered.get_mut("static_unreferenced") {
+                if let Some(obj) = static_ref.as_object_mut() {
+                    for key in ["candidates", "unknown"] {
+                        if let Some(arr) = obj.get_mut(key) {
+                            if let Some(array) = arr.as_array_mut() {
+                                array.retain(|item| {
+                                    item.get("finding_state")
+                                        .and_then(Value::as_str)
+                                        .map(|s| s.to_lowercase() == state)
+                                        .unwrap_or(false)
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(runtime_ref) = filtered.get_mut("runtime_unobserved") {
+                if let Some(obj) = runtime_ref.as_object_mut() {
+                    if let Some(arr) = obj.get_mut("findings") {
+                        if let Some(array) = arr.as_array_mut() {
+                            array.retain(|item| {
+                                item.get("finding_state")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_lowercase() == state)
+                                    .unwrap_or(false)
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Filter by severity (for SARIF/findings)
+        if let Some(severity) = severity_filter {
+            if let Some(static_ref) = filtered.get_mut("static_unreferenced") {
+                if let Some(obj) = static_ref.as_object_mut() {
+                    for key in ["candidates", "unknown"] {
+                        if let Some(arr) = obj.get_mut(key) {
+                            if let Some(array) = arr.as_array_mut() {
+                                array.retain(|item| {
+                                    item.get("severity")
+                                        .and_then(Value::as_str)
+                                        .map(|s| s.to_lowercase() == severity)
+                                        .unwrap_or(false)
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        filtered
     }
 
     /// Phase 6: OTLP ingestion endpoint for automated telemetry topology reports.

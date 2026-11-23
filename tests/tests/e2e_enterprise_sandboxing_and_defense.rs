@@ -312,6 +312,7 @@ fn test_e2e_zero_network_socket_isolation() {
     for sub in subcommands {
         let mut args = vec![
             "autopsy".to_string(),
+            "--offline".to_string(),
             "--repo-root".to_string(),
             temp.path.display().to_string(),
         ];
@@ -353,6 +354,7 @@ fn test_e2e_oversize_file_cap_never_reads_huge_files() {
 
     let args = vec![
         "autopsy".to_string(),
+        "--offline".to_string(),
         "--repo-root".to_string(),
         temp.path.display().to_string(),
         "baseline".to_string(),

@@ -1,6 +1,14 @@
 //! End-to-end integration tests for Phase 5: CLI + Storage + Report (FR-015, FR-016, FR-017, FR-024, FR-028).
 
-use autopsy_cli::{EXIT_ANALYSIS_ERROR, EXIT_PASS, EXIT_POLICY_FAIL, EXIT_UNSUPPORTED, run_cli};
+use autopsy_cli::{EXIT_ANALYSIS_ERROR, EXIT_PASS, EXIT_POLICY_FAIL, EXIT_UNSUPPORTED};
+
+fn run_cli(args: &[String]) -> i32 {
+    let mut offline_args = args.to_vec();
+    if !offline_args.iter().any(|a| a == "--offline") {
+        offline_args.insert(1, "--offline".to_string());
+    }
+    autopsy_cli::run_cli(&offline_args)
+}
 use autopsy_domain::SnapshotId;
 use autopsy_storage::{StorageEngine, StorageOptions};
 use std::fs;
