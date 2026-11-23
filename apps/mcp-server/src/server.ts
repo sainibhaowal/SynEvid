@@ -296,14 +296,23 @@ export function createAutopsyMcpServer(): McpServer {
   server.registerTool(
     'autopsy_analytics_report',
     {
-      description: 'Fetch the authenticated daemon analytics report and its shared report identity for the active repository.',
+      description: 'Fetch the authenticated daemon analytics report and its shared report identity for the active repository. Supports compact mode for token-efficient summaries and evidence drill-down.',
       inputSchema: z.object({
         format: z.enum(['json', 'markdown', 'html', 'sarif', 'bundle']).default('json'),
+        compact: z.boolean().default(false).describe('Return compact summary only (token-efficient for MCP context windows)'),
+        evidence: z.boolean().default(false).describe('Include full evidence basis, coverage, reason, and residual unknowns per finding'),
+        state: z.enum(['verified', 'candidate', 'partial', 'unknown', 'error', 'unavailable']).optional().describe('Filter findings by finding state'),
+        severity: z.enum(['error', 'warning', 'info']).optional().describe('Filter findings by severity'),
       }),
     },
-    async ({ format }) => {
+    async ({ format, compact, evidence, state, severity }) => {
       await ensureDaemonRuntime();
-      const result = await getDaemonJson(`/api/v1/analytics/report?format=${encodeURIComponent(format)}`, 30_000);
+      let url = `/api/v1/analytics/report?format=${encodeURIComponent(format)}`;
+      if (compact) url += '&compact=true';
+      if (evidence) url += '&evidence=true';
+      if (state) url += `&state=${encodeURIComponent(state)}`;
+      if (severity) url += `&severity=${encodeURIComponent(severity)}`;
+      const result = await getDaemonJson(url, 30_000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
   );
