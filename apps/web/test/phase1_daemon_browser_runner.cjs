@@ -22,7 +22,8 @@ async function waitForJavaScript(window, expression, timeoutMs = 30_000) {
     if (await window.webContents.executeJavaScript(expression)) return;
     await delay(100);
   }
-  throw new Error(`Timed out waiting for browser expression: ${expression}`);
+  const bodyTail = await window.webContents.executeJavaScript('document.body.innerText.slice(-1800)');
+  throw new Error(`Timed out waiting for browser expression: ${expression}; body=${JSON.stringify(bodyTail)}`);
 }
 
 function repositoryIdentityVisible(body) {
@@ -102,6 +103,78 @@ async function main() {
     throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}; console=${JSON.stringify(rendererDiagnostics.slice(-30))}; body=${JSON.stringify(body.slice(-3000))}`);
   }
   await waitForJavaScript(window, "document.body.innerText.includes('main.ts')");
+  const repositoriesButton = window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.title.startsWith('Repositories'));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!(await repositoriesButton)) throw new Error('Repositories workspace button is unavailable');
+  await waitForJavaScript(window, "document.body.innerText.includes('Analytics & Reports')");
+  const reportButtonClicked = await window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.innerText.trim() === 'JSON');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!reportButtonClicked) throw new Error('Analytics JSON report control is unavailable');
+  await waitForJavaScript(window, "document.body.innerText.includes('Report receipt:')", 60_000);
+  const displayedReportId = await window.webContents.executeJavaScript(`(() => {
+    for (const pre of document.querySelectorAll('pre')) {
+      try {
+        const value = JSON.parse(pre.innerText);
+        if (typeof value.report_id === 'string') return value.report_id;
+      } catch {}
+    }
+    return null;
+  })()`);
+  if (!displayedReportId) throw new Error('Rendered JSON report has no report identity');
+  const directHistoryResponse = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/report-history?limit=50`);
+  const directHistoryBody = await directHistoryResponse.json();
+  if (!directHistoryBody.reports?.some((entry) => entry.report_id === displayedReportId)) {
+    throw new Error(`Daemon history does not contain the rendered report identity: ${JSON.stringify({ displayedReportId, directHistoryBody })}`);
+  }
+  const directReceiptResponse = await fetch(`http://127.0.0.1:${daemonPort}/api/v1/analytics/report-history/${encodeURIComponent(displayedReportId)}`);
+  const directReceiptBody = await directReceiptResponse.json();
+  if (directReceiptBody.error_code) {
+    throw new Error(`Daemon could not retrieve the report it just rendered: ${JSON.stringify(directReceiptBody)}`);
+  }
+  if (directReceiptBody.report_id !== displayedReportId
+    || directReceiptBody.evidence_digest !== directReceiptBody.report?.result_digest) {
+    throw new Error(`Rendered report receipt identity/digest mismatch: ${JSON.stringify(directReceiptBody)}`);
+  }
+  const receiptButtonClicked = await window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.innerText.includes('Load persisted receipt'));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!receiptButtonClicked) throw new Error('Persisted analytics receipt control is unavailable');
+  const receiptStateReady = `document.body.innerText.includes('"created_at"') || Boolean(document.querySelector('#analytics-evidence-receipt [role="alert"]'))`;
+  await waitForJavaScript(window, receiptStateReady, 30_000);
+  const receiptVisible = await window.webContents.executeJavaScript(`document.body.innerText.includes('"created_at"') && document.body.innerText.includes('"evidence_digest"')`);
+  if (!receiptVisible) {
+    const body = await window.webContents.executeJavaScript('document.body.innerText.slice(-1800)');
+    throw new Error(`Persisted report receipt was not returned: ${body}`);
+  }
+  const historyButtonClicked = await window.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.innerText.includes('Load report history'));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!historyButtonClicked) throw new Error('Analytics history control is unavailable');
+  const historyStateReady = `(() => {
+    const body = document.body.innerText;
+    const row = [...document.querySelectorAll('button')].some((item) => item.innerText.includes('Snapshot') && item.innerText.includes('blake3:'));
+    return row || body.includes('No reports are stored for this repository yet.') || body.includes('Report history is unavailable');
+  })()`;
+  await waitForJavaScript(window, historyStateReady, 30_000);
+  const historyState = await window.webContents.executeJavaScript(`(() => ({
+    rowVisible: [...document.querySelectorAll('button')].some((item) => item.innerText.includes('Snapshot') && item.innerText.includes('blake3:')),
+    bodyTail: document.body.innerText.slice(-2500)
+  }))()`);
+  if (!historyState.rowVisible) throw new Error(`Analytics history did not return the generated report: ${JSON.stringify(historyState)}`);
   const publishedSeq = publishEvent ? await publishLiveEvent() : expectedSeq;
   if (publishedSeq > 0) {
     const cursorExpression = `(() => {
@@ -134,6 +207,9 @@ async function main() {
     replayedSequenceVisible: publishedSeq === 0 || liveCursor >= publishedSeq,
     repositoryFilesVisible: body.includes('main.ts'),
     graphUnavailable: body.includes('Repository analysis unavailable'),
+    analyticsReportVisible: body.includes('Analytics & Reports') && body.includes('Report receipt:'),
+    persistedAnalyticsReceiptVisible: body.includes('"created_at"') && body.includes('"evidence_digest"'),
+    analyticsHistoryVisible: [...(await window.webContents.executeJavaScript('([...document.querySelectorAll("button")].map((item) => item.innerText))'))].some((label) => label.includes('Snapshot') && label.includes('blake3:')),
     publishedSeq,
   };
   console.log(`SYNEVID_PHASE1_BROWSER_RESULT=${JSON.stringify(result)}`);

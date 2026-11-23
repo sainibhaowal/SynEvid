@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- **Impact benchmark integrity correction:** withdrew legacy RQ1–RQ5 impact
+  accuracy and promotion claims after finding incomplete/unreviewed task
+  oracles, missing query scope, answer-key access by the Grep/LSP comparators,
+  and a text-search implementation mislabeled as LSP. The benchmark runner now
+  fails closed (exit 3) before scoring and writes no numeric report while these
+  conditions hold. Historical raw output is retained but quarantined. No
+  engine tuning or ground-truth edits were made. Evidence: `docs/evidence/108`.
+
+- **Phase 6 Windows verification follow-up:** fixed replay sequence collisions
+  between concurrent daemon instances by keeping each live sequence cursor
+  scoped to that daemon and initializing it from persisted events. The full
+  release workspace suite passed serially (1,066 passed; 3 timing checks are
+  run separately); isolated SSE p95 was 0.513 ms and 1,000-file simulation
+  p95 was 25.076 ms. Python schema validation passed all 18 schemas and its
+  instance suite passed 3/3; the earlier benchmark/script pytest run passed
+  8/8. The adjacent RQ1-RQ5 benchmark output was later withdrawn as not
+  evaluable after the oracle and comparator integrity audit (evidence 108); its
+  recall, precision, F1, cost, and gate figures are not accepted as quality
+  evidence. The updated integrity suite passes 10/10. Phase 6 G6 remains
+  **PARTIAL** because its frozen analytics corpus/ablation and independent
+  semantic Git-risk evaluation are absent, and this uncommitted worktree has
+  no exact-revision Actions evidence. Windows-only; Linux/macOS are not claimed.
+
+- **Phase 6 analytics evidence integration (Windows):** analytics no longer
+  trusts the legacy `is_dead_code` bit for its candidate list. Static
+  unreferenced results now include finding state, snapshot scope, coverage,
+  reason, residual unknowns, and a BLAKE3 digest of the analyzed edge set;
+  exported language is explicitly “candidate,” not “dead code.” Git file
+  heuristics are separated from semantic Git risk, and query failures produce
+  unavailable/error states instead of plausible zeroes. Added explicit
+  unavailable sections for runtime-unobserved, newly-dead-after-edit,
+  performance/resource, and error/recovery reports; added deterministic bundle
+  export and report scope/status cards with candidate-to-file/canvas focus.
+  Fixed a persistence defect where `INSERT OR REPLACE` on a snapshot deleted
+  snapshot-pinned report receipts through SQLite foreign-key cascades; snapshot
+  writes now update in place and the report-history regression covers re-index.
+  OTLP digests now use the same canonical JSON value storage validates, and
+  ingestion audit state updates idempotently. Windows verification on the
+  current worktree: `synevid-ui` serial suite 33 library + 33 binary tests and
+  2 native integration tests passed; report-history storage regression passed;
+  storage suite passed 22/22; telemetry suite passed 107 tests; affected-crate
+  Clippy passed with warnings denied; full web suite passed 21/21; TypeScript
+  and Rust formatting checks passed. A default-parallel `synevid-ui` run had
+  one load-sensitive SSE p95 failure and one Phase 4 replay assertion failure;
+  both pass serially, so default-parallel workspace stability remains open.
+  The rebuilt-source Electron E2E passed real OTLP ingest, report generation,
+  persisted receipt/history, and daemon restart/replay. G6 remains
+  **PARTIAL**: added SQLite migrations 008/009 for versioned static findings and
+  snapshot-pinned runtime topology windows; the old boolean is no longer in the
+  application model or query/write paths, while its database column remains for
+  non-destructive upgrades. Authenticated runtime ingestion rejects stale
+  snapshots and incomplete windows do not create findings. Git risk now compares
+  HEAD to its first parent through the native semantic differ. CLI, TUI, MCP, and
+  web request the shared daemon report. A follow-up now sends OTLP/JSON through
+  the real parser, sanitizer, and topology engine; source now persists stable
+  report receipts and lists history across snapshots; and web cards expose
+  emitted provenance and receipt retrieval. Added analytics receipt/history
+  checks to the real Electron browser test, schema positive/negative tests, and
+  a bounded execution plan. Added a required Linux browser-E2E job to the
+  pre-merge Actions gate. Earlier failures from a stale daemon binary led to a
+  fresh source build; the final local browser run used that rebuilt binary.
+  At the initial checkpoint Python was not on PATH; a later Windows Python
+  environment ran the validator and negative-instance tests successfully (see
+  the Phase 6 verification follow-up above). Draft 2020-12 Ajv checks accepted
+  all three positive fixtures. Corpus evaluation/ablation and exact-revision
+  cross-platform Actions remain unproven. Phase 6 does not require semantic
+  re-analysis of all Git history. Canvas renderer was not changed. Evidence:
+  `docs/evidence/107-phase6-evidence-backed-reports.md`.
+
 - **Phase 5 exact-commit cross-platform closure:** added durable sequence-based
   event catch-up when SSE/WebSocket connects or reconnects after Actions run
   `45040294535` exposed a macOS cursor replay timeout. Native matrix

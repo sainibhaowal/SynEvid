@@ -545,6 +545,7 @@ fn evidence_commands_accept_compact_and_top_k_and_pass() {
         root.display().to_string(),
         "--format".to_string(),
         "json".to_string(),
+        "--offline".to_string(),
         "catalog".to_string(),
         "--compact".to_string(),
         "--top-k".to_string(),

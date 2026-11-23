@@ -15,22 +15,43 @@
     "start:electron": "node scripts/start.js",
     "test": "node --test test/*.test.js",
     "build:runtime": "node scripts/build-runtime.js",
-    "dist": "npm run dist:dir",
-    "dist:dir": "npm run build:runtime && electron-builder --dir",
-    "dist:win": "npm run build:runtime && electron-builder --win nsis portable msi",
-    "dist:mac": "npm run build:runtime && electron-builder --mac dmg zip",
-    "dist:linux": "npm run build:runtime && electron-builder --linux AppImage deb rpm",
-    "verify:artifacts": "node scripts/verify-artifacts.js",
+    "forge": "electron-forge",
+    "forge:package": "electron-forge package",
+    "forge:make": "electron-forge make",
+    "forge:publish": "electron-forge publish",
+    "lint": "eslint src --ext .js,.ts,.tsx",
+    "typecheck": "tsc --noEmit",
     "smoke:packaged": "node scripts/smoke-packaged.js",
-    "smoke:installers": "node scripts/smoke-installers.js"
+    "smoke:installers": "node scripts/smoke-installers.js",
+    "verify:artifacts": "node scripts/verify-artifacts.js"
   },
   "engines": {
     "node": ">=22.12.0",
     "npm": ">=10.0.0"
   },
-  "devDependencies": {
+  "dependencies": {
+    "@electron-forge/maker-appimage": "^7.0.0",
+    "@electron-forge/maker-deb": "^7.0.0",
+    "@electron-forge/maker-dmg": "^7.0.0",
+    "@electron-forge/maker-squirrel": "^7.0.0",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.0.0",
+    "@electron-forge/plugin-fuses": "^7.0.0",
     "electron": "^45.4.1",
-    "electron-builder": "^26.18.0"
+    "electron-builder": "^26.18.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.0.0",
+    "@electron-forge/maker-appimage": "^7.0.0",
+    "@electron-forge/maker-deb": "^7.0.0",
+    "@electron-forge/maker-dmg": "^7.0.0",
+    "@electron-forge/maker-squirrel": "^7.0.0",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.0.0",
+    "@electron-forge/plugin-fuses": "^7.0.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "eslint": "^8.50.0",
+    "typescript": "^5.3.0"
   },
   "license": "Apache-2.0",
   "build": {
@@ -73,7 +94,24 @@
       "target": ["AppImage", "deb", "rpm"],
       "category": "Development",
       "executableName": "synevid",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "depends": [
+        "libnotify4",
+        "libsecret-1-0",
+        "libnss3",
+        "libatk1.0-0",
+        "libatk-bridge2.0-0",
+        "libcups2",
+        "libdrm2",
+        "libxkbcommon0",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxfixes3",
+        "libxrandr2",
+        "libgbm1",
+        "libasound2"
+      ],
+      "maintainer": "SynEvid Team <rav.singh039@gmail.com>"
     },
     "extraResources": [
       {

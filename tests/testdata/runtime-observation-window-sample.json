@@ -1,0 +1,14 @@
+{
+  "snapshot_id": "snapshot-fixture",
+  "report": {
+    "digest": "blake3:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "coverage": "partial",
+    "observation": {
+      "windows_observed": 1,
+      "required_windows": 3,
+      "complete_observation": false
+    },
+    "dead_code": [],
+    "insufficient_evidence": []
+  }
+}

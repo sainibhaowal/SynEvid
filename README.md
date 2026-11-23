@@ -26,7 +26,7 @@
   <a href="#hard-boundaries"><img src="https://img.shields.io/badge/Core%20Engine-Zero%20LLM%20%2F%20Offline-9d00ff?style=for-the-badge" alt="Zero LLM in Core"></a>
   <a href="#quality-matrix"><img src="https://img.shields.io/badge/Rust-1.90%2B%20(2024%20Edition)-orange?style=for-the-badge&logo=rust" alt="Rust 2024"></a>
   <a href="#test-coverage"><img src="https://img.shields.io/badge/Verification-Phase%201%20E2E%20Green-00e676?style=for-the-badge" alt="Phase 1 end-to-end verification"></a>
-  <a href="#7-benchmark-harness--empirical-evaluation-architecture"><img src="https://img.shields.io/badge/Gate%20(Ch.12)-PASSED%20on%20recall%20(%2B28.33pp)-00e676?style=for-the-badge" alt="Pre-Registered Gate: PASSED on recall"></a>
+  <a href="#7-benchmark-harness--empirical-evaluation-architecture"><img src="https://img.shields.io/badge/Impact%20evaluation-WITHDRAWN%20(not%20evaluable)-b45309?style=for-the-badge" alt="Impact benchmark withdrawn: not evaluable"></a>
 </p>
 
 ---
@@ -420,17 +420,23 @@ flowchart TD
     Gate --> RepJSON & RepMD
 ```
 
-### B. Comparative Empirical Telemetry (50 Tasks Across 5 Repositories)
+### B. Comparative Empirical Telemetry — WITHDRAWN / NOT EVALUABLE
+
+> **Do not interpret the historical numbers in this section as valid accuracy
+> estimates or a passing promotion gate.** The task labels are not independently
+> adjudicated or declared exhaustive, query scope is missing, the “LSP” baseline
+> is a text heuristic that reads expected-answer fields, and the broad engine
+> closure is scored against incomplete task lists. The historical artifact is
+> retained for audit only. The benchmark runner now refuses to emit scores until
+> these integrity conditions are repaired. See
+> [`docs/evidence/108-impact-benchmark-integrity-audit.md`](docs/evidence/108-impact-benchmark-integrity-audit.md).
 
 | Metric | Baseline A (Agent + Grep) | Baseline B (Agent + LSP) | Baseline C (Agent + Autopsy) | Autopsy Advantage |
 | :--- | :---: | :---: | :---: | :--- |
-| **Mean Recall** | 71.67% | 71.67% | **100.00%** | **+28.33pp Recall Lift** |
-| **Mean Precision** | 90.00% | 90.00% | **6.11%** | **Over-approximates: full transitive closure, needs ranked summarization (RQ3)** |
-| **Mean F1 Score** | 76.67% | 76.67% | **10.87%** | **Recall-first evidence; precision work deferred, not tuned** |
-| **Mean Tool Calls** | 2.50 calls | 1.50 calls | **3.00 calls** | **baseline + impact + verify (real binary runs)** |
-| **Mean Tokens** | 800 tokens | 675 tokens | **2338 tokens** | **Evidence JSON is verbose; cost gate FAILs (-246.44%)** |
-| **Mean Latency** | 100.7 ms | 82.5 ms | **97.4 ms** | **Measured wall-clock per task** |
-| **Failure Classes Detected** | 0 | 0 | **0 (task vocabulary)** | **Engine rule ids vs task change classes: mapping not invented** |
+| **Accuracy metrics** | Withdrawn | Withdrawn | Withdrawn | No complete, independently reviewed oracle |
+| **Baseline comparison** | Withdrawn | Withdrawn | Withdrawn | Baselines are not independent; answer-key leakage found |
+| **Latency / cost** | Historical raw values only | Historical raw values only | Historical raw values only | Not a valid comparative result |
+| **Failure-class comparison** | Withdrawn | Withdrawn | Withdrawn | Label vocabularies do not align |
 
 *Source of truth: committed [`benchmarks/results/reproduction_report.md`](benchmarks/results/reproduction_report.md)
 (+ `.json`). Every number above is reproduced from that artifact — not from this README.*
@@ -441,19 +447,23 @@ flowchart TD
 > ground truth and are withdrawn. Full telemetry and limitations in
 > `docs/evidence/13-forensic-benchmark-closure.md`.
 
-### C. Pre-Registered Gate Status (01 Ch.12)
+### C. Historical Pre-Registered Gate — WITHDRAWN
+
+The legacy gate outcome below is retained as historical telemetry only. It is
+not a valid promotion decision and must not be cited as evidence of impact
+quality or production readiness.
 
 $$\text{Gate Decision} = (\Delta\text{Recall} \ge +10\text{pp}) \lor (\Delta\text{Cost} \ge 40\% \land \text{Acc}_C \ge \text{Acc}_{\text{base}}) \lor (\text{New Failure Class} > 0)$$
 
 ```
 +-----------------------------------------------------------------------------------------+
-|                              PRE-REGISTERED GATE: PASSED                                |
+|                         HISTORICAL GATE: WITHDRAWN / NOT EVALUABLE                      |
 +-----------------------------------------------------------------------------------------+
 |  Gate Criterion       | Pre-Registered Threshold | Observed Telemetry | Gate Decision   |
 +-----------------------+--------------------------+--------------------+-----------------+
-|  Recall Lift          | >= +10.00pp              | +28.33pp           | PASS            |
-|  Cost Reduction       | >= 40.00% (equal acc)    | -246.44%           | FAIL            |
-|  New Failure Classes  | Discovery of new classes | 0 (vocab gap)      | FAIL            |
+|  Recall Lift          | >= +10.00pp              | NOT EVALUABLE      | WITHDRAWN       |
+|  Cost Reduction       | >= 40.00% (equal acc)    | NOT EVALUABLE      | WITHDRAWN       |
+|  New Failure Classes  | Discovery of new classes | NOT EVALUABLE      | WITHDRAWN       |
 +-----------------------+--------------------------+--------------------+-----------------+
 ```
 

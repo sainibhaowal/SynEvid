@@ -402,6 +402,12 @@ fn digest_of<T: Serialize>(value: &T) -> String {
     blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
+/// Verify a topology report's engine-generated deterministic digest before a
+/// consumer persists or treats its findings as report evidence.
+pub fn verify_topology_report_digest(report: &TopologyReport) -> bool {
+    report.digest == digest_of(report)
+}
+
 /// Indexes the declared symbols so name-only lookups can report ambiguity instead of
 /// picking.
 struct SymbolIndex<'a> {

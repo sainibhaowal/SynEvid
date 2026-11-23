@@ -1,0 +1,223 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://synevid.dev/schemas/command.schema.json",
+  "title": "SynEvid Command Protocol",
+  "description": "Canonical command protocol for SynEvid - all clients must use this schema",
+  "type": "object",
+  "definitions": {
+    "CommandId": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "RepositoryId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "SnapshotId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "SessionId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16,}$"
+    },
+    "WorkflowId": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$"
+    },
+    "EventSeq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "LeaseId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$"
+    },
+    "ClientId": {
+      "type": "string"
+    },
+    "CancellationToken": {
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["token"]
+    },
+    "OutputFormat": {
+      "type": "string",
+      "enum": ["json", "text", "sarif", "markdown", "html", "bundle"]
+    },
+    "Verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "WARN", "PARTIAL", "UNKNOWN", "ERROR", "UNAVAILABLE"]
+    },
+    "CoverageState": {
+      "type": "string",
+      "enum": ["verified", "partial", "unknown", "unavailable", "error"]
+    },
+    "ClientType": {
+      "type": "string",
+      "enum": ["cli", "tui", "mcp", "ui", "electron", "unknown"]
+    },
+    "EvidenceReceipt": {
+      "type": "object",
+      "properties": {
+        "algorithm": { "type": "string", "const": "BLAKE3" },
+        "digest": { "type": "string", "pattern": "^blake3:[a-f0-9]{64}$" },
+        "source": { "type": "string" },
+        "test_reference": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "engine_version": { "type": "string" },
+        "adapter_versions": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["algorithm", "digest", "source", "test_reference", "timestamp", "engine_version"]
+    },
+    "RuntimeLease": {
+      "type": "object",
+      "properties": {
+        "lease_id": { "$ref": "#/definitions/LeaseId" },
+        "client_id": { "$ref": "#/definitions/ClientId" },
+        "client_type": { "$ref": "#/definitions/ClientType" },
+        "repository_id": { "$ref": "#/definitions/RepositoryId" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_heartbeat": { "type": "string", "format": "date-time" },
+        "last_event_seq": { "$ref": "#/definitions/EventSeq" }
+      },
+      "required": ["lease_id", "client_id", "client_type", "created_at", "last_heartbeat", "last_event_seq"]
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/definitions/CommandRequest" },
+    { "$ref": "#/definitions/CommandResponse" },
+    { "$ref": "#/definitions/EventRecord" },
+    { "$ref": "#/definitions/EventSubscribeRequest" },
+    { "$ref": "#/definitions/RuntimeConnectRequest" },
+    { "$ref": "#/definitions/RuntimeHeartbeatRequest" },
+    { "$ref": "#/definitions/RuntimeDisconnectRequest" }
+  ],
+  "definitions": {
+    "CommandRequest": {
+      "type": "object",
+      "properties": {
+        "command_id": { "$ref": "#/definitions/CommandId" },
+        "repository_id": { "$ref": "#/definitions/RepositoryId" },
+        "snapshot_pin": { "$ref": "#/definitions/SnapshotId" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" },
+        "args": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "cancellation_token": { "$ref": "#/definitions/CancellationToken" },
+        "output_format": { "$ref": "#/definitions/OutputFormat" },
+        "event_receipt": { "type": "boolean" },
+        "client_id": { "$ref": "#/definitions/ClientId" },
+        "client_type": { "$ref": "#/definitions/ClientType" }
+      },
+      "required": ["command_id", "repository_id", "client_id", "client_type"],
+      "additionalProperties": false
+    },
+    "CommandResponse": {
+      "type": "object",
+      "properties": {
+        "command_id": { "$ref": "#/definitions/CommandId" },
+        "operation_id": { "type": "string" },
+        "repository_id": { "$ref": "#/definitions/RepositoryId" },
+        "canonical_path": { "type": "string" },
+        "snapshot_id": { "$ref": "#/definitions/SnapshotId" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" },
+        "event_seq": { "$ref": "#/definitions/EventSeq" },
+        "verdict": { "$ref": "#/definitions/Verdict" },
+        "coverage_state": { "$ref": "#/definitions/CoverageState" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "latency_ms": { "type": "number" },
+        "blake3_digest": {
+          "type": "string",
+          "pattern": "^blake3:[a-f0-9]{64}$"
+        },
+        "evidence_receipt": { "$ref": "#/definitions/EvidenceReceipt" }
+      },
+      "required": ["command_id", "operation_id", "repository_id", "canonical_path", "verdict", "coverage_state", "blake3_digest", "evidence_receipt"],
+      "additionalProperties": true
+    },
+    "EventRecord": {
+      "type": "object",
+      "properties": {
+        "seq_id": { "$ref": "#/definitions/EventSeq" },
+        "event_type": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "repository_id": { "$ref": "#/definitions/RepositoryId" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" },
+        "source_client_id": { "$ref": "#/definitions/ClientId" },
+        "source_client_type": { "$ref": "#/definitions/ClientType" },
+        "source_lease_id": { "$ref": "#/definitions/LeaseId" },
+        "payload": { "type": "object", "additionalProperties": true },
+        "evidence_digest": {
+          "type": "string",
+          "pattern": "^blake3:[a-f0-9]{64}$"
+        }
+      },
+      "required": ["seq_id", "event_type", "timestamp", "source_client_id", "source_client_type", "evidence_digest"],
+      "additionalProperties": false
+    },
+    "EventSubscribeRequest": {
+      "type": "object",
+      "properties": {
+        "client_id": { "$ref": "#/definitions/ClientId" },
+        "client_type": { "$ref": "#/definitions/ClientType" },
+        "lease_id": { "$ref": "#/definitions/LeaseId" },
+        "since_seq": { "$ref": "#/definitions/EventSeq" },
+        "event_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["client_id", "client_type"],
+      "additionalProperties": false
+    },
+    "RuntimeConnectRequest": {
+      "type": "object",
+      "properties": {
+        "client_id": { "$ref": "#/definitions/ClientId" },
+        "client_type": { "$ref": "#/definitions/ClientType" },
+        "repository_id": { "$ref": "#/definitions/RepositoryId" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" },
+        "last_event_seq": { "$ref": "#/definitions/EventSeq" }
+      },
+      "required": ["client_id", "client_type"],
+      "additionalProperties": false
+    },
+    "RuntimeHeartbeatRequest": {
+      "type": "object",
+      "properties": {
+        "lease_id": { "$ref": "#/definitions/LeaseId" },
+        "last_event_seq": { "$ref": "#/definitions/EventSeq" },
+        "session_id": { "$ref": "#/definitions/SessionId" },
+        "workflow_id": { "$ref": "#/definitions/WorkflowId" }
+      },
+      "required": ["lease_id"],
+      "additionalProperties": false
+    },
+    "RuntimeDisconnectRequest": {
+      "type": "object",
+      "properties": {
+        "lease_id": { "$ref": "#/definitions/LeaseId" },
+        "client_id": { "$ref": "#/definitions/ClientId" }
+      },
+      "required": ["lease_id"],
+      "additionalProperties": false
+    }
+  }
+}

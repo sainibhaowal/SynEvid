@@ -24,7 +24,8 @@ boundaries:
 	./scripts/verify-arch-boundaries.sh
 
 schemas:
-	python3 -c 'import glob, json, tomllib, yaml; [json.load(open(f)) for f in glob.glob("schemas/*.json")]; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); json.load(open(".autopsy/baseline.json")); print("All schemas and configs valid.")'
+	python3 scripts/validate-schemas.py
+	python3 -c 'import tomllib, yaml, json; tomllib.loads(open("autopsy.toml","rb").read().decode()); yaml.safe_load(open(".autopsy/invariants.yml","r")); json.load(open(".autopsy/baseline.json")); print("All engine configuration files validated.")'
 
 truth-gate:
 	python3 scripts/validate-requirements.py

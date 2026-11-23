@@ -291,6 +291,23 @@ export function createAutopsyMcpServer(): McpServer {
     version: '0.6.0',
   });
 
+  // Read the daemon-owned persisted analytics evidence for the single active
+  // repository. MCP does not run a parallel analytics implementation.
+  server.registerTool(
+    'autopsy_analytics_report',
+    {
+      description: 'Fetch the authenticated daemon analytics report and its shared report identity for the active repository.',
+      inputSchema: z.object({
+        format: z.enum(['json', 'markdown', 'html', 'sarif', 'bundle']).default('json'),
+      }),
+    },
+    async ({ format }) => {
+      await ensureDaemonRuntime();
+      const result = await getDaemonJson(`/api/v1/analytics/report?format=${encodeURIComponent(format)}`, 30_000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   // 1. autopsy_status: repo/root -> index state, capabilities, snapshot ID
   server.registerTool(
     'autopsy_status',

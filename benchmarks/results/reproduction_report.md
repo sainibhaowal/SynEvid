@@ -1,15 +1,23 @@
-# Synevid Phase 6 Benchmark Reproduction Report
+# SynEvid Legacy Impact Benchmark Output — WITHDRAWN / NOT EVALUABLE
+
+> **This file is preserved as historical raw output, not as a valid evaluation.**
+> Do not cite its metrics or gate decision. The task oracle is not independently
+> reviewed as exhaustive; query scope is missing; Baseline A and B inspect
+> expected-answer fields; and Baseline B does not run an LSP server. The engine
+> also uses broad bidirectional closure against narrow labels. The harness now
+> blocks before score generation. See
+> [`docs/evidence/108-impact-benchmark-integrity-audit.md`](../../docs/evidence/108-impact-benchmark-integrity-audit.md).
 
 ## 1. Executive Summary & Pre-Registered Gate Status
 
-- **Gate Decision:** **PASSED (PROCEED)**
-- **Rationale:** Recall lift of +31.73pp exceeds +10pp threshold
+- **Gate Decision:** **WITHDRAWN / NOT EVALUABLE**
+- **Rationale:** The benchmark oracle and comparators failed integrity review; archived gate numbers are not valid decisions.
 
 | Gate Criterion | Requirement | Observed | Status |
 | :--- | :--- | :--- | :--- |
-| **Recall Lift** | $\ge +10\text{pp}$ vs best baseline | **+31.73pp** | PASS |
-| **Cost Reduction** | $\ge 40\%$ token reduction at equal accuracy | **-318.28%** | FAIL |
-| **New Failure Class** | Discovery of structural failure classes | **-8 failure classes** | FAIL |
+| **Recall Lift** | $\ge +10\text{pp}$ vs best baseline | NOT EVALUABLE | WITHDRAWN |
+| **Cost Reduction** | $\ge 40\%$ token reduction at equal accuracy | NOT EVALUABLE | WITHDRAWN |
+| **New Failure Class** | Discovery of structural failure classes | NOT EVALUABLE | WITHDRAWN |
 
 ## 2. Comparative Benchmark Telemetry (50 Tasks Across 5 TypeScript Repositories)
 

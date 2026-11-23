@@ -170,10 +170,11 @@ test('createAutopsyMcpServer registers all 11 tools and resources', () => {
     'autopsy_canvas_focus',
     'autopsy_git_time_travel',
     'autopsy_working_memory',
+    'autopsy_analytics_report',
   ]) {
     assert.ok(tools.includes(tool), `Must register ${tool}`);
   }
-  assert.equal(tools.length, 21, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools + 4 Phase 4 tools');
+  assert.equal(tools.length, 22, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools + 4 Phase 4 tools + analytics report');
 
   const resources = Object.keys(server._registeredResources);
   const templates = Object.keys(server._registeredResourceTemplates || {});

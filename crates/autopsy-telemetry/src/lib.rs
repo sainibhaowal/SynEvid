@@ -65,5 +65,5 @@ pub use topology::{
     CorrelationBasis, DeadCodeFinding, DeclaredRoute, DeclaredSurface, DeclaredSymbol,
     DispatchModel, EvidenceSubject, InsufficientEvidence, InsufficientReason, ObservationSummary,
     SpanCorrelation, TopologyOptions, TopologyReport, UndocumentedRoute, UninvokedRoute,
-    canonical_route_template, correlate_topology,
+    canonical_route_template, correlate_topology, verify_topology_report_digest,
 };

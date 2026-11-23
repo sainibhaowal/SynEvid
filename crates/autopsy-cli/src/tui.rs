@@ -12,8 +12,7 @@
 use crate::{
     ANALYZER_VERSION, Cli, CliError, EXIT_PASS, build_snapshot_and_graph, load_or_default_config,
 };
-use autopsy_domain::{FindingStatus, SymbolId};
-use autopsy_impact::{EdgeGrade, ImpactDirection, ImpactEngine, ImpactQuery, callers_profile};
+use autopsy_domain::FindingStatus;
 use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
 use crossterm::{
     event::{
@@ -70,6 +69,8 @@ pub struct TuiApp {
     pub repository_id: String,
     pub last_event_seq: i64,
     pub freshness: String,
+    pub analytics_report_id: String,
+    pub analytics_report_status: String,
     pub impact_verdict: String,
     pub impact_coverage: String,
     pub impact_truncated: bool,
@@ -144,6 +145,8 @@ impl TuiApp {
             repository_id: String::new(),
             last_event_seq: 0,
             freshness: "offline analysis not synchronized".to_string(),
+            analytics_report_id: String::new(),
+            analytics_report_status: "UNKNOWN".to_string(),
             impact_verdict: "UNKNOWN".to_string(),
             impact_coverage: "unknown".to_string(),
             impact_truncated: false,
@@ -240,7 +243,7 @@ impl TuiApp {
                     .collect();
 
                 // Run blast radius on the user-selected seed, if any.
-                self.recompute_blast(&artifacts.graph);
+                self.recompute_blast();
             }
             Err(error) => {
                 self.snapshot_id = "unavailable".to_string();
@@ -534,21 +537,17 @@ impl TuiApp {
         response.get("error").is_none()
     }
 
-    fn recompute_blast(&mut self, graph: &autopsy_graph::DependencyGraph) {
+    fn recompute_blast(&mut self) {
         if self.impact_seed.trim().is_empty() {
             return;
         }
 
-        // The daemon is the source of truth for a connected session.  This
-        // keeps the TUI's result, event cursor, snapshot, and Electron/MCP
-        // result on one authoritative path instead of silently analyzing a
-        // second local snapshot.
+        // The daemon is the ONLY source of truth. No local analysis engine.
+        // If daemon is unavailable, show UNAVAILABLE - never fall back to local analysis.
         if self.daemon_connected {
             match crate::daemon::fetch_impact_for_client(&self.impact_seed, "tui") {
-                Ok(response) if self.apply_daemon_impact(&response) => return,
                 Ok(response) => {
                     self.apply_daemon_impact(&response);
-                    return;
                 }
                 Err(error) => {
                     self.impact_verdict = "UNAVAILABLE".to_string();
@@ -561,74 +560,12 @@ impl TuiApp {
                     self.likely_affected.clear();
                     self.possibly_affected.clear();
                     self.freshness = format!("daemon impact unavailable: {error}");
-                    return;
                 }
             }
-        }
-
-        let query = ImpactQuery {
-            seed_symbols: vec![SymbolId::new(&self.impact_seed)],
-            direction: ImpactDirection::Backward,
-            profile: callers_profile(64, 10_000),
-        };
-
-        let engine = ImpactEngine::new();
-        if let Ok(report) = engine.compute_impact(graph, &query) {
-            let has_unknown_evidence = report
-                .entity_meta
-                .values()
-                .any(|meta| meta.grade == EdgeGrade::Unrated);
-            let has_partial_evidence = report
-                .entity_meta
-                .values()
-                .any(|meta| matches!(meta.grade, EdgeGrade::NameLevel | EdgeGrade::Inferred));
-            self.impact_verdict = if report.truncated || has_unknown_evidence {
-                "UNKNOWN".to_string()
-            } else if has_partial_evidence {
-                "WARN".to_string()
-            } else {
-                "PASS".to_string()
-            };
-            self.impact_coverage = if has_unknown_evidence {
-                "unknown".to_string()
-            } else if has_partial_evidence {
-                "partial".to_string()
-            } else {
-                "verified".to_string()
-            };
-            self.impact_truncated = report.truncated;
-            self.impact_digest = report.impact_digest.clone();
-            self.impact_direction = "backward".to_string();
-            self.impact_profile = report.traversal_profile.clone();
-            self.impact_budget = query.profile.budget;
-            self.likely_affected = report
-                .likely_affected
-                .into_iter()
-                .map(|id| {
-                    let hops = report
-                        .entity_meta
-                        .get(&id)
-                        .map(|meta| meta.hops)
-                        .unwrap_or(0);
-                    (id.as_str().to_string(), hops)
-                })
-                .collect();
-            self.possibly_affected = report
-                .possibly_affected
-                .into_iter()
-                .map(|id| {
-                    let meta = report.entity_meta.get(&id);
-                    (
-                        id.as_str().to_string(),
-                        meta.map(|value| value.hops).unwrap_or(0),
-                        meta.and_then(|value| value.weakest_link.clone())
-                            .unwrap_or_else(|| "coverage below resolved".to_string()),
-                    )
-                })
-                .collect();
         } else {
-            self.impact_verdict = "UNKNOWN".to_string();
-            self.impact_coverage = "unknown".to_string();
+            // No daemon connection - show unavailable, never fall back to local analysis
+            self.impact_verdict = "UNAVAILABLE".to_string();
+            self.impact_coverage = "unavailable".to_string();
             self.impact_truncated = false;
             self.impact_digest.clear();
             self.impact_direction = "unknown".to_string();
@@ -636,6 +573,7 @@ impl TuiApp {
             self.impact_budget = 0;
             self.likely_affected.clear();
             self.possibly_affected.clear();
+            self.freshness = "daemon unavailable; use --offline for local analysis".to_string();
         }
     }
 
@@ -677,6 +615,30 @@ impl TuiApp {
                     self.refresh();
                 }
             }
+            KeyCode::Char('a') => match crate::daemon::fetch_analytics_report_for_client("tui") {
+                Ok(response) => {
+                    let report = response.get("report").unwrap_or(&response);
+                    self.analytics_report_id = report
+                        .get("report_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("UNKNOWN")
+                        .to_string();
+                    self.analytics_report_status = report["static_unreferenced"]["status"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN")
+                        .to_string();
+                    self.freshness = format!(
+                        "analytics {} ({})",
+                        &self.analytics_report_id[..12.min(self.analytics_report_id.len())],
+                        self.analytics_report_status
+                    );
+                }
+                Err(_) => {
+                    self.analytics_report_id.clear();
+                    self.analytics_report_status = "UNAVAILABLE".to_string();
+                    self.freshness = "daemon analytics report unavailable".to_string();
+                }
+            },
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.input_buffer.clear();
@@ -1034,6 +996,8 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
             Span::raw(" Search Seed  │ "),
             Span::styled(" [r]", Style::default().fg(Color::Green)),
             Span::raw(" Refresh  │ "),
+            Span::styled(" [a]", Style::default().fg(Color::Magenta)),
+            Span::raw(" Analytics report  â”‚ "),
             Span::styled(" [q/Esc]", Style::default().fg(Color::Red)),
             Span::raw(" Quit"),
         ])
@@ -1839,6 +1803,10 @@ fn render_help(f: &mut Frame, area: Rect) {
             Span::raw("Activate symbol search bar to re-evaluate blast radius"),
         ]),
         Line::from(vec![
+            Span::styled("  a               : ", Style::default().fg(Color::Yellow)),
+            Span::raw("Fetch daemon analytics report and shared report identity"),
+        ]),
+        Line::from(vec![
             Span::styled("  r              : ", Style::default().fg(Color::Yellow)),
             Span::raw("Reload workspace snapshot and refresh all invariant checks"),
         ]),
@@ -1923,6 +1891,8 @@ mod tests {
             repository_id: String::new(),
             last_event_seq: 0,
             freshness: "offline analysis not synchronized".to_string(),
+            analytics_report_id: String::new(),
+            analytics_report_status: "UNKNOWN".to_string(),
             impact_verdict: "UNKNOWN".to_string(),
             impact_coverage: "unknown".to_string(),
             impact_truncated: false,

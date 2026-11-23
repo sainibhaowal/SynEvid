@@ -2,6 +2,9 @@
 
 Date: 2026-10-09. Follows evidence 13 (forensic closure) and the 3.2 audit.
 
+> **Benchmark correction (2026-11-23):** any accuracy or promotion-gate claims
+> in the historical benchmark section below are superseded by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 ## 1. Precision gap: what was built (no benchmark tuning)
 
 The default bidirectional closure over-approximates (precision ≈ 6%):

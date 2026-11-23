@@ -251,12 +251,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
     let overall_coverage = coverage_name(artifacts.coverage_state);
     let mut nodes = BTreeMap::new();
     let mut symbols = BTreeMap::<String, &Symbol>::new();
-    let incoming_symbol_ids = artifacts
-        .edges
-        .iter()
-        .map(|edge| edge.target.to_string())
-        .collect::<BTreeSet<_>>();
-
     for (path, file) in &artifacts.snapshot.files {
         let stable_id = file_node_id(path);
         let coverage = if is_analyzed_language(&file.language) {
@@ -277,7 +271,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
                 signature_hash: file.content_hash.clone(),
                 visibility: "unknown".to_string(),
                 is_exported: false,
-                is_dead_code: false,
                 coverage_state: coverage,
             },
         );
@@ -308,17 +301,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
                 signature_hash,
                 visibility: format!("{:?}", symbol.visibility).to_lowercase(),
                 is_exported: symbol.visibility == autopsy_domain::Visibility::Public,
-                // This is deliberately a narrow static claim: only private or
-                // internal symbols with no incoming edge in a fully verified
-                // graph are marked dead. Dynamic dispatch and unsupported
-                // language behavior remain UNKNOWN/PARTIAL instead of being
-                // converted into a false dead-code finding.
-                is_dead_code: overall_coverage == "verified"
-                    && matches!(
-                        symbol.visibility,
-                        autopsy_domain::Visibility::Private | autopsy_domain::Visibility::Internal
-                    )
-                    && !incoming_symbol_ids.contains(&stable_id),
                 coverage_state: overall_coverage.clone(),
             },
         );
@@ -475,7 +457,6 @@ fn unknown_node(snapshot_id: &str, stable_id: &str, path: &str, coverage: &str) 
         signature_hash: String::new(),
         visibility: "unknown".to_string(),
         is_exported: false,
-        is_dead_code: false,
         coverage_state: if coverage == "verified" {
             "unknown".to_string()
         } else {

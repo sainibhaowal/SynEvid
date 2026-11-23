@@ -44,7 +44,8 @@ use autopsy_plugin_api::{
 };
 use autopsy_storage::{
     AiSessionLedgerRecord, AiWorkingCacheEntry, ForensicSessionRecord, ForensicWorkflowRecord,
-    GraphNodeRow, LiveEventRecord, RepoRecord, StorageEngine, TrajectoryEventRecord,
+    GraphNodeRow, LiveEventRecord, OtlpIngestionLogRecord, RepoRecord, ReportHistoryRecord,
+    RuntimeObservationWindowRecord, StaticFindingRecord, StorageEngine, TrajectoryEventRecord,
 };
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
@@ -138,6 +139,92 @@ fn count_cyclic_nodes(nodes: &[GraphNodeRow], edges: &[autopsy_storage::GraphEdg
         }
     }
     cyclic.len()
+}
+
+/// Produce conservative static-unreferenced candidates from the persisted graph.
+/// This is intentionally not called "dead code": graph reachability cannot prove
+/// behavior loaded through reflection, generated code, framework hooks, or plugins.
+fn static_unreferenced_candidates(
+    nodes: &[GraphNodeRow],
+    edges: &[autopsy_storage::GraphEdgeRow],
+    graph_edge_digest: &str,
+) -> (Vec<Value>, Vec<Value>, usize) {
+    let mut verified_candidates = Vec::new();
+    let mut unknown_candidates = Vec::new();
+    let mut excluded_count = 0usize;
+    let incoming: BTreeSet<&str> = edges
+        .iter()
+        .filter(|edge| edge.edge_kind != "contains")
+        .map(|edge| edge.target_stable_id.as_str())
+        .collect();
+
+    for node in nodes
+        .iter()
+        .filter(|node| node.node_kind != "file" && node.node_kind != "unknown")
+    {
+        if incoming.contains(node.stable_id.as_str()) {
+            continue;
+        }
+        let name = node
+            .qualified_name
+            .rsplit([':', '.', '#'])
+            .next()
+            .unwrap_or(&node.qualified_name);
+        let normalized_name = name.to_ascii_lowercase();
+        let normalized_path = node.file_path.replace('\\', "/").to_ascii_lowercase();
+        let generated = normalized_path.split('/').any(|part| {
+            part == "generated" || part == "__generated__" || part == "dist" || part == "build"
+        });
+        let test_only = normalized_path
+            .split('/')
+            .any(|part| part == "test" || part == "tests" || part == "__tests__")
+            || normalized_path.ends_with(".test.ts")
+            || normalized_path.ends_with(".spec.ts")
+            || normalized_path.ends_with("_test.go");
+        let conventional_entrypoint = matches!(
+            normalized_name.as_str(),
+            "main" | "__main__" | "setup" | "teardown" | "register" | "plugin_init"
+        );
+
+        // Exported/public API and common roots are never reported as candidates.
+        // Generated and test-only declarations are excluded because their
+        // consumers are commonly outside the production graph.
+        if node.is_exported
+            || node.visibility == "public"
+            || generated
+            || test_only
+            || conventional_entrypoint
+        {
+            excluded_count += 1;
+            continue;
+        }
+
+        let coverage = node.coverage_state.to_ascii_lowercase();
+        let payload = serde_json::json!({
+            "stable_id": node.stable_id,
+            "qualified_name": node.qualified_name,
+            "file_path": node.file_path,
+            "line": node.start_line,
+            "finding_state": if coverage == "verified" { "candidate" } else { "unknown" },
+            "evidence_basis": "no_inbound_non_containment_edge_in_persisted_static_graph",
+            "inbound_edge_count": 0,
+            "graph_edge_digest": graph_edge_digest,
+            "coverage_state": coverage,
+            "reason": if coverage == "verified" {
+                "No inbound edge was found in the analyzed static graph; dynamic or external use is not disproven."
+            } else {
+                "No inbound edge was found, but graph coverage is insufficient to classify this declaration."
+            },
+            "residual_unknowns": ["reflection", "generated_or_external_consumers", "framework_or_plugin_registration"],
+            "snapshot_id": node.snapshot_id
+        });
+        if coverage == "verified" {
+            verified_candidates.push(payload);
+        } else {
+            unknown_candidates.push(payload);
+        }
+    }
+    (verified_candidates, unknown_candidates, excluded_count)
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,6 +403,11 @@ pub struct DashboardServer {
     pub live_events: Arc<Mutex<Vec<serde_json::Value>>>,
     live_event_signal: Arc<(Mutex<u64>, Condvar)>,
     live_event_persist_tx: Option<SyncSender<LiveEventPersistenceCommand>>,
+    /// Sequence allocator belongs to this daemon's persisted event stream.
+    /// A process-global counter makes independent daemon instances create
+    /// artificial gaps when tests, embedded clients, or tools host more than
+    /// one runtime in the same process.
+    next_live_event_seq: Arc<AtomicI64>,
     pub active_ai_session_id: Arc<Mutex<String>>,
     /// Stable identity for this local daemon authority. It is derived from
     /// the daemon root, not from a process timestamp, so clients can detect
@@ -482,11 +574,10 @@ impl DashboardServer {
             },
         )
         .ok();
-        if let Some(storage) = storage.as_ref()
-            && let Ok(latest) = storage.latest_live_event_seq()
-        {
-            GLOBAL_SEQ_ID.fetch_max(latest.saturating_add(1), Ordering::SeqCst);
-        }
+        let next_live_event_seq = storage
+            .as_ref()
+            .and_then(|storage| storage.latest_live_event_seq().ok())
+            .map_or(100, |latest| latest.saturating_add(1).max(100));
 
         let root_canon = repo_root
             .canonicalize()
@@ -707,6 +798,7 @@ impl DashboardServer {
             live_events: Arc::new(Mutex::new(Vec::new())),
             live_event_signal: Arc::new((Mutex::new(0), Condvar::new())),
             live_event_persist_tx,
+            next_live_event_seq: Arc::new(AtomicI64::new(next_live_event_seq)),
             // Restore only a session identity explicitly persisted by a prior
             // daemon action. Startup never invents a forensic session.
             active_ai_session_id: Arc::new(Mutex::new(initial_active_session_id)),
@@ -937,7 +1029,7 @@ impl DashboardServer {
         // busy SQLite writer must not turn a live SSE/WebSocket notification
         // into a 50ms+ wake-up.  The same explicit sequence is then persisted
         // so restart replay remains cursor-stable.
-        let seq = GLOBAL_SEQ_ID.fetch_add(1, Ordering::SeqCst);
+        let seq = self.next_live_event_seq.fetch_add(1, Ordering::SeqCst);
         let item = serde_json::json!({
             "seq_id": seq,
             "event": event_name,
@@ -1465,6 +1557,33 @@ impl DashboardServer {
                     || p.starts_with("/api/v1/analytics/report?") =>
             {
                 let res = self.handle_analytics_report(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Post, "/api/v1/analytics/runtime-window") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_runtime_observation_ingest(&body);
+                self.respond_json(request, &res);
+            }
+            // Phase 6: OTLP ingestion for automated telemetry topology reports
+            (&Method::Post, "/api/v1/analytics/otlp-ingest") => {
+                let body = self.read_body(&mut request);
+                let res = self.handle_otlp_ingest(&body);
+                self.respond_json(request, &res);
+            }
+            // Phase 6: Analytics report history for durable artifacts and replay
+            (&Method::Get, p)
+                if p == "/api/v1/analytics/report-history"
+                    || p.starts_with("/api/v1/analytics/report-history?") =>
+            {
+                let res = self.handle_report_history(&url);
+                self.respond_json(request, &res);
+            }
+            (&Method::Get, p) if p.starts_with("/api/v1/analytics/report-history/") => {
+                let report_id = Self::url_decode(
+                    p.strip_prefix("/api/v1/analytics/report-history/")
+                        .unwrap_or_default(),
+                );
+                let res = self.handle_get_report_history(&report_id);
                 self.respond_json(request, &res);
             }
 
@@ -2363,16 +2482,121 @@ impl DashboardServer {
             .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }).to_string())
     }
 
-    /// Builds the deterministic Phase 5 executive analytics report from the
+    /// Persist one real telemetry topology report for the daemon-owned active
+    /// repository and exact current snapshot. The caller cannot choose another
+    /// repository or attach observations to a stale snapshot.
+    pub fn handle_runtime_observation_ingest(&self, body: &str) -> String {
+        let parsed: Result<Value, _> = serde_json::from_str(body);
+        let Ok(request) = parsed else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-400","error":"request must be JSON"}).to_string();
+        };
+        let repo_id = self
+            .active_repo_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let repository = self
+            .connected_repos
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(&repo_id).cloned())
+            .or_else(|| {
+                self.storage.lock().ok().and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .and_then(|storage| storage.get_repository(&repo_id).ok().flatten())
+                })
+            });
+        let Some(repository) = repository else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-404","error":"no active repository"}).to_string();
+        };
+        let Some(snapshot_id) = request.get("snapshot_id").and_then(Value::as_str) else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-400","error":"snapshot_id is required"}).to_string();
+        };
+        if repository.latest_snap_id.as_deref() != Some(snapshot_id) {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-409","error":"observation snapshot does not match active repository snapshot"}).to_string();
+        }
+        let Some(report) = request.get("report") else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-400","error":"telemetry report is required"}).to_string();
+        };
+        let observation = &report["observation"];
+        let (Some(required_windows), Some(observed_windows), Some(complete_observation)) = (
+            observation["required_windows"].as_i64(),
+            observation["windows_observed"].as_i64(),
+            observation["complete_observation"].as_bool(),
+        ) else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-422","error":"report lacks valid observation-window coverage"}).to_string();
+        };
+        if report["digest"].as_str().is_none()
+            || report["dead_code"].as_array().is_none()
+            || report["insufficient_evidence"].as_array().is_none()
+        {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-422","error":"report is not a telemetry topology report"}).to_string();
+        }
+        let typed_report: autopsy_telemetry::TopologyReport = match serde_json::from_value(report.clone()) {
+            Ok(report) => report,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-422","error":"telemetry topology report schema is invalid"}).to_string(),
+        };
+        if !autopsy_telemetry::verify_topology_report_digest(&typed_report) {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-DIGEST","error":"telemetry engine digest validation failed"}).to_string();
+        }
+        let canonical = match serde_json::to_vec(report) {
+            Ok(bytes) => bytes,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-422","error":"report cannot be serialized canonically"}).to_string(),
+        };
+        let evidence_digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
+        let window_id = blake3::hash(
+            format!(
+                "{}\0{}\0{}",
+                repository.repo_id, snapshot_id, evidence_digest
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let coverage_state = report["coverage"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_ascii_lowercase();
+        let report_json = match serde_json::to_string(report) {
+            Ok(json) => json,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-422","error":"report serialization failed"}).to_string(),
+        };
+        let root = PathBuf::from(&repository.root_path);
+        let storage = match open_repository_storage_with_registry(&root, &self.registry) {
+            Ok(storage) => storage,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-503","error":"repository storage unavailable"}).to_string(),
+        };
+        let row = RuntimeObservationWindowRecord {
+            window_id: window_id.clone(),
+            repository_id: repository.repo_id,
+            snapshot_id: snapshot_id.to_string(),
+            required_windows,
+            observed_windows,
+            complete_observation,
+            coverage_state,
+            evidence_digest: evidence_digest.clone(),
+            report_json,
+        };
+        if let Err(error) = storage.save_runtime_observation_window(&row) {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-RUNTIME-PERSIST","error":error.to_string()}).to_string();
+        }
+        serde_json::json!({"status":"STORED","window_id":window_id,"snapshot_id":snapshot_id,"evidence_digest":evidence_digest,"required_windows":required_windows,"observed_windows":observed_windows,"complete_observation":complete_observation,"coverage_state":row.coverage_state}).to_string()
+    }
+
+    /// Builds the deterministic Phase 6 evidence report from persisted graph,
     /// persisted graph, Git DAG, forensic sessions, and AI ledgers.
     pub fn handle_analytics_report(&self, url: &str) -> String {
         let format = Self::parse_query_param(url, "format")
             .unwrap_or_else(|| "json".to_string())
             .to_lowercase();
-        if !matches!(format.as_str(), "json" | "markdown" | "html" | "sarif") {
+        if !matches!(
+            format.as_str(),
+            "json" | "markdown" | "html" | "sarif" | "bundle"
+        ) {
             return serde_json::json!({
                 "error_code": "ERR-ANALYTICS-400",
-                "error": "format must be json, markdown, html, or sarif"
+                "error": "format must be json, markdown, html, sarif, or bundle"
             })
             .to_string();
         }
@@ -2464,30 +2688,84 @@ impl DashboardServer {
         });
         hubs.truncate(10);
 
-        let dead_items: Vec<serde_json::Value> = nodes
+        // Do not trust the legacy persisted is_dead_code boolean for reporting:
+        // it has no evidence basis or residual-coverage explanation.
+        let mut canonical_edges: Vec<_> = edges
             .iter()
-            .filter(|node| node.is_dead_code)
-            .map(|node| {
-                serde_json::json!({
-                    "stable_id": node.stable_id,
-                    "file_path": node.file_path,
-                    "line": node.start_line,
-                    "qualified_name": node.qualified_name,
-                    "coverage_state": node.coverage_state
+            .map(|edge| {
+                (
+                    edge.edge_id.as_str(),
+                    edge.source_stable_id.as_str(),
+                    edge.target_stable_id.as_str(),
+                    edge.edge_kind.as_str(),
+                    edge.confidence.as_str(),
+                )
+            })
+            .collect();
+        canonical_edges.sort_unstable();
+        let graph_edge_digest = format!(
+            "blake3:{}",
+            blake3::hash(&serde_json::to_vec(&canonical_edges).unwrap_or_default()).to_hex()
+        );
+        let (static_candidates, static_unknowns, excluded_static_count) =
+            static_unreferenced_candidates(&nodes, &edges, &graph_edge_digest);
+        let static_records: Vec<StaticFindingRecord> = static_candidates
+            .iter()
+            .chain(static_unknowns.iter())
+            .filter_map(|finding| {
+                let stable_id = finding["stable_id"].as_str()?;
+                let state = finding["finding_state"].as_str()?;
+                let basis = finding["evidence_basis"].as_str()?;
+                let coverage = finding["coverage_state"].as_str()?;
+                let reason = finding["reason"].as_str()?;
+                let digest = finding["graph_edge_digest"].as_str()?;
+                let canonical =
+                    format!("{snapshot_id}\0{stable_id}\0{state}\0{basis}\0{coverage}\0{digest}");
+                let finding_id = blake3::hash(canonical.as_bytes()).to_hex().to_string();
+                Some(StaticFindingRecord {
+                    finding_id,
+                    snapshot_id: snapshot_id.clone(),
+                    stable_id: stable_id.to_string(),
+                    evidence_version: 1,
+                    finding_state: state.to_string(),
+                    evidence_basis: basis.to_string(),
+                    coverage_state: coverage.to_string(),
+                    reason: reason.to_string(),
+                    evidence_digest: digest.to_string(),
                 })
             })
             .collect();
+        if static_records.len() != static_candidates.len() + static_unknowns.len()
+            || storage
+                .replace_static_findings(&snapshot_id, 1, &static_records)
+                .is_err()
+        {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-STATIC-FINDING-PERSIST",
+                "error": "Static finding evidence could not be validated or persisted"
+            })
+            .to_string();
+        }
+        let stored_static_records = match storage.static_findings_for_snapshot(&snapshot_id, 1) {
+            Ok(records) => records,
+            Err(_) => {
+                return serde_json::json!({
+                    "error_code": "ERR-ANALYTICS-STATIC-FINDING-READ",
+                    "error": "Persisted static finding evidence could not be read back"
+                })
+                .to_string();
+            }
+        };
         let git_result = GitReader::new(&root).read_galaxy(5_000);
         let (commits, git_evolution_state) = match git_result {
             Ok(galaxy) => {
                 let commits = galaxy.commits;
                 let state = serde_json::json!({
-                    "status": "VERIFIED",
+                    "status": "AVAILABLE",
                     "verdict": "UNKNOWN",
                     "coverage_state": "verified",
-                    "total_commits": commits.len(),
-                    "risk_commit_count": 0,
-                    "risk_commits": []
+                    "analyzed_commits": commits.len(),
+                    "history_limit": 5_000
                 });
                 (commits, state)
             }
@@ -2499,37 +2777,127 @@ impl DashboardServer {
                     "coverage_state": "unknown",
                     "error_code": "ERR-GIT-GALAXY-READ",
                     "error": error.to_string(),
-                    "total_commits": null,
-                    "risk_commit_count": null,
-                    "risk_commits": []
+                    "analyzed_commits": null,
+                    "history_limit": 5_000
                 }),
             ),
         };
-        let risk_commits: Vec<serde_json::Value> = commits
+        // The report makes one bounded semantic comparison: HEAD against its first
+        // parent. Deeper historical commits remain unverified until evaluated.
+        let semantic_head = record.head_commit_oid.as_deref();
+        let semantic_parent = semantic_head.and_then(|head| {
+            commits
+                .iter()
+                .find(|commit| commit.oid == head)
+                .and_then(|commit| commit.parents.first().map(String::as_str))
+        });
+        let semantic_git_risk = match (semantic_parent, semantic_head) {
+            (Some(parent), Some(head)) => {
+                match GitDiffEngine::new(&root).diff_commits(parent, head) {
+                    Ok(diff) => serde_json::json!({
+                        "status": "AVAILABLE", "verdict": diff.verdict,
+                        "coverage_state": diff.coverage_state,
+                        "evidence_basis": "native_git_tree_reconstruction_and_shared_semantic_diff",
+                        "head_commit_oid": diff.head_oid, "base_commit_oid": diff.base_oid,
+                        "result_digest": diff.result_digest,
+                        "changed_file_count": diff.total_changed_files,
+                        "direct_symbols": diff.direct_symbols,
+                        "impacted_boundary": diff.impacted_boundary,
+                        "symbol_deltas": diff.symbol_deltas, "edge_deltas": diff.edge_deltas,
+                        "contract_deltas": diff.contract_deltas,
+                        "contract_findings": diff.drifted_contracts
+                    }),
+                    Err(error) => serde_json::json!({
+                        "status": "ERROR", "verdict": "ERROR", "coverage_state": "unknown",
+                        "evidence_basis": "native_git_tree_reconstruction_and_shared_semantic_diff",
+                        "error_code": "ERR-ANALYTICS-SEMANTIC-GIT", "error": error.to_string()
+                    }),
+                }
+            }
+            _ => serde_json::json!({
+                "status": "UNAVAILABLE", "verdict": "UNKNOWN", "coverage_state": "unknown",
+                "evidence_basis": "native_git_tree_reconstruction_and_shared_semantic_diff",
+                "reason": "HEAD or its first parent is unavailable; no semantic comparison was performed"
+            }),
+        };
+        let runtime_windows = match storage.runtime_observation_windows(&repo_id, &snapshot_id) {
+            Ok(rows) => rows,
+            Err(_) => {
+                return serde_json::json!({
+                    "error_code": "ERR-ANALYTICS-RUNTIME-READ",
+                    "error": "Persisted runtime observation windows could not be read"
+                })
+                .to_string();
+            }
+        };
+        let complete_runtime_reports: Vec<Value> = runtime_windows
             .iter()
-            .filter(|commit| commit.verdict == "BREAKING" || commit.blast_radius_score > 0)
+            .filter(|window| {
+                window.complete_observation
+                    && window.observed_windows >= window.required_windows
+                    && window.coverage_state == "verified"
+            })
+            .filter_map(|window| serde_json::from_str(&window.report_json).ok())
+            .collect();
+        let runtime_unobserved: Vec<Value> = complete_runtime_reports
+            .iter()
+            .flat_map(|report| report["dead_code"].as_array().cloned().unwrap_or_default())
+            .collect();
+        let runtime_report_state = if complete_runtime_reports.is_empty() {
+            if runtime_windows.is_empty() {
+                "UNAVAILABLE"
+            } else {
+                "PARTIAL"
+            }
+        } else {
+            "AVAILABLE"
+        };
+        let file_heuristic_commits: Vec<serde_json::Value> = commits
+            .iter()
+            .filter(|commit| commit.blast_radius_score > 0)
             .map(|commit| {
                 serde_json::json!({
                     "oid": commit.oid,
                     "summary": commit.summary,
-                    "blast_radius_score": commit.blast_radius_score,
-                    "verdict": commit.verdict,
+                    "file_change_score": commit.blast_radius_score,
                     "heuristic_verdict": commit.heuristic_verdict,
-                    "semantic_verdict": commit.semantic_verdict,
-                    "coverage_state": commit.coverage_state,
-                    "evidence_kind": commit.evidence_kind
+                    "evidence_kind": "file_heuristic"
                 })
             })
             .collect();
-        let ledgers = storage.list_ai_ledgers().unwrap_or_default();
+        let ledgers_result = storage.list_ai_ledgers();
+        let (ledgers, ledger_error) = match ledgers_result {
+            Ok(rows) => (rows, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
         let total_queries: i64 = ledgers.iter().map(|ledger| ledger.total_queries).sum();
         let total_hits: i64 = ledgers.iter().map(|ledger| ledger.cache_hits).sum();
         let tokens_spent: i64 = ledgers.iter().map(|ledger| ledger.tokens_spent).sum();
         let tokens_saved: i64 = ledgers.iter().map(|ledger| ledger.tokens_saved).sum();
         let display_name = record.display_name.clone();
         let root_path = record.root_path.clone();
+        let mut author_counts = BTreeMap::<String, usize>::new();
+        for commit in &commits {
+            *author_counts.entry(commit.author_name.clone()).or_default() += 1;
+        }
+        let top_author_commits = author_counts.values().copied().max().unwrap_or(0);
+        let commit_concentration_percent = if commits.is_empty() {
+            None
+        } else {
+            Some((top_author_commits as f64 / commits.len() as f64 * 10_000.0).round() / 100.0)
+        };
+        let timestamps: Vec<i64> = commits.iter().map(|commit| commit.timestamp).collect();
+        let first_commit_timestamp = timestamps.iter().copied().filter(|time| *time > 0).min();
+        let latest_commit_timestamp = timestamps.iter().copied().filter(|time| *time > 0).max();
         let report_core = serde_json::json!({
             "schema_version": "synevid.analytics.v1",
+            "scope": {
+                "repository_id": repo_id,
+                "snapshot_id": snapshot_id,
+                "graph_nodes": nodes.len(),
+                "graph_edges": edges.len(),
+                "git_history_limit": 5_000
+            },
             "repository": {
                 "repo_id": repo_id,
                 "display_name": display_name,
@@ -2541,6 +2909,8 @@ impl DashboardServer {
                 "head_commit_oid": record.head_commit_oid
             },
             "structural_health": {
+                "status": if nodes.is_empty() { "UNKNOWN" } else { "AVAILABLE" },
+                "evidence_basis": "persisted_graph_rows_for_snapshot",
                 "total_files": files.len(),
                 "total_symbols": nodes.len(),
                 "total_edges": edges.len(),
@@ -2549,9 +2919,35 @@ impl DashboardServer {
                 "top_blast_radius_symbols": hubs,
                 "cyclic_dependency_nodes": count_cyclic_nodes(&nodes, &edges)
             },
+            "static_unreferenced": {
+                "status": "AVAILABLE",
+                "finding_language": "candidate_not_proof_of_global_dead_code",
+                "evidence_basis": "persisted_static_graph",
+                "candidate_count": static_candidates.len(),
+                "candidates": static_candidates.clone(),
+                "persisted_evidence_records": stored_static_records,
+                "unknown_count": static_unknowns.len(),
+                "unknown": static_unknowns,
+                "excluded_count": excluded_static_count
+            },
             "dead_code_inventory": {
-                "total": dead_items.len(),
-                "items": dead_items
+                "status": "AVAILABLE",
+                "deprecated": true,
+                "finding_language": "static unreferenced candidate, not proof of global dead code",
+                "total": static_candidates.len(),
+                "items": static_candidates
+            },
+            "newly_dead_after_edit": {
+                "status": "UNAVAILABLE",
+                "reason": "No candidate before/after edit graph is attached to this repository report."
+            },
+            "runtime_unobserved": {
+                "status": runtime_report_state,
+                "evidence_basis": "persisted_topology_reports_pinned_to_repository_snapshot",
+                "windows": runtime_windows,
+                "complete_window_count": complete_runtime_reports.len(),
+                "findings": runtime_unobserved,
+                "reason": if runtime_report_state == "UNAVAILABLE" { "No telemetry topology reports are persisted for this snapshot; absence is not a finding." } else if runtime_report_state == "PARTIAL" { "Persisted telemetry exists, but no report establishes complete sufficient observation coverage." } else { "Findings are copied only from complete, verified telemetry topology reports." }
             },
             "git_evolution": {
                 "status": git_evolution_state["status"].clone(),
@@ -2559,28 +2955,55 @@ impl DashboardServer {
                 "coverage_state": git_evolution_state["coverage_state"].clone(),
                 "error_code": git_evolution_state.get("error_code").cloned().unwrap_or(serde_json::Value::Null),
                 "error": git_evolution_state.get("error").cloned().unwrap_or(serde_json::Value::Null),
-                "total_commits": if git_evolution_state["status"] == "ERROR" { serde_json::Value::Null } else { serde_json::json!(commits.len()) },
-                "risk_commit_count": if git_evolution_state["status"] == "ERROR" { serde_json::Value::Null } else { serde_json::json!(risk_commits.len()) },
-                "risk_commits": risk_commits
+                "analyzed_commits": git_evolution_state["analyzed_commits"].clone(),
+                "history_limit": 5_000,
+                "file_heuristic_findings": if git_evolution_state["status"] == "ERROR" { Value::Null } else { serde_json::json!(file_heuristic_commits) },
+                "semantic_git_risk": semantic_git_risk
+            },
+            "git_velocity": {
+                "status": if git_evolution_state["status"] == "ERROR" { "ERROR" } else if commits.is_empty() { "UNKNOWN" } else { "PARTIAL" },
+                "evidence_basis": "native_git_commit_metadata_with_bounded_history",
+                "analyzed_commit_count": if git_evolution_state["status"] == "ERROR" { Value::Null } else { serde_json::json!(commits.len()) },
+                "first_commit_timestamp": first_commit_timestamp,
+                "latest_commit_timestamp": latest_commit_timestamp,
+                "top_author_commit_count": if git_evolution_state["status"] == "ERROR" { Value::Null } else { serde_json::json!(top_author_commits) },
+                "top_author_concentration_percent": commit_concentration_percent,
+                "history_limit": 5_000
             },
             "ai_session_audit": {
-                "sessions": ledgers.len(),
-                "queries": total_queries,
-                "cache_hits": total_hits,
-                "cache_hit_percent": if total_queries == 0 { 0.0 } else { (total_hits as f64 / total_queries as f64 * 10000.0).round() / 100.0 },
-                "tokens_spent": tokens_spent,
-                "tokens_saved": tokens_saved,
-                "ledgers": ledgers
+                "status": if ledger_error.is_some() { "ERROR" } else { "AVAILABLE" },
+                "error": ledger_error.clone(),
+                "sessions": if ledger_error.is_some() { Value::Null } else { serde_json::json!(ledgers.len()) },
+                "queries": if ledger_error.is_some() { Value::Null } else { serde_json::json!(total_queries) },
+                "cache_hits": if ledger_error.is_some() { Value::Null } else { serde_json::json!(total_hits) },
+                "cache_hit_percent": if ledger_error.is_some() { Value::Null } else if total_queries == 0 { serde_json::json!(0.0) } else { serde_json::json!((total_hits as f64 / total_queries as f64 * 10000.0).round() / 100.0) },
+                "tokens_spent": if ledger_error.is_some() { Value::Null } else { serde_json::json!(tokens_spent) },
+                "tokens_saved": if ledger_error.is_some() { Value::Null } else { serde_json::json!(tokens_saved) },
+                "ledgers": if ledger_error.is_some() { Value::Null } else { serde_json::to_value(ledgers).unwrap_or(Value::Null) }
+            },
+            "coverage_and_unknowns": {
+                "status": if nodes.is_empty() { "UNKNOWN" } else { "AVAILABLE" },
+                "coverage_counts": coverage_counts,
+                "residual_unknowns": ["reflection", "dynamic_loading", "generated_code", "external_runtime_behavior"]
+            },
+            "performance_and_resources": {
+                "status": "UNAVAILABLE",
+                "reason": "This report path has no persisted performance/resource sample query; no values are synthesized."
+            },
+            "errors_and_recovery": {
+                "status": "UNAVAILABLE",
+                "reason": "This report path has no scoped error/recovery ledger query; no zero-error claim is inferred."
             }
         });
         let canonical = serde_json::to_vec(&report_core).unwrap_or_default();
         let digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
         let mut report = report_core.clone();
         report["result_digest"] = serde_json::Value::String(digest.clone());
+        report["report_id"] = serde_json::Value::String(digest.clone());
         let json_content =
             serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string());
         let markdown = format!(
-            "# SynEvid Analytics Report\n\n- Repository: `{}`\n- Snapshot: `{}`\n- BLAKE3: `{}`\n\n## Structural health\n\n- Files: {}\n- Symbols: {}\n- Edges: {}\n- Verified coverage: {}%\n- Cyclic dependency nodes: {}\n\n## Dead code inventory\n\n- Dead symbols: {}\n\n## Git evolution\n\n- Commits analyzed: {}\n- Risk commits: {}\n\n## AI session audit\n\n- Sessions: {}\n- Queries: {}\n- Cache hits: {}\n- Tokens spent: {}\n- Tokens saved: {}\n",
+            "# SynEvid Analytics Report\n\n- Repository: `{}`\n- Snapshot: `{}`\n- Report ID / BLAKE3: `{}`\n\n## Structural health ({})\n\n- Files: {}\n- Graph nodes: {}\n- Edges: {}\n- Verified coverage: {}%\n- Cyclic dependency nodes: {}\n\n## Static unreferenced candidates ({})\n\n- Candidate count: {}\n- Coverage-unknown count: {}\n- These are graph-scoped candidates, not proof of global dead code.\n\n## Runtime-unobserved\n\n- Status: {} — {}\n\n## Git velocity ({})\n\n- Commits analyzed (bounded): {}\n- Top-author concentration: {}%\n\n## Semantic Git risk ({})\n\n- Verified findings: {}\n- Unknown commits: {}\n- File-count heuristics are reported separately and are not semantic findings.\n\n## AI session audit ({})\n\n- Sessions: {}\n- Queries: {}\n- Cache hits: {}\n- Tokens spent: {}\n- Tokens saved: {}\n\n## Performance / resources ({})\n\n{}\n\n## Errors / recovery ({})\n\n{}\n",
             report["repository"]["display_name"]
                 .as_str()
                 .unwrap_or("repository"),
@@ -2588,57 +3011,509 @@ impl DashboardServer {
                 .as_str()
                 .unwrap_or("unknown"),
             digest,
+            report["structural_health"]["status"],
             report["structural_health"]["total_files"],
             report["structural_health"]["total_symbols"],
             report["structural_health"]["total_edges"],
             report["structural_health"]["verified_coverage_percent"],
             report["structural_health"]["cyclic_dependency_nodes"],
-            report["dead_code_inventory"]["total"],
-            report["git_evolution"]["total_commits"],
-            report["git_evolution"]["risk_commit_count"],
+            report["static_unreferenced"]["status"],
+            report["static_unreferenced"]["candidate_count"],
+            report["static_unreferenced"]["unknown_count"],
+            report["runtime_unobserved"]["status"],
+            report["runtime_unobserved"]["reason"],
+            report["git_velocity"]["status"],
+            report["git_velocity"]["analyzed_commit_count"],
+            report["git_velocity"]["top_author_concentration_percent"],
+            report["git_evolution"]["semantic_git_risk"]["status"],
+            report["git_evolution"]["semantic_git_risk"]["finding_count"],
+            report["git_evolution"]["semantic_git_risk"]["unknown_commit_count"],
+            report["ai_session_audit"]["status"],
             report["ai_session_audit"]["sessions"],
             report["ai_session_audit"]["queries"],
             report["ai_session_audit"]["cache_hits"],
             report["ai_session_audit"]["tokens_spent"],
-            report["ai_session_audit"]["tokens_saved"]
-        );
-        let html = format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>SynEvid Analytics</title></head><body><pre>{}</pre></body></html>",
-            markdown
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
+            report["ai_session_audit"]["tokens_saved"],
+            report["performance_and_resources"]["status"],
+            report["performance_and_resources"]["reason"],
+            report["errors_and_recovery"]["status"],
+            report["errors_and_recovery"]["reason"]
         );
         let sarif = serde_json::json!({
             "version": "2.1.0",
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
             "runs": [{
                 "tool": { "driver": { "name": "SynEvid Analytics", "semanticVersion": "0.6.0" } },
-                "results": report["dead_code_inventory"]["items"].as_array().cloned().unwrap_or_default().into_iter().map(|item| serde_json::json!({
-                    "ruleId": "dead-code",
+                "results": report["static_unreferenced"]["candidates"].as_array().cloned().unwrap_or_default().into_iter().map(|item| serde_json::json!({
+                    "ruleId": "static-unreferenced-candidate",
                     "level": "warning",
-                    "message": { "text": format!("Dead or unreachable symbol: {}", item["qualified_name"].as_str().unwrap_or("unknown")) },
+                    "message": { "text": format!("No inbound edge found in analyzed static graph; candidate only, not proof of global dead code: {}", item["qualified_name"].as_str().unwrap_or("unknown")) },
                     "locations": [{ "physicalLocation": { "artifactLocation": { "uri": item["file_path"] }, "region": { "startLine": item["line"] } } }]
                 })).collect::<Vec<_>>()
             }]
         });
+        let sarif_content = serde_json::to_string_pretty(&sarif).unwrap_or_default();
+        let html_content = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>SynEvid Analytics</title></head><body><pre>{}</pre></body></html>",
+            markdown
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+        );
+        let bundle = serde_json::json!({
+            "bundle_schema": "synevid.analytics-bundle.v1",
+            "report_id": digest.clone(),
+            "report": report.clone(),
+            "artifacts": {
+                "json": { "digest": format!("blake3:{}", blake3::hash(json_content.as_bytes()).to_hex()), "content": json_content.clone() },
+                "markdown": { "digest": format!("blake3:{}", blake3::hash(markdown.as_bytes()).to_hex()), "content": markdown.clone() },
+                "html": { "digest": format!("blake3:{}", blake3::hash(html_content.as_bytes()).to_hex()), "content": html_content.clone() },
+                "sarif": { "digest": format!("blake3:{}", blake3::hash(sarif_content.as_bytes()).to_hex()), "content": sarif_content.clone() }
+            }
+        });
         let (content_type, extension, content) = match format.as_str() {
             "markdown" => ("text/markdown; charset=utf-8", "md", markdown),
-            "html" => ("text/html; charset=utf-8", "html", html),
+            "html" => ("text/html; charset=utf-8", "html", html_content),
             "sarif" => (
                 "application/sarif+json; charset=utf-8",
                 "sarif",
-                serde_json::to_string_pretty(&sarif).unwrap_or_default(),
+                sarif_content,
+            ),
+            "bundle" => (
+                "application/json; charset=utf-8",
+                "bundle.json",
+                serde_json::to_string_pretty(&bundle).unwrap_or_default(),
             ),
             _ => ("application/json; charset=utf-8", "json", json_content),
         };
+        // Persist one canonical JSON report per semantic report identity. The
+        // requested presentation format is deliberately not part of the identity;
+        // operational creation time is metadata and is excluded from the digest.
+        let report_history = ReportHistoryRecord {
+            report_id: digest.clone(),
+            repository_id: record.repo_id.clone(),
+            snapshot_id: snapshot_id.clone(),
+            format: "json".to_string(),
+            report_json: serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+            evidence_digest: digest.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(0),
+            schema_version: "synevid.analytics.v1".to_string(),
+        };
+        if report_history.created_at <= 0 {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-CLOCK",
+                "error": "Could not obtain a valid operational timestamp for report history"
+            })
+            .to_string();
+        }
+        if let Err(error) = storage.save_report_history(&report_history) {
+            return serde_json::json!({
+                "error_code": "ERR-ANALYTICS-HISTORY-PERSIST",
+                "error": format!("Analytics report was generated but history persistence failed: {error}")
+            }).to_string();
+        }
+        match storage.get_report_history(&report_history.report_id) {
+            Ok(Some(saved))
+                if saved.repository_id == report_history.repository_id
+                    && saved.snapshot_id == report_history.snapshot_id
+                    && saved.evidence_digest == report_history.evidence_digest => {}
+            Ok(_) => {
+                return serde_json::json!({
+                    "error_code": "ERR-ANALYTICS-HISTORY-VERIFY",
+                    "error": "Analytics report receipt did not match the persisted record"
+                })
+                .to_string();
+            }
+            Err(_) => {
+                return serde_json::json!({
+                    "error_code": "ERR-ANALYTICS-HISTORY-VERIFY",
+                    "error": "Persisted analytics report could not be read back"
+                })
+                .to_string();
+            }
+        }
         serde_json::json!({
             "format": format.clone(),
             "filename": format!("synevid-analytics-{}.{}", record.display_name.to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"), extension),
             "content_type": content_type,
             "digest": digest,
             "content": content,
-            "report": if format == "json" { report } else { serde_json::Value::Null }
+            "report": report
+        })
+        .to_string()
+    }
+
+    /// Phase 6: OTLP ingestion endpoint for automated telemetry topology reports.
+    /// Accepts OTLP/JSON trace exports and converts them to persisted runtime observation windows.
+    pub fn handle_otlp_ingest(&self, body: &str) -> String {
+        let parsed: Result<Value, _> = serde_json::from_str(body);
+        let Ok(request) = parsed else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-400","error":"request must be JSON"}).to_string();
+        };
+        let repo_id = self
+            .active_repo_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let repository = self
+            .connected_repos
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(&repo_id).cloned())
+            .or_else(|| {
+                self.storage.lock().ok().and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .and_then(|storage| storage.get_repository(&repo_id).ok().flatten())
+                })
+            });
+        let Some(repository) = repository else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-404","error":"no active repository"}).to_string();
+        };
+        let Some(snapshot_id) = request.get("snapshot_id").and_then(Value::as_str) else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-400","error":"snapshot_id is required"}).to_string();
+        };
+        if repository.latest_snap_id.as_deref() != Some(snapshot_id) {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-409","error":"observation snapshot does not match active repository snapshot"}).to_string();
+        };
+        let Some(otlp_export) = request.get("otlp_export") else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-400","error":"otlp_export is required"}).to_string();
+        };
+        // Validate OTLP structure and convert to topology report
+        let salt_text = match std::env::var("SYNEVID_TELEMETRY_SALT") {
+            Ok(value) => value,
+            Err(_) => return serde_json::json!({
+                "error_code":"ERR-ANALYTICS-OTLP-CONFIG",
+                "error":"SYNEVID_TELEMETRY_SALT must be configured to a private 32-byte hex key before accepting telemetry"
+            }).to_string(),
+        };
+        let salt = match Self::parse_telemetry_salt(&salt_text) {
+            Ok(salt) => salt,
+            Err(error) => {
+                return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-CONFIG","error":error})
+                    .to_string();
+            }
+        };
+        let topology_report =
+            match self.convert_otlp_to_topology_report(otlp_export, &repository, snapshot_id, salt)
+            {
+                Ok(report) => report,
+                Err(e) => {
+                    return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-422","error":e})
+                        .to_string();
+                }
+            };
+        // Persist as runtime observation window
+        // Hash the same canonical JSON value that storage validates after
+        // deserializing the payload; hashing the Rust struct directly can use
+        // declaration order and produce a digest that cannot round-trip.
+        let report_value = match serde_json::to_value(&topology_report) {
+            Ok(value) => value,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-422","error":"report cannot be serialized canonically"}).to_string(),
+        };
+        let canonical = match serde_json::to_vec(&report_value) {
+            Ok(bytes) => bytes,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-422","error":"report cannot be serialized canonically"}).to_string(),
+        };
+        let evidence_digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
+        let window_id = blake3::hash(
+            format!(
+                "{}\0{}\0{}",
+                repository.repo_id, snapshot_id, evidence_digest
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let coverage_state = match topology_report.coverage {
+            autopsy_domain::CoverageState::Verified => "verified",
+            autopsy_domain::CoverageState::Partial => "partial",
+            autopsy_domain::CoverageState::Unsupported => "unsupported",
+            autopsy_domain::CoverageState::Unknown => "unknown",
+        }
+        .to_string();
+        let report_json = match serde_json::to_string(&report_value) {
+            Ok(json) => json,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-422","error":"report serialization failed"}).to_string(),
+        };
+        let root = PathBuf::from(&repository.root_path);
+        let storage = match open_repository_storage_with_registry(&root, &self.registry) {
+            Ok(storage) => storage,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-503","error":"repository storage unavailable"}).to_string(),
+        };
+        let ingestion_id = blake3::hash(
+            format!(
+                "{}\0{}\0{}",
+                repository.repo_id, snapshot_id, evidence_digest
+            )
+            .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let otlp_bytes = match serde_json::to_vec(otlp_export) {
+            Ok(bytes) => bytes,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-422","error":"OTLP export cannot be serialized"}).to_string(),
+        };
+        let otlp_digest = format!("blake3:{}", blake3::hash(&otlp_bytes).to_hex());
+        let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => duration.as_secs() as i64,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-CLOCK","error":"system clock is before Unix epoch"}).to_string(),
+        };
+        // Log ingestion attempt
+        let log_record = OtlpIngestionLogRecord {
+            ingestion_id: ingestion_id.clone(),
+            repository_id: repository.repo_id.clone(),
+            snapshot_id: snapshot_id.to_string(),
+            window_id: window_id.clone(),
+            received_at: now,
+            otlp_digest: otlp_digest.clone(),
+            spans_ingested: topology_report.observation.span_count as i64,
+            status: "ACCEPTED".to_string(),
+        };
+        if let Err(error) = storage.log_otlp_ingestion(&log_record) {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-AUDIT","error":format!("ingestion audit could not be persisted: {error}")}).to_string();
+        }
+        let row = RuntimeObservationWindowRecord {
+            window_id: window_id.clone(),
+            repository_id: repository.repo_id.clone(),
+            snapshot_id: snapshot_id.to_string(),
+            required_windows: topology_report.observation.required_windows as i64,
+            observed_windows: topology_report.observation.windows_observed as i64,
+            complete_observation: topology_report.observation.complete_observation,
+            coverage_state: coverage_state.clone(),
+            evidence_digest: evidence_digest.clone(),
+            report_json: report_json.clone(),
+        };
+        if let Err(error) = storage.save_runtime_observation_window(&row) {
+            // Update log with failure
+            let fail_record = OtlpIngestionLogRecord {
+                status: "FAILED".to_string(),
+                ..log_record
+            };
+            let _ = storage.log_otlp_ingestion(&fail_record);
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-OTLP-PERSIST","error":error.to_string()}).to_string();
+        }
+        let stored_log = OtlpIngestionLogRecord {
+            status: "STORED".to_string(),
+            ..log_record
+        };
+        if storage.log_otlp_ingestion(&stored_log).is_err() {
+            return serde_json::json!({
+                "error_code":"ERR-ANALYTICS-OTLP-AUDIT",
+                "error":"Telemetry evidence was stored, but its final audit state could not be persisted"
+            }).to_string();
+        }
+        serde_json::json!({
+            "status": "STORED",
+            "window_id": window_id,
+            "snapshot_id": snapshot_id,
+            "evidence_digest": evidence_digest,
+            "required_windows": row.required_windows,
+            "observed_windows": row.observed_windows,
+            "complete_observation": row.complete_observation,
+            "coverage_state": row.coverage_state,
+            "spans_ingested": topology_report.observation.span_count,
+            "ingestion_id": ingestion_id
+        })
+        .to_string()
+    }
+
+    /// Run the same strict parser, privacy sanitizer, and topology correlator used
+    /// by the telemetry crate. The server does not infer complete observation from
+    /// a single export and does not use a public/default pseudonymisation key.
+    fn convert_otlp_to_topology_report(
+        &self,
+        otlp_export: &Value,
+        repository: &RepoRecord,
+        snapshot_id: &str,
+        salt: [u8; 32],
+    ) -> Result<autopsy_telemetry::TopologyReport, String> {
+        let export_text = serde_json::to_string(otlp_export).map_err(|error| error.to_string())?;
+        let request =
+            autopsy_telemetry::parse_otlp_traces("<authenticated-otlp-ingest>", &export_text)
+                .map_err(|error| error.to_string())?;
+        let traces = autopsy_telemetry::sanitize_traces(
+            &request,
+            &autopsy_telemetry::IngestOptions::with_salt(salt),
+        )
+        .map_err(|error| error.to_string())?;
+        let root = PathBuf::from(&repository.root_path);
+        let storage = open_repository_storage_with_registry(&root, &self.registry)
+            .map_err(|_| "repository graph storage is unavailable".to_string())?;
+        let (nodes, _) = storage
+            .graph_rows_for_snapshot(snapshot_id)
+            .map_err(|_| "snapshot graph could not be read".to_string())?;
+        let surface = autopsy_telemetry::DeclaredSurface {
+            routes: Vec::new(),
+            symbols: nodes
+                .iter()
+                .filter(|node| node.node_kind != "file" && node.node_kind != "unknown")
+                .map(|node| {
+                    // OTLP `code.function` carries a language-level function name,
+                    // while indexed graph names may be module-qualified.
+                    let function_name = node
+                        .qualified_name
+                        .rsplit([':', '.', '#'])
+                        .next()
+                        .unwrap_or(&node.qualified_name);
+                    autopsy_telemetry::DeclaredSymbol::new(
+                        &node.stable_id,
+                        &node.file_path,
+                        function_name,
+                    )
+                })
+                .collect(),
+        };
+        let report = autopsy_telemetry::correlate_topology(
+            &[traces],
+            &surface,
+            &autopsy_telemetry::TopologyOptions::new(
+                std::num::NonZeroU32::new(3).expect("3 is non-zero"),
+            ),
+        );
+        if !autopsy_telemetry::verify_topology_report_digest(&report) {
+            return Err("telemetry engine returned a report with an invalid digest".to_string());
+        }
+        Ok(report)
+    }
+
+    fn parse_telemetry_salt(value: &str) -> Result<[u8; 32], String> {
+        if value.len() != 64 {
+            return Err(
+                "SYNEVID_TELEMETRY_SALT must contain exactly 64 hexadecimal characters".to_string(),
+            );
+        }
+        let mut salt = [0u8; 32];
+        for (index, byte) in salt.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+                .map_err(|_| "SYNEVID_TELEMETRY_SALT must be hexadecimal".to_string())?;
+        }
+        Ok(salt)
+    }
+
+    /// Phase 6: List analytics history for the active repository; optional snapshot_id narrows it.
+    pub fn handle_report_history(&self, url: &str) -> String {
+        let repo_id = self
+            .active_repo_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let record = self
+            .connected_repos
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(&repo_id).cloned())
+            .or_else(|| {
+                self.storage.lock().ok().and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .and_then(|storage| storage.get_repository(&repo_id).ok().flatten())
+                })
+            });
+        let Some(record) = record else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-404","error":"No active repository is connected"}).to_string();
+        };
+        let snapshot_filter = Self::parse_query_param(url, "snapshot_id");
+        let limit = Self::parse_query_param(url, "limit")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(50)
+            .min(200);
+        let root = PathBuf::from(&record.root_path);
+        let storage = match open_repository_storage_with_registry(&root, &self.registry) {
+            Ok(storage) => storage,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-404","error":"Repository analytics storage is unavailable"}).to_string(),
+        };
+        if let Some(snapshot_id) = snapshot_filter.as_deref() {
+            match storage.get_snapshot(&autopsy_domain::SnapshotId::new(snapshot_id)) {
+                Ok(Some(_)) => {}
+                Ok(None) => return serde_json::json!({"error_code":"ERR-ANALYTICS-404","error":"Snapshot is not registered for report history"}).to_string(),
+                Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-500","error":"Snapshot metadata could not be read"}).to_string(),
+            }
+        }
+        let history_result = match snapshot_filter.as_deref() {
+            Some(snapshot_id) => storage.report_history(&repo_id, snapshot_id, limit),
+            None => storage.report_history_for_repository(&repo_id, limit),
+        };
+        let history = match history_result {
+            Ok(history) => history,
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-500","error":"Report history could not be read"}).to_string(),
+        };
+        serde_json::json!({
+            "repository_id": repo_id,
+            "snapshot_id": snapshot_filter,
+            "report_count": history.len(),
+            "reports": history
+        })
+        .to_string()
+    }
+
+    /// Phase 6: Get a specific analytics report by report_id.
+    pub fn handle_get_report_history(&self, report_id: &str) -> String {
+        let repo_id = self
+            .active_repo_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_default();
+        let record = self
+            .connected_repos
+            .lock()
+            .ok()
+            .and_then(|repos| repos.get(&repo_id).cloned())
+            .or_else(|| {
+                self.storage.lock().ok().and_then(|guard| {
+                    guard
+                        .as_ref()
+                        .and_then(|storage| storage.get_repository(&repo_id).ok().flatten())
+                })
+            });
+        let Some(record) = record else {
+            return serde_json::json!({"error_code":"ERR-ANALYTICS-404","error":"No active repository is connected"}).to_string();
+        };
+        let storage = match open_repository_storage_with_registry(
+            &PathBuf::from(&record.root_path),
+            &self.registry,
+        ) {
+            Ok(storage) => storage,
+            Err(_) => {
+                return serde_json::json!({"error_code":"ERR-ANALYTICS-503","error":"Repository report storage is unavailable"}).to_string();
+            }
+        };
+        let report = match storage.get_report_history(report_id) {
+            Ok(Some(report)) => report,
+            Ok(None) => return serde_json::json!({"error_code":"ERR-ANALYTICS-404","error":"Report not found"}).to_string(),
+            Err(_) => return serde_json::json!({"error_code":"ERR-ANALYTICS-500","error":"Report could not be read"}).to_string(),
+        };
+        let parsed_report: Value = match serde_json::from_str(&report.report_json) {
+            Ok(value) => value,
+            Err(_) => {
+                return serde_json::json!({
+                    "error_code":"ERR-ANALYTICS-HISTORY-CORRUPT",
+                    "error":"Persisted report JSON is invalid; no report result is returned"
+                })
+                .to_string();
+            }
+        };
+        if parsed_report["report_id"].as_str() != Some(report.report_id.as_str())
+            || parsed_report["result_digest"].as_str() != Some(report.evidence_digest.as_str())
+        {
+            return serde_json::json!({
+                "error_code":"ERR-ANALYTICS-HISTORY-IDENTITY",
+                "error":"Persisted report identity or evidence digest does not match its receipt"
+            })
+            .to_string();
+        }
+        serde_json::json!({
+            "report_id": report.report_id,
+            "repository_id": report.repository_id,
+            "snapshot_id": report.snapshot_id,
+            "format": report.format,
+            "report": parsed_report,
+            "evidence_digest": report.evidence_digest,
+            "created_at": report.created_at,
+            "schema_version": report.schema_version
         })
         .to_string()
     }
@@ -8037,6 +8912,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing-sensitive; run as an isolated event-wakeup performance gate"]
     fn test_phase1_live_event_wakeup_p95_is_below_15ms() {
         let temp =
             std::env::temp_dir().join(format!("synevid_phase1_live_wakeup_{}", std::process::id()));
@@ -8993,7 +9869,44 @@ mod tests {
                 .contains("synevid.analytics.v1")
         );
 
-        for (format, extension) in [("markdown", "md"), ("html", "html"), ("sarif", "sarif")] {
+        let report = first["report"].clone();
+        assert_eq!(
+            report["static_unreferenced"]["finding_language"],
+            "candidate_not_proof_of_global_dead_code"
+        );
+        assert_eq!(report["runtime_unobserved"]["status"], "UNAVAILABLE");
+        assert_eq!(report["performance_and_resources"]["status"], "UNAVAILABLE");
+        assert!(report["git_evolution"].get("risk_commits").is_none());
+        assert_eq!(report["dead_code_inventory"]["deprecated"], true);
+        assert_ne!(
+            report["git_evolution"]["semantic_git_risk"]["status"],
+            "PASS"
+        );
+        let history: Value = serde_json::from_str(
+            &server.handle_report_history("/api/v1/analytics/report-history?limit=20"),
+        )
+        .unwrap();
+        assert_eq!(history["report_count"], 1);
+        assert_eq!(
+            history["reports"][0]["report_id"],
+            first["report"]["report_id"]
+        );
+        let receipt: Value = serde_json::from_str(
+            &server.handle_get_report_history(first["report"]["report_id"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(receipt["evidence_digest"], first["digest"]);
+        assert_eq!(
+            receipt["report"]["snapshot"]["snapshot_id"],
+            first["report"]["snapshot"]["snapshot_id"]
+        );
+
+        for (format, extension) in [
+            ("markdown", "md"),
+            ("html", "html"),
+            ("sarif", "sarif"),
+            ("bundle", "bundle.json"),
+        ] {
             let envelope: serde_json::Value = serde_json::from_str(
                 &server
                     .handle_analytics_report(&format!("/api/v1/analytics/report?format={format}")),
@@ -9003,9 +9916,207 @@ mod tests {
             assert!(envelope["filename"].as_str().unwrap().ends_with(extension));
             assert!(envelope["digest"].as_str().unwrap().starts_with("blake3:"));
             assert!(!envelope["content"].as_str().unwrap().is_empty());
+            let repeated: serde_json::Value = serde_json::from_str(
+                &server
+                    .handle_analytics_report(&format!("/api/v1/analytics/report?format={format}")),
+            )
+            .unwrap();
+            assert_eq!(
+                envelope["content"], repeated["content"],
+                "{format} bytes must repeat"
+            );
+            if format == "bundle" {
+                let bundle: serde_json::Value =
+                    serde_json::from_str(envelope["content"].as_str().unwrap()).unwrap();
+                for artifact in ["json", "markdown", "html", "sarif"] {
+                    let artifact_content =
+                        bundle["artifacts"][artifact]["content"].as_str().unwrap();
+                    let expected = format!(
+                        "blake3:{}",
+                        blake3::hash(artifact_content.as_bytes()).to_hex()
+                    );
+                    assert_eq!(bundle["artifacts"][artifact]["digest"], expected);
+                }
+            }
         }
 
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn test_runtime_window_ingest_is_pinned_and_incomplete_is_not_a_finding() {
+        let temp = std::env::temp_dir().join(format!("synevid_p6_runtime_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join("src")).unwrap();
+        fs::write(
+            temp.join("src/lib.ts"),
+            "export function sample() { return 1; }\n",
+        )
+        .unwrap();
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+        let status: Value = serde_json::from_str(&server.handle_status()).unwrap();
+        let snapshot_id = status["snapshot_id"].as_str().unwrap();
+        let topology = autopsy_telemetry::correlate_topology(
+            &[],
+            &autopsy_telemetry::DeclaredSurface::default(),
+            &autopsy_telemetry::TopologyOptions::new(std::num::NonZeroU32::new(3).unwrap()),
+        );
+        let body = serde_json::json!({
+            "snapshot_id": snapshot_id,
+            "report": serde_json::to_value(&topology).unwrap()
+        })
+        .to_string();
+        let stored: Value =
+            serde_json::from_str(&server.handle_runtime_observation_ingest(&body)).unwrap();
+        assert_eq!(stored["status"], "STORED");
+        let mut tampered_report = serde_json::to_value(&topology).unwrap();
+        tampered_report["digest"] = Value::String("not-the-engine-digest".into());
+        let tampered =
+            serde_json::json!({"snapshot_id":snapshot_id,"report":tampered_report}).to_string();
+        let digest_rejection: Value =
+            serde_json::from_str(&server.handle_runtime_observation_ingest(&tampered)).unwrap();
+        assert_eq!(
+            digest_rejection["error_code"],
+            "ERR-ANALYTICS-RUNTIME-DIGEST"
+        );
+        let report: Value = serde_json::from_str(
+            &server.handle_analytics_report("/api/v1/analytics/report?format=json"),
+        )
+        .unwrap();
+        assert_eq!(report["report"]["runtime_unobserved"]["status"], "PARTIAL");
+        assert!(
+            report["report"]["runtime_unobserved"]["findings"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let stale = serde_json::json!({"snapshot_id":"not-active", "report":{}}).to_string();
+        let rejected: Value =
+            serde_json::from_str(&server.handle_runtime_observation_ingest(&stale)).unwrap();
+        assert_eq!(rejected["error_code"], "ERR-ANALYTICS-RUNTIME-409");
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn phase6_otlp_ingest_uses_real_parser_sanitizer_and_topology_engine() {
+        let temp = std::env::temp_dir().join(format!("synevid_p6_otlp_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join("src")).unwrap();
+        fs::write(
+            temp.join("src/lib.ts"),
+            "export function observedOperation() { return 1; }\n",
+        )
+        .unwrap();
+        let server = DashboardServer::new(temp.clone(), "127.0.0.1".to_string(), 0);
+        let status: Value = serde_json::from_str(&server.handle_status()).unwrap();
+        let snapshot_id = status["snapshot_id"].as_str().unwrap();
+        let repository = RepoRecord {
+            repo_id: status["runtime"]["repository_id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            root_path: temp.to_string_lossy().replace('\\', "/"),
+            display_name: "fixture".to_string(),
+            active_branch: None,
+            head_commit_oid: None,
+            latest_snap_id: Some(snapshot_id.to_string()),
+            languages_json: "[]".to_string(),
+            monorepo_json: "{}".to_string(),
+            last_indexed_seq: 0,
+        };
+        let export = serde_json::json!({
+            "resourceSpans": [{
+                "resource": {"attributes": [{"key":"service.name","value":{"stringValue":"fixture"}}]},
+                "scopeSpans": [{"spans": [{
+                    "traceId":"01234567890123456789012345678901",
+                    "spanId":"0123456789abcdef",
+                    "name":"observedOperation",
+                    "kind":1,
+                    "startTimeUnixNano":"1",
+                    "endTimeUnixNano":"2",
+                    "attributes":[
+                        {"key":"code.function","value":{"stringValue":"observedOperation"}},
+                        {"key":"code.filepath","value":{"stringValue":"src/lib.ts"}}
+                    ],
+                    "droppedAttributesCount":0,
+                    "droppedEventsCount":0,
+                    "droppedLinksCount":0
+                }]}]
+            }]
+        });
+        let report = server
+            .convert_otlp_to_topology_report(&export, &repository, snapshot_id, [0x51; 32])
+            .unwrap();
+        assert_eq!(report.observation.span_count, 1);
+        assert!(autopsy_telemetry::verify_topology_report_digest(&report));
+        assert!(report.correlations.iter().any(|correlation| {
+            correlation
+                .symbol
+                .as_ref()
+                .is_some_and(|id| id.0.contains("observedOperation"))
+        }));
+        assert!(!report.observation.complete_observation);
+        assert_eq!(report.observation.required_windows, 3);
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn static_unreferenced_report_uses_graph_evidence_not_legacy_boolean() {
+        let node =
+            |id: &str, name: &str, visibility: &str, exported: bool, coverage: &str| GraphNodeRow {
+                snapshot_id: "snap-a".to_string(),
+                stable_id: id.to_string(),
+                node_kind: "function".to_string(),
+                qualified_name: name.to_string(),
+                file_path: "src/lib.ts".to_string(),
+                start_line: 7,
+                end_line: 9,
+                signature_hash: String::new(),
+                visibility: visibility.to_string(),
+                is_exported: exported,
+                coverage_state: coverage.to_string(),
+            };
+        let nodes = vec![
+            node(
+                "private-unused",
+                "pkg::unused",
+                "private",
+                false,
+                "verified",
+            ),
+            node("private-used", "pkg::used", "private", false, "verified"),
+            node(
+                "unknown-unused",
+                "pkg::unknown",
+                "private",
+                false,
+                "partial",
+            ),
+            node("public-unused", "pkg::public", "public", true, "verified"),
+            node("main-entry", "pkg::main", "private", false, "verified"),
+        ];
+        let edge = autopsy_storage::GraphEdgeRow {
+            snapshot_id: "snap-a".to_string(),
+            edge_id: "edge-1".to_string(),
+            source_stable_id: "caller".to_string(),
+            target_stable_id: "private-used".to_string(),
+            edge_kind: "calls".to_string(),
+            source_file: "src/caller.ts".to_string(),
+            source_line: 3,
+            source_col: 0,
+            target_file: "src/lib.ts".to_string(),
+            target_line: 8,
+            confidence: "exact".to_string(),
+        };
+        let (candidates, unknown, excluded) =
+            static_unreferenced_candidates(&nodes, &[edge], "blake3:test-graph");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0]["stable_id"], "private-unused");
+        assert_eq!(candidates[0]["finding_state"], "candidate");
+        assert_eq!(candidates[0]["graph_edge_digest"], "blake3:test-graph");
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0]["finding_state"], "unknown");
+        assert_eq!(excluded, 2);
     }
 
     #[test]

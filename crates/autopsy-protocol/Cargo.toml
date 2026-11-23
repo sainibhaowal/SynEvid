@@ -1,0 +1,21 @@
+[package]
+name = "autopsy-protocol"
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Shared command protocol schema for SynEvid - generated types for CLI, TUI, MCP, Web, Electron"
+license = "MIT OR Apache-2.0"
+categories = ["development-tools", "network-programming"]
+repository = "https://github.com/sainibhaowal/SynEvid"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = { version = "0.8", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+blake3 = "1.5"
+
+[dev-dependencies]
+pretty_assertions = "1.4"

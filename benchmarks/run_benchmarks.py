@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Synevid Phase 6 Benchmark Harness CLI.
-Executes 50 benchmark tasks across 5 TypeScript repositories evaluating Baselines A, B, and C.
-Evaluates pre-registered gate (>=10pp recall lift OR >=40% cost cut at equal accuracy OR new failure class).
+Legacy RQ1-RQ5 impact harness. It fails closed until the task oracle and
+comparators pass the benchmark-integrity audit.
 """
 
 import argparse
@@ -15,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from benchmarks.engine.runner import BenchmarkRunner
+from benchmarks.engine.integrity import audit_benchmark
 
 
 def parse_args():
@@ -83,7 +83,7 @@ def main():
     args = parse_args()
 
     print("=" * 80)
-    print(" SYNEVID PHASE 6 BENCHMARK HARNESS (FR-025, UC-08, RQ1-5)")
+    print(" SYNEVID IMPACT BENCHMARK HARNESS (FR-025, UC-08, RQ1-5)")
     print("=" * 80)
     print(f"Tasks Directory:   {args.tasks_dir}")
     print(f"Corpus Directory:  {args.corpus_dir}")
@@ -94,6 +94,23 @@ def main():
     if args.held_out_only:
         print("Set Filter:        Held-out tasks only")
     print("=" * 80)
+
+    blockers = audit_benchmark(args.tasks_dir)
+    if blockers:
+        print("[NOT EVALUABLE] Refusing comparative scores and promotion-gate evaluation.")
+        print(f"Integrity blockers: {len(blockers)}")
+        grouped: dict[str, list[str]] = {}
+        for blocker in blockers:
+            if ": " in blocker:
+                subject, detail = blocker.split(": ", 1)
+            else:
+                subject, detail = "benchmark", blocker
+            grouped.setdefault(detail, []).append(subject)
+        for detail, subjects in sorted(grouped.items()):
+            sample = ", ".join(subjects[:3])
+            suffix = f" (e.g. {sample})" if sample else ""
+            print(f"- {len(subjects)} × {detail}{suffix}")
+        return 3
 
     runner = BenchmarkRunner(
         tasks_dir=args.tasks_dir,
@@ -109,7 +126,7 @@ def main():
         )
     except Exception as e:  # noqa: BLE001 - top-level CLI crash guard with exit code
         print(f"ERROR: Benchmark execution failed: {e}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     print("\nBENCHMARK RESULTS SUMMARY:")
     print("-" * 80)
@@ -148,10 +165,10 @@ def main():
 
     if args.check_gate and not gate.passed:
         print("PRE-REGISTERED GATE FAILED: Execution stopped per 01 Ch.12", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
-    sys.exit(0)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

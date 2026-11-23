@@ -32,3 +32,4 @@ autopsy-plugin-api = { path = "../../crates/autopsy-plugin-api" }
 autopsy-wasm-plugin = { path = "../../crates/autopsy-wasm-plugin" }
 autopsy-graph-layout = { path = "../../crates/autopsy-graph-layout" }
 autopsy-git-engine = { path = "../../crates/autopsy-git-engine" }
+autopsy-telemetry = { path = "../../crates/autopsy-telemetry" }

@@ -460,11 +460,18 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub persist: bool,
 
-    /// Explicitly run analysis without the daemon authority. Without this
-    /// flag presentation clients must use the authenticated daemon and cannot
-    /// silently fall back to a second repository/session state.
+    /// Explicitly run analysis WITHOUT the daemon (offline mode).
+    /// Default is to connect to the authenticated daemon.
     #[arg(long, global = true)]
     pub offline: bool,
+
+    /// Daemon host (default: 127.0.0.1)
+    #[arg(long, global = true, default_value = "127.0.0.1")]
+    pub daemon_host: String,
+
+    /// Daemon port (default: 3333)
+    #[arg(long, global = true, default_value_t = 3333)]
+    pub daemon_port: u16,
 
     /// Attach a correction receipt to this run (Tier 3.3): the agent's verbatim note
     /// about what actually repaired the problem, stored deterministically in
@@ -529,6 +536,11 @@ pub enum Commands {
     },
     /// Read daemon health, active repository, snapshot, cursor, and storage state.
     Status,
+    /// Fetch the shared daemon analytics report for its active repository.
+    AnalyticsReport {
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
     /// Read the daemon-owned active repository and runtime identity.
     #[command(name = "active-repo")]
     ActiveRepo,
@@ -1026,11 +1038,18 @@ pub fn run_cli(args: &[String]) -> i32 {
 }
 
 pub fn execute(cli: &Cli) -> Result<i32, CliError> {
+    // Default to daemon mode unless --offline is explicitly set
+    if !cli.offline {
+        return daemon::handle_via_daemon(cli);
+    }
+
+    // Offline mode - execute locally
     match &cli.command {
         Commands::Attach { path, display_name } => {
             daemon::handle_attach(cli, path, display_name.as_deref())
         }
         Commands::Status => daemon::handle_status(cli),
+        Commands::AnalyticsReport { format } => daemon::handle_analytics_report(cli, format),
         Commands::ActiveRepo => daemon::handle_active_repo(cli),
         Commands::Events { since_seq } => daemon::handle_events(cli, *since_seq),
         Commands::Disconnect => daemon::handle_disconnect(cli),

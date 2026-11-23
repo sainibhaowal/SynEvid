@@ -225,7 +225,7 @@ export interface AiConfigSnippetResponse {
   instruction: string;
 }
 
-export type AnalyticsReportFormat = 'json' | 'markdown' | 'html' | 'sarif';
+export type AnalyticsReportFormat = 'json' | 'markdown' | 'html' | 'sarif' | 'bundle';
 
 export interface AnalyticsReportEnvelope {
   format: AnalyticsReportFormat;
@@ -233,7 +233,28 @@ export interface AnalyticsReportEnvelope {
   content_type: string;
   digest: string;
   content: string;
-  report?: Record<string, unknown>;
+  report?: Record<string, unknown> | null;
+}
+
+export interface AnalyticsReportReceipt {
+  report_id: string;
+  repository_id: string;
+  snapshot_id: string;
+  format: string;
+  report: Record<string, unknown> | null;
+  evidence_digest: string;
+  created_at: number;
+  schema_version: string;
+}
+
+export interface AnalyticsReportHistoryEntry {
+  report_id: string;
+  repository_id: string;
+  snapshot_id: string;
+  format: string;
+  evidence_digest: string;
+  created_at: number;
+  schema_version: string;
 }
 
 export interface FileDiffReport {
@@ -1088,6 +1109,30 @@ export class SynevidApiClient {
       undefined,
       30_000,
     );
+  }
+
+  public async getAnalyticsReportReceipt(reportId: string): Promise<AnalyticsReportReceipt> {
+    const result = await this.fetchWithTimeout<AnalyticsReportReceipt & { error_code?: string; error?: string }>(
+      `/api/v1/analytics/report-history/${encodeURIComponent(reportId)}`,
+      undefined,
+      30_000,
+    );
+    if (result.error_code) throw new Error(result.error || `Analytics receipt failed: ${result.error_code}`);
+    if (result.report_id !== reportId || !result.evidence_digest || !result.report) {
+      throw new Error('Analytics receipt response is incomplete or does not match the requested report');
+    }
+    return result;
+  }
+
+  public async getAnalyticsReportHistory(limit = 50): Promise<AnalyticsReportHistoryEntry[]> {
+    const result = await this.fetchWithTimeout<{ reports?: AnalyticsReportHistoryEntry[]; error_code?: string; error?: string }>(
+      `/api/v1/analytics/report-history?limit=${encodeURIComponent(String(limit))}`,
+      undefined,
+      30_000,
+    );
+    if (result.error_code) throw new Error(result.error || `Analytics report history failed: ${result.error_code}`);
+    if (!Array.isArray(result.reports)) throw new Error('Analytics report history response is missing its reports list');
+    return result.reports;
   }
 
   public async getLiveEventsSince(sinceSeq: number): Promise<DaemonLiveEvent[]> {

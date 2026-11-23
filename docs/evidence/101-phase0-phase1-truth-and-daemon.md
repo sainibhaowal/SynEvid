@@ -1,5 +1,8 @@
 # Production Evidence Receipt: 101
 
+> **Benchmark correction (2026-11-23):** this receipt's legacy impact-gate
+> telemetry is superseded as accuracy evidence by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 **Topic:** Phase 0 truth governance and Phase 1 daemon/storage closure
 **Milestone:** v0.6.0
 **Date:** 2026-11-05

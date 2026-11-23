@@ -455,6 +455,13 @@ export default function OperationalCockpitPage() {
     if (activeWorkspace !== 'ws-canvas') setActiveWorkspace('ws-canvas');
   };
 
+  const handleSelectAnalyticsFinding = (filePath: string, stableId: string) => {
+    setSelectedFile(filePath);
+    setCanvasSelection(stableId);
+    void handleSearchSymbol(stableId);
+    setActiveWorkspace('ws-canvas');
+  };
+
   const handleToggleDimensions = () => {
     if (!universe) return;
     const nextDim = universe.dimensions === '3D' ? '2D' : '3D';
@@ -753,7 +760,7 @@ export default function OperationalCockpitPage() {
                     if (tab === 'verify') setActiveWorkspace('ws-gates');
                   }}
                 />
-                <AnalyticsReportsSection />
+                <AnalyticsReportsSection onSelectFinding={handleSelectAnalyticsFinding} />
               </div>
             )}
 

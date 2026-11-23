@@ -1,5 +1,10 @@
 # Production Evidence: Call Resolution Precision & Token-Optimized Impact Tiers
 
+> **Benchmark correction (2026-11-23):** this historical benchmark receipt is
+> not independent accuracy evidence; its quality claims are superseded by
+> [evidence 108](108-impact-benchmark-integrity-audit.md). The engine behavior
+> tests below remain separate, scoped conformance evidence.
+
 **Receipt:** `EVID-CALL-RES-TOKEN-041`  
 **Date:** 2026-10-25  
 **Version:** `0.1.0`  

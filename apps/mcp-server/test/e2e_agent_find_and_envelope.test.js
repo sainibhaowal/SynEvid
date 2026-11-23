@@ -19,7 +19,7 @@ test('an agent reaches an actionable verify in exactly 3 MCP tool calls', async 
 
   // Tool discovery: the surface an agent sees before doing anything.
   const listed = await client.request('tools/list');
-  assert.equal(listed.tools.length, 21, '5 mandatory + 4 Phase-4.2 + find + session + 6 Phase-3 Git + 4 Phase-4');
+  assert.equal(listed.tools.length, 22, '5 mandatory + 4 Phase-4.2 + find + session + 6 Phase-3 Git + 4 Phase-4 + analytics report');
   const names = listed.tools.map((tool) => tool.name);
   for (const expected of [
     'autopsy_status',

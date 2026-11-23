@@ -16,6 +16,7 @@ const ELECTRON_PACKAGE = path.join(REPO_ROOT, 'apps', 'desktop-electron', 'node_
 const ELECTRON_RUNNER = path.join(TEST_DIR, 'phase1_daemon_browser_runner.cjs');
 const NEXT_BIN = path.join(WEB_DIR, 'node_modules', 'next', 'dist', 'bin', 'next');
 const require = createRequire(import.meta.url);
+const TEST_TELEMETRY_SALT = '51'.repeat(32);
 
 function reservePort() {
   return new Promise((resolve, reject) => {
@@ -70,11 +71,70 @@ async function startDaemon(rootPath, port) {
     '--repo-root', rootPath,
   ], {
     cwd: REPO_ROOT,
+    env: { ...process.env, SYNEVID_TELEMETRY_SALT: TEST_TELEMETRY_SALT },
     stdio: 'ignore',
     windowsHide: true,
   });
   await waitForHttp(`http://127.0.0.1:${port}/api/v1/health`);
   return child;
+}
+
+async function ingestRealOtlpAndVerifyReceipt(port) {
+  const statusResponse = await fetch(`http://127.0.0.1:${port}/api/v1/status`);
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.ok(status.snapshot_id, 'active repository must have a real indexed snapshot');
+  const request = {
+    snapshot_id: status.snapshot_id,
+    otlp_export: {
+      resourceSpans: [{
+        resource: { attributes: [{ key: 'service.name', value: { stringValue: 'phase6-browser-e2e' } }] },
+        scopeSpans: [{ spans: [{
+          traceId: '01234567890123456789012345678901',
+          spanId: '0123456789abcdef',
+          name: 'browserProof',
+          kind: 1,
+          startTimeUnixNano: '1',
+          endTimeUnixNano: '2',
+          attributes: [
+            { key: 'code.function', value: { stringValue: 'browserProof' } },
+            { key: 'code.filepath', value: { stringValue: 'src/main.ts' } },
+          ],
+          droppedAttributesCount: 0,
+          droppedEventsCount: 0,
+          droppedLinksCount: 0,
+        }] }],
+      }],
+    },
+  };
+  const ingestResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/otlp-ingest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  assert.equal(ingestResponse.status, 200);
+  const ingestion = await ingestResponse.json();
+  assert.equal(ingestion.status, 'STORED', `OTLP intake must persist parsed evidence: ${JSON.stringify(ingestion)}`);
+  assert.equal(ingestion.snapshot_id, status.snapshot_id);
+  assert.equal(ingestion.spans_ingested, 1, 'span count must come from parsed OTLP data');
+  assert.ok(ingestion.evidence_digest.startsWith('blake3:'));
+  assert.equal(ingestion.complete_observation, false, 'one export must not claim complete observation');
+
+  const generatedResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report?format=json`);
+  assert.equal(generatedResponse.status, 200);
+  const generated = await generatedResponse.json();
+  const reportId = generated.report?.report_id;
+  assert.ok(reportId, 'report generation must return an evidence identity');
+  const listResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report-history?limit=20`);
+  assert.equal(listResponse.status, 200);
+  const listing = await listResponse.json();
+  assert.ok(listing.reports.some((entry) => entry.report_id === reportId));
+  const receiptResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report-history/${encodeURIComponent(reportId)}`);
+  assert.equal(receiptResponse.status, 200);
+  const receipt = await receiptResponse.json();
+  assert.equal(receipt.evidence_digest, generated.digest);
+  assert.equal(receipt.snapshot_id, status.snapshot_id);
+  return { reportId, ingestionId: ingestion.ingestion_id };
 }
 
 function stopProcess(child) {
@@ -157,7 +217,7 @@ async function waitForPersistedEvent(port, seq) {
   throw new Error(`event ${seq} was not visible in the daemon replay endpoint`);
 }
 
-test('Phase 1 real Electron browser workflow preserves repository identity and replay cursor across daemon restart', { timeout: 240_000 }, async () => {
+test('Phase 1 and Phase 6 real Electron browser workflow preserves repository, analytics receipt, and replay across daemon restart', { timeout: 240_000 }, async () => {
   assert.ok(fs.existsSync(daemonBinary()), 'build synevid-ui before running the real browser workflow');
   assert.ok(require(ELECTRON_PACKAGE), 'source Electron runtime must be installed');
   assert.ok(fs.existsSync(NEXT_BIN), 'Next source runtime must be installed');
@@ -183,6 +243,7 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
   let restarted;
   try {
     daemon = await startDaemon(root, daemonPort);
+    const analyticsProof = await ingestRealOtlpAndVerifyReceipt(daemonPort);
     await waitForHttp(`http://127.0.0.1:${nextPort}/`);
     let first;
     try {
@@ -194,6 +255,10 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
     assert.equal(first.replayedSequenceVisible, true);
     assert.equal(first.repositoryFilesVisible, true);
     assert.equal(first.graphUnavailable, false);
+    assert.equal(first.analyticsReportVisible, true);
+    assert.equal(first.persistedAnalyticsReceiptVisible, true);
+    assert.equal(first.analyticsHistoryVisible, true);
+    assert.ok(analyticsProof.ingestionId);
     assert.ok(first.publishedSeq > 0);
     await waitForPersistedEvent(daemonPort, first.publishedSeq);
 
@@ -210,6 +275,9 @@ test('Phase 1 real Electron browser workflow preserves repository identity and r
     assert.equal(second.replayedSequenceVisible, true);
     assert.equal(second.repositoryFilesVisible, true);
     assert.equal(second.graphUnavailable, false);
+    assert.equal(second.analyticsReportVisible, true);
+    assert.equal(second.persistedAnalyticsReceiptVisible, true);
+    assert.equal(second.analyticsHistoryVisible, true);
   } finally {
     await stopProcess(daemon);
     await stopProcess(restarted);

@@ -9,6 +9,7 @@ from pathlib import Path
 from benchmarks.engine.baseline_autopsy import BaselineAutopsy
 from benchmarks.engine.baseline_grep import BaselineGrep
 from benchmarks.engine.baseline_lsp import BaselineLSP
+from benchmarks.engine.integrity import require_evaluable_benchmark
 from benchmarks.engine.gate_evaluator import (
     GateEvaluationResult,
     GateEvaluator,
@@ -58,6 +59,9 @@ class BenchmarkRunner:
         category_filter: str | None = None,
         held_out_only: bool = False,
     ) -> BenchmarkRunResult:
+        # Enforce the integrity boundary here as well as in the CLI so callers
+        # cannot bypass it by invoking BenchmarkRunner directly.
+        require_evaluable_benchmark(self.tasks_dir)
         tasks = load_all_tasks(self.tasks_dir)
 
         if category_filter:
