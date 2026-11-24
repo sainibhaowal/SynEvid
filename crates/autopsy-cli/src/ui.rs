@@ -5,7 +5,6 @@
 //! All API endpoints have moved to `autopsy-daemon` (crates/autopsy-daemon/src/main.rs).
 
 use crate::{Cli, CliError, EXIT_PASS, OutputFormat};
-use serde::Deserialize;
 
 pub fn handle_ui(cli: &Cli, port: u16, host: &str, _open: bool) -> Result<i32, CliError> {
     // Phase 7: Deprecation notice - autopsy ui is now a thin wrapper

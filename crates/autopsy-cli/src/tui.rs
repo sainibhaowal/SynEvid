@@ -9,11 +9,7 @@
 
 #![allow(clippy::collapsible_if, clippy::collapsible_match)]
 
-use crate::{
-    ANALYZER_VERSION, Cli, CliError, EXIT_PASS, build_snapshot_and_graph, load_or_default_config,
-};
-use autopsy_domain::FindingStatus;
-use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
+use crate::{ANALYZER_VERSION, Cli, CliError, EXIT_PASS};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -184,100 +180,9 @@ impl TuiApp {
         self.impact_budget = 0;
     }
 
-    pub fn refresh(&mut self) {
-        let config = load_or_default_config(&self.repo_root).unwrap_or_default();
-
-        match build_snapshot_and_graph(&self.repo_root, &config, None, None) {
-            Ok(artifacts) => {
-                self.snapshot_id = artifacts.snapshot.snapshot_id.to_string();
-                self.coverage_state = format!("{:?}", artifacts.coverage_state);
-                self.symbol_count = artifacts.graph.node_count();
-                self.edge_count = artifacts.graph.edge_count();
-
-                // Evaluate invariants from the repository configuration only.
-                // An absent configuration means no configured findings, not
-                // synthetic PASS results.
-                let inv_path = self.repo_root.join(".autopsy").join("invariants.yml");
-                let invariants_config = if inv_path.exists() {
-                    InvariantsConfig::load_from_file(&inv_path).unwrap_or_else(|_| {
-                        InvariantsConfig {
-                            version: "0.0.1".to_string(),
-                            invariants: vec![],
-                        }
-                    })
-                } else {
-                    InvariantsConfig {
-                        version: "0.0.1".to_string(),
-                        invariants: vec![],
-                    }
-                };
-
-                let eval_ctx = EvaluationContext {
-                    snapshot_id: artifacts.snapshot.snapshot_id.clone(),
-                    analyzer_version: ANALYZER_VERSION,
-                    graph: &artifacts.graph,
-                    baseline_graph: None,
-                    diff: None,
-                    contracts_before: &std::collections::BTreeMap::new(),
-                    contracts_after: &std::collections::BTreeMap::new(),
-                    coverage_state: artifacts.coverage_state,
-                };
-
-                let evaluator = InvariantEvaluator::new();
-                let pairs = evaluator
-                    .evaluate(&invariants_config, &eval_ctx)
-                    .unwrap_or_default();
-
-                self.findings = pairs
-                    .into_iter()
-                    .map(|(f, _)| FindingItem {
-                        rule_id: f.rule_id,
-                        status: match f.status {
-                            FindingStatus::Pass => "PASS".to_string(),
-                            FindingStatus::Fail => "FAIL".to_string(),
-                            FindingStatus::Unknown => "UNKNOWN".to_string(),
-                        },
-                        severity: format!("{:?}", f.severity).to_uppercase(),
-                        message: f.message,
-                        location: if !f.entities.is_empty() {
-                            f.entities[0].clone()
-                        } else {
-                            "src/".to_string()
-                        },
-                        repair_action: "Review dependent imports and re-run `autopsy verify`"
-                            .to_string(),
-                    })
-                    .collect();
-
-                // Run blast radius on the user-selected seed, if any.
-                self.recompute_blast();
-            }
-            Err(error) => {
-                self.snapshot_id = "unavailable".to_string();
-                self.coverage_state = "Unknown".to_string();
-                self.symbol_count = 0;
-                self.edge_count = 0;
-                self.findings = vec![FindingItem {
-                    rule_id: "analysis-unavailable".to_string(),
-                    status: "UNKNOWN".to_string(),
-                    severity: "ERROR".to_string(),
-                    message: format!("Repository analysis could not be completed: {error}"),
-                    location: self.repo_root.display().to_string(),
-                    repair_action:
-                        "Check the repository path and configuration, then press r to retry"
-                            .to_string(),
-                }];
-                self.likely_affected.clear();
-                self.possibly_affected.clear();
-            }
-        }
-
-        self.load_runs();
-    }
-
     /// Synchronize the TUI from the daemon-owned status and event cursor.
-    /// Offline mode remains explicit: if the daemon is unavailable, the TUI
-    /// keeps its local analysis but labels it as independent.
+    /// The TUI is fully daemon-native - no local analysis engine.
+    /// If daemon is unavailable, state shows UNAVAILABLE.
     pub fn sync_from_daemon(&mut self) -> bool {
         if let Some(last_sync) = self.last_daemon_sync
             && last_sync.elapsed() < Duration::from_millis(250)
@@ -591,7 +496,7 @@ impl TuiApp {
                     self.search_active = false;
                     self.impact_seed = self.input_buffer.clone();
                     self.input_buffer.clear();
-                    self.refresh();
+                    self.recompute_blast();
                 }
                 KeyCode::Esc => {
                     self.search_active = false;
@@ -618,9 +523,8 @@ impl TuiApp {
             KeyCode::Char('4') => self.selected_tab = 3,
             KeyCode::Char('5') => self.selected_tab = 4,
             KeyCode::Char('r') => {
-                if !self.sync_from_daemon() {
-                    self.refresh();
-                }
+                // Force daemon sync - no local refresh
+                let _ = self.sync_from_daemon();
             }
             KeyCode::Char('a') => {
                 match crate::daemon::fetch_analytics_report_for_client("tui", false, false) {
@@ -872,15 +776,12 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
         .draw(|f| ui(f, &mut app))
         .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-    // The daemon is authoritative when available. Offline analysis is retained
-    // as an explicitly labelled fallback for CI and disconnected terminals.
+    // The daemon is the ONLY source of truth. No local analysis engine in TUI.
+    // If daemon is unavailable, show UNAVAILABLE - never fall back to local analysis.
     if !app.sync_from_daemon() {
-        if !cli.offline {
-            return Err(CliError::Analysis(
-                "daemon unavailable; TUI requires the authenticated daemon (use --offline for an explicitly independent local view)".to_string(),
-            ));
-        }
-        app.refresh();
+        return Err(CliError::Analysis(
+            "daemon unavailable; TUI requires the authenticated daemon. Run 'autopsy-daemon' in a separate terminal.".to_string(),
+        ));
     }
 
     // Re-draw with updated live workspace state
@@ -909,8 +810,8 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
         }
 
         if !app.sync_from_daemon() {
-            // Do not rebuild on every frame when disconnected. The explicit
-            // refresh key is the offline re-analysis boundary.
+            // Daemon disconnected - state shows UNAVAILABLE, no local rebuild
+            // Press 'r' to force a daemon reconnection attempt
         }
 
         if app.should_quit {
