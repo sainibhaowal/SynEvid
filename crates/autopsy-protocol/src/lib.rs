@@ -16,6 +16,41 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+/// Commands that support --offline mode (can run without daemon).
+/// These commands have `supports_offline: true` and `requires_daemon: false`
+/// or can meaningfully operate against a local repository snapshot.
+pub const OFFLINE_COMMANDS: &[&str] = &[
+    "baseline",
+    "impact",
+    "verify",
+    "diff",
+    "explain",
+    "symbols",
+    "find",
+    "edges",
+    "map",
+    "git",
+    "catalog",
+    "blast-radius",
+    "temporal",
+    "lineage",
+    "cochange",
+    "contract-dist",
+    "test-select",
+    "tui",
+    "doctor",
+    "init",
+    "tools",
+    "workspace",
+    "suggestions",
+    "version",
+];
+
+/// Check if a command supports offline mode
+pub fn supports_offline(command_id: &str) -> bool {
+    OFFLINE_COMMANDS.contains(&command_id)
+}
+
 /// Unique command identifier
 pub type CommandId = String;
 
@@ -127,6 +162,10 @@ pub struct CommandRequest {
 
     /// Event receipt request
     pub event_receipt: bool,
+
+    /// Explicit offline mode - if true, command runs without daemon
+    /// Only valid for commands in OFFLINE_COMMANDS
+    pub offline: Option<bool>,
 
     /// Client metadata
     pub client_id: ClientId,
@@ -982,6 +1021,7 @@ mod tests {
             cancellation_token: None,
             output_format: Some(OutputFormat::Json),
             event_receipt: true,
+            offline: None,
             client_id: "cli:default".to_string(),
             client_type: ClientType::Cli,
         };

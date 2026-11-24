@@ -170,20 +170,94 @@ impl ParityHarness {
     }
     
     async fn execute_mcp(&self, tool: &str, args: Value) -> ParityResult {
-        // MCP execution via stdio
+        // MCP execution via stdio - use the MCP client to call tools
+        let mcp_bundle = std::path::Path::new("apps/mcp-server/dist/index.bundle.js");
+        if !mcp_bundle.exists() {
+            return ParityResult {
+                client: TestClient::Mcp,
+                command: tool.to_string(),
+                envelope: EvidenceEnvelope::default(),
+                success: false,
+                error: Some("MCP bundle not found; run `npm run build` in apps/mcp-server".to_string()),
+            };
+        }
+
         let mut cmd = Command::new("node");
-        cmd.args(["apps/mcp-server/dist/index.bundle.js"]);
+        cmd.args([mcp_bundle.to_str().unwrap()]);
         cmd.env("SYNEVID_DAEMON_URL", "http://127.0.0.1:3334");
         cmd.env("SYNEVID_LOOPBACK_TOKEN", "test-token");
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return ParityResult {
+                    client: TestClient::Mcp,
+                    command: tool.to_string(),
+                    envelope: EvidenceEnvelope::default(),
+                    success: false,
+                    error: Some(format!("Failed to spawn MCP: {}", e)),
+                };
+            }
+        };
+
+        // Send MCP request via stdin
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": args
+            }
+        });
         
-        // This would need proper MCP protocol implementation
-        // For now, return placeholder
+        let request_str = serde_json::to_string(&request).unwrap() + "\n";
+        
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write;
+            let _ = stdin.write_all(request_str.as_bytes());
+            let _ = stdin.flush();
+        }
+
+        // Read response from stdout
+        let mut stdout = String::new();
+        if let Some(mut stdout_handle) = child.stdout.take() {
+            use std::io::Read;
+            let _ = stdout_handle.read_to_string(&mut stdout);
+        }
+
+        let _ = child.wait();
+
+        // Parse response
+        if let Ok(response) = serde_json::from_str::<Value>(&stdout) {
+            if let Some(result) = response.get("result") {
+                if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+                    for item in content {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            if let Ok(envelope) = serde_json::from_str::<EvidenceEnvelope>(text) {
+                                return ParityResult {
+                                    client: TestClient::Mcp,
+                                    command: tool.to_string(),
+                                    envelope,
+                                    success: true,
+                                    error: None,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         ParityResult {
             client: TestClient::Mcp,
             command: tool.to_string(),
             envelope: EvidenceEnvelope::default(),
             success: false,
-            error: Some("MCP test not fully implemented".to_string()),
+            error: Some("Failed to parse MCP response".to_string()),
         }
     }
     
@@ -230,6 +304,60 @@ impl ParityHarness {
             Err(_) => {
                 ParityResult {
                     client: TestClient::Web,
+                    command: endpoint.to_string(),
+                    envelope: EvidenceEnvelope::default(),
+                    success: false,
+                    error: Some("Timeout".to_string()),
+                }
+            }
+        }
+    }
+
+    /// Execute command via Electron (uses same web API but different client type)
+    async fn execute_electron_api(&self, endpoint: &str, body: Value) -> ParityResult {
+        // Electron uses the same web API as Web client but with Electron client type
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:3334{}", endpoint);
+        
+        let response = timeout(Duration::from_secs(30), async {
+            client.post(&url)
+                .json(&body)
+                .send()
+                .await
+        }).await;
+        
+        match response {
+            Ok(Ok(resp)) if resp.status().is_success() => {
+                let envelope: EvidenceEnvelope = resp.json().await.unwrap();
+                ParityResult {
+                    client: TestClient::Electron,
+                    command: endpoint.to_string(),
+                    envelope,
+                    success: true,
+                    error: None,
+                }
+            }
+            Ok(Ok(resp)) => {
+                ParityResult {
+                    client: TestClient::Electron,
+                    command: endpoint.to_string(),
+                    envelope: EvidenceEnvelope::default(),
+                    success: false,
+                    error: Some(format!("HTTP {}", resp.status())),
+                }
+            }
+            Ok(Err(e)) => {
+                ParityResult {
+                    client: TestClient::Electron,
+                    command: endpoint.to_string(),
+                    envelope: EvidenceEnvelope::default(),
+                    success: false,
+                    error: Some(e.to_string()),
+                }
+            }
+            Err(_) => {
+                ParityResult {
+                    client: TestClient::Electron,
                     command: endpoint.to_string(),
                     envelope: EvidenceEnvelope::default(),
                     success: false,
@@ -297,11 +425,13 @@ impl ParityHarness {
 async fn test_parity_baseline() {
     let harness = ParityHarness::new().await.unwrap();
     
-    // Test baseline command across clients
+    // Test baseline command across all clients
     let cli_result = harness.execute_cli("baseline", &["--persist"]).await;
+    let mcp_result = harness.execute_mcp("autopsy_baseline", json!({ "persist": true })).await;
     let web_result = harness.execute_web_api("/api/v1/baseline", json!({ "persist": true })).await;
+    let electron_result = harness.execute_electron_api("/api/v1/baseline", json!({ "persist": true })).await;
     
-    let results = vec![cli_result, web_result];
+    let results = vec![cli_result, mcp_result, web_result, electron_result];
     harness.verify_parity(&results).unwrap();
 }
 
@@ -312,12 +442,14 @@ async fn test_parity_impact() {
     // First run baseline to have a snapshot
     harness.execute_cli("baseline", &["--persist"]).await;
     
-    // Test impact command
+    // Test impact command across all clients
     let cli_result = harness.execute_cli("impact", &["-s", "src/main.ts#fn:add", "--detail", "full"]).await;
+    let mcp_result = harness.execute_mcp("autopsy_impact", json!({ "seed": "src/main.ts#fn:add", "detail": "full" })).await;
     let web_result = harness.execute_web_api("/api/impact", json!({ "seed": "src/main.ts#fn:add", "detail": "full" })).await;
+    let electron_result = harness.execute_electron_api("/api/impact", json!({ "seed": "src/main.ts#fn:add", "detail": "full" })).await;
     
-    let results = vec![cli_result, web_result];
-    // Would verify parity here
+    let results = vec![cli_result, mcp_result, web_result, electron_result];
+    harness.verify_parity(&results).unwrap();
 }
 
 #[tokio::test]
@@ -327,10 +459,12 @@ async fn test_parity_verify() {
     harness.execute_cli("baseline", &["--persist"]).await;
     
     let cli_result = harness.execute_cli("verify", &["--strict"]).await;
+    let mcp_result = harness.execute_mcp("autopsy_verify", json!({ "strict": true })).await;
     let web_result = harness.execute_web_api("/api/verify", json!({ "strict": true })).await;
+    let electron_result = harness.execute_electron_api("/api/verify", json!({ "strict": true })).await;
     
-    let results = vec![cli_result, web_result];
-    // harness.verify_parity(&results).unwrap();
+    let results = vec![cli_result, mcp_result, web_result, electron_result];
+    harness.verify_parity(&results).unwrap();
 }
 
 #[tokio::test]
@@ -347,10 +481,12 @@ export function add(a: number, b: number): number {
 "#).unwrap();
     
     let cli_result = harness.execute_cli("diff", &[]).await;
+    let mcp_result = harness.execute_mcp("autopsy_diff", json!({})).await;
     let web_result = harness.execute_web_api("/api/v1/diff", json!({})).await;
+    let electron_result = harness.execute_electron_api("/api/v1/diff", json!({})).await;
     
-    let results = vec![cli_result, web_result];
-    // harness.verify_parity(&results).unwrap();
+    let results = vec![cli_result, mcp_result, web_result, electron_result];
+    harness.verify_parity(&results).unwrap();
 }
 
 // G4 Gate test - comprehensive parity across all supported commands
@@ -361,7 +497,7 @@ async fn test_g4_gate_parity_matrix() {
     // Setup: baseline
     harness.execute_cli("baseline", &["--persist"]).await;
     
-    // Test matrix: commands × clients
+    // Test matrix: commands × 4 clients
     let test_cases = vec![
         ("baseline", vec!["--persist"], "/api/v1/baseline", json!({"persist": true})),
         ("verify", vec!["--strict"], "/api/verify", json!({"strict": true})),
@@ -371,9 +507,11 @@ async fn test_g4_gate_parity_matrix() {
     
     for (cli_cmd, cli_args, web_endpoint, web_body) in test_cases {
         let cli_result = harness.execute_cli(cli_cmd, &cli_args).await;
+        let mcp_result = harness.execute_mcp(&format!("autopsy_{}", cli_cmd), web_body.clone()).await;
         let web_result = harness.execute_web_api(web_endpoint, web_body).await;
+        let electron_result = harness.execute_electron_api(web_endpoint, web_body).await;
         
-        let results = vec![cli_result, web_result];
+        let results = vec![cli_result, mcp_result, web_result, electron_result];
         if let Err(e) = harness.verify_parity(&results) {
             eprintln!("Parity FAILED for {}: {}", cli_cmd, e);
             // Don't fail yet - log for now
