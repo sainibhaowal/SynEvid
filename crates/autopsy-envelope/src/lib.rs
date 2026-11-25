@@ -588,3 +588,6 @@ mod tests {
         assert_eq!(envelope.blake3_digest, envelope2.blake3_digest);
     }
 }
+
+/// TypeScript type generation for client consumption
+pub mod ts_types;

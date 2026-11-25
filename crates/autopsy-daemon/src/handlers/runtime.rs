@@ -26,6 +26,7 @@ pub struct RuntimeConnectResponse {
     pub workflow_id: Option<String>,
 }
 
+#[axum::debug_handler]
 pub async fn connect(
     State(state): State<crate::AppState>,
     Json(request): Json<RuntimeConnectRequest>,
@@ -33,17 +34,19 @@ pub async fn connect(
     let client_id = request.client_id.unwrap_or_else(|| "anonymous".to_string());
     let client_type = request.client_type.unwrap_or_else(|| "unknown".to_string());
     
-    let result = state.runtime_manager.connect(
+    let result: serde_json::Value = state.runtime_manager.connect(
         client_id,
-        request.client_type,
-        request.repository_id,
-        request.session_id,
-        request.workflow_id,
+        client_type,
+        request.repository_id.clone(),
+        request.session_id.clone(),
+        request.workflow_id.clone(),
         request.last_event_seq,
     ).await?;
     
+    let lease_id = result.get("lease_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
     Ok(axum::Json(json!({
-        "lease_id": result.lease_id,
+        "lease_id": lease_id,
         "repository_id": request.repository_id,
         "session_id": request.session_id,
         "workflow_id": request.workflow_id
@@ -59,20 +62,23 @@ pub struct HeartbeatRequest {
     pub workflow_id: Option<String>,
 }
 
+#[axum::debug_handler]
 pub async fn heartbeat(
     State(state): State<crate::AppState>,
     Json(request): Json<HeartbeatRequest>,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    let result = state.runtime_manager.heartbeat(
+    let result: serde_json::Value = state.runtime_manager.heartbeat(
         &request.lease_id,
         request.last_event_seq,
         request.session_id,
         request.workflow_id,
     ).await?;
     
+    let lease_id = result.get("lease_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    
     Ok(axum::Json(json!({
         "status": "ok",
-        "lease_id": result.lease_id
+        "lease_id": lease_id
     })))
 }
 
@@ -82,6 +88,7 @@ pub struct DisconnectRequest {
     pub client_id: Option<String>,
 }
 
+#[axum::debug_handler]
 pub async fn disconnect(
     State(state): State<crate::AppState>,
     Json(request): Json<DisconnectRequest>,
@@ -92,9 +99,9 @@ pub async fn disconnect(
             None
         });
     
-    let result = state.runtime_manager.disconnect(
-        lease_id.as_deref(),
-        request.client_id.as_deref(),
+    let _result = state.runtime_manager.disconnect(
+        lease_id,
+        request.client_id,
     ).await?;
     
     Ok(axum::Json(json!({
@@ -102,19 +109,21 @@ pub async fn disconnect(
     })))
 }
 
+#[axum::debug_handler]
 pub async fn status(
     State(state): State<crate::AppState>,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    let active_repo_id = state.repository_manager.get_active_repo_id().await;
+    let active_repo_id = state.repository_manager.get_active_repo_id();
     let snapshot_id = if let Some(repo_id) = &active_repo_id {
-        state.repository_manager.get_repository(repo_id).await?
+        state.repository_manager.get_repository(repo_id)
             .and_then(|r| r.latest_snap_id.clone())
     } else {
         None
     };
     
-    let active_session_id = state.repository_manager.get_active_session().await;
-    let clients = state.runtime_manager.list_clients().await;
+    // RepositoryManager.get_active_session() is synchronous
+    let active_session_id = state.repository_manager.get_active_session();
+    let clients = state.runtime_manager.list_clients();
     
     Ok(axum::Json(json!({
         "protocol_version": "v1",

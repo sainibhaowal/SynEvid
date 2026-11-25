@@ -1,68 +1,234 @@
-# SynEvid Security Architecture & Threat Model
+# SynEvid Threat Model (STRIDE)
 
-This document specifies the security boundaries, threat analysis, sandbox defense mechanisms, and untrusted input containment policies for **SynEvid (Code Autopsy)**.
+**Version**: 1.0
+**Date**: 2024-11-24
+**Author**: Security Team
 
----
+## System Overview
 
-## 1. Security Stance: Repositories Are Hostile Inputs
+### System Description
+SynEvid is an offline, deterministic software verification and change-impact engine. It operates as a local daemon (`autopsy-daemon`) with multiple client interfaces (CLI, TUI, MCP, Web UI, Electron).
 
-In modern autonomous coding agent environments, target repositories and dependency trees must be treated as **untrusted, potentially hostile input**. A malicious or compromised repository may attempt:
-- Filesystem escapes via circular or external symlinks.
-- Path traversal outside workspace boundaries via relative path tricks (`../../`).
-- Resource exhaustion (zip bombs, multi-gigabyte generated files, infinite parser recursion).
-- Arbitrary code execution via build hooks, pre-commit scripts, or language servers.
-- Exfiltration of private source code or environment variables over network sockets.
-- Cache poisoning across multi-branch or concurrent agent sessions.
+### Trust Boundaries
 
-SynEvid is engineered with a **defense-in-depth offline containment model** that neutralizes each of these vectors without relying on OS virtualization.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      USER WORKSTATION                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │   CLI/TUI    │  │    Web UI    │  │   Electron App       │  │
+│  │  (Trusted)   │  │  (Sandboxed) │  │  (Native + Sandbox)  │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────────┬────────────┘  │
+│         │                 │                       │              │
+│         └─────────────────┼───────────────────────┘              │
+│                           ▼                                      │
+│              ┌──────────────────────────┐                        │
+│              │   autopsy-daemon (3333)  │ ◄── Trust Boundary    │
+│              │   (Single Authority)     │                        │
+│              └───────────┬──────────────┘                        │
+│                           ▼                                      │
+│              ┌──────────────────────────┐                        │
+│              │   Local Filesystem       │                        │
+│              │   (.autopsy/, repos)     │                        │
+│              └──────────────────────────┘                        │
+└─────────────────────────────────────────────────────────────────┘
+```
 
----
+### Data Flow
 
-## 2. Threat Matrix & Defense-in-Depth Controls
-
-| Threat Vector | Attack Scenario | SynEvid Hard Invariant Control | Verification Suite |
-| :--- | :--- | :--- | :--- |
-| **Filesystem Escape** | Symlink pointing to `/etc/passwd`, `~/.ssh`, or parent directories. | **`INV-SANDBOX-001`**: Repository traversal enforces `follow_links(false)` and canonical path validation. | `test_e2e_symlink_escape_containment` |
-| **Data Exfiltration** | Malicious AST or analyzer attempting to send code or hashes to remote server. | **`INV-SANDBOX-002`**: Core crates contain zero network socket code (`TcpStream`, `UdpSocket`, `reqwest`). | `scripts/verify-arch-boundaries.sh` |
-| **Path Traversal** | Specifying configuration roots or baseline snapshots with `../` sequences. | **`INV-SANDBOX-003`**: All paths are sanitized via `sanitize_relative_path`; traversal sequences cause immediate parse rejection. | `test_e2e_path_traversal_sanitization` |
-| **Remote Code Execution** | Triggering compilers, `npm install`, or subprocesses during parsing. | **`INV-SANDBOX-004`**: In-memory Tree-sitter parsers only; core crates prohibit `std::process::Command` and `libc::exec`. | `test_e2e_zero_code_execution_in_memory_only` |
-| **Resource Exhaustion** | Huge generated bundles, Minified code (>100MB), circular AST depth. | Explicit file cap `max_file_bytes` (10MB default); oversize files recorded in metadata rather than read into memory. | `test_e2e_oversize_file_cap_never_reads_huge_files` |
-| **Cache Poisoning** | Concurrent agent processes attempting to corrupt shared SQLite state. | **`ATOMIC-CACHE-001`**: Content-addressed cache writes use unique temporary files and atomic filesystem renames. | `test_e2e_storage_concurrent_atomic_write_resilience` |
-| **Agent-Surface Input Abuse** | MCP tool arguments or LSP document URIs attempting path traversal, workspace escape, or command injection through the agent loop. | **MCP/LSP never shell out**: the MCP server passes arguments as discrete argv entries via `execFile` (no shell); `synevid-lsp` calls the engine as an in-process library (no subprocess at all). Paths are normalized via `sanitize_relative_path`; engine-state writes (session receipts, suggestions) stay inside the configured `.autopsy/` store; the analyzer remains read-only by contract (FR-026). | `e2e_agent_find_and_envelope.test.js`, `e2e_agent_session.test.js`, `synevid-lsp` crate tests, `test_e2e_path_traversal_sanitization` |
-| **Telemetry PII Leakage** | OpenTelemetry spans containing authorization headers, passwords, or query tokens. | **Pillar 4 Redaction**: Automated pattern stripping for bearer tokens, credentials, and salted BLAKE3 span hashing. | `test_step40_otlp.rs` (17 tests) |
-
----
-
-## 3. Sandboxing Invariants
-
-### Invariant INV-SANDBOX-001: Symlink Escape Containment
-SynEvid traverses repositories using non-following directory iterators. When a symlink is encountered:
-1. It is never traversed into.
-2. Its presence is noted in repository telemetry without expanding its target.
-3. If an explicit repository root resolves outside the expected boundary, analysis halts with an exit code `3` (Configuration Error).
-
-### Invariant INV-SANDBOX-002: Zero Network Socket Execution
-Core crates (`crates/*`) must never declare dependencies on networking libraries (`reqwest`, `hyper`, `tokio-net`, `socket2`, `curl`).
-- Verification is enforced by [`./scripts/verify-arch-boundaries.sh`](../../scripts/verify-arch-boundaries.sh).
-- If any networking symbol or dependency is detected in core, CI halts immediately.
-
-### Invariant INV-SANDBOX-003: Path Traversal Sanitization
-All file identifiers, snapshot keys, and URNs pass through strict lexical normalization:
-- Backslashes (`\`) are normalized to standard forward slashes (`/`).
-- Leading `/` and relative `..` tokens are strictly forbidden and trigger an analysis error.
-
-### Invariant INV-SANDBOX-004: In-Memory AST Analysis (Zero Subprocess Spawning)
-Language extraction (TypeScript/JavaScript, Python, Go, Rust) is conducted strictly via statically linked in-memory Tree-sitter grammars.
-- No Node.js runtime, Python interpreter, or external compiler is executed during core verification.
-- Static semantic graphs are built entirely within safe Rust memory space.
+1. **Client → Daemon**: Authenticated JSON-RPC over HTTP/WS (loopback only)
+2. **Daemon → Storage**: SQLite (`.autopsy/storage.db`) + loose objects
+3. **Daemon → Git**: Native git operations (no subprocess)
+4. **Daemon → File System**: Repo scanning (sandboxed, no symlinks)
+5. **Daemon → Network**: **NONE** (offline-only, no outbound connections)
 
 ---
 
-## 4. Privacy & Telemetry Redaction Model (Pillar 4)
+## STRIDE Analysis
 
-When ingesting OpenTelemetry traces (`autopsy telemetry`), SynEvid enforces a zero-trust data scrubber:
-1. **Header Sanitization:** `Authorization`, `Cookie`, `X-Api-Key`, and bearer tokens are automatically stripped.
-2. **Query String Scrubbing:** URL query parameters (`?token=...`, `?user=...`) are truncated before correlation.
-3. **Keyed Pseudonymization:** Raw trace IDs and span IDs are hashed using a user-provided keyed BLAKE3 salt:
-   $$\text{Pseudonym} = \text{BLAKE3}(\text{SpanID} \parallel \text{Salt})$$
-   Raw internal IDs never enter the persistent topology report.
+### Spoofing (S)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| S-01 | Client spoofs another client | Daemon lease | Low | Medium | Loopback token + client ID validation |
+| S-02 | Malicious config impersonates repo | Repo registry | Low | High | Canonical path + symlink check |
+| S-03 | Fake daemon response | Client trust | Low | High | Loopback token verification |
+| S-04 | Git commit spoofing | Audit trail | Medium | High | Native git (no subprocess), signed commits |
+
+**Mitigations**:
+- Loopback token (BLAKE3, 256-bit) required for all daemon connections
+- Client ID + type tracked per lease
+- Config paths canonicalized, symlinks rejected
+
+### Tampering (T)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| T-01 | Modify storage.db | `.autopsy/storage.db` | Low | Critical | SQLite WAL + file permissions (0600) |
+| T-02 | Modify repo index | `.autopsy/<repo>/` | Low | High | Read-only during analysis |
+| T-03 | Inject malicious git objects | `.git/objects/` | Low | Critical | Native git, SHA-1 verification |
+| T-04 | Modify daemon memory | Daemon process | Very Low | Critical | ASLR, DEP, no JIT |
+| T-05 | Config injection | `autopsy.toml` | Medium | High | Schema validation, path traversal check |
+
+**Mitigations**:
+- File permissions: `.autopsy/` 0700, files 0600
+- SQLite WAL mode with checksum
+- Config schema validation (JSON Schema)
+- Path canonicalization + `..` rejection
+
+### Repudiation (R)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| R-01 | Deny analysis execution | Audit log | Medium | Medium | Immutable event store (append-only) |
+| R-02 | Forge analysis result | Evidence envelope | Low | High | BLAKE3 digest + evidence receipt |
+| R-03 | Delete audit trail | `.autopsy/events.sqlite` | Low | High | Append-only, no DELETE API |
+
+**Mitigations**:
+- Event store: append-only SQLite, no DELETE
+- Evidence envelope: BLAKE3 digest over canonical JSON
+- BLAKE3 receipt in every envelope
+
+### Information Disclosure (I)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| I-01 | Repo source in error messages | Source code | Medium | Low | Sanitized errors, no paths in JSON |
+| I-02 | Config values in logs | Secrets/tokens | Low | High | No secrets in logs, redacted |
+| I-03 | Daemon memory dump | In-memory state | Very Low | High | No secrets in memory |
+| I-04 | Git history exposure | `.git/` | Medium | Low | User-controlled, opt-in |
+| I-05 | Daemon memory swap | Swap file | Very Low | Medium | `mlockall()` on sensitive data |
+
+**Mitigations**:
+- Error sanitization in `CliError::repair()`
+- No secrets in logs (structured logging)
+- `mlockall()` for token storage (Linux)
+
+### Denial of Service (D)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| D-01 | Resource exhaustion (large repo) | CPU/Memory | Medium | High | Bounds: `max_file_bytes`, `max_traversal_nodes` |
+| D-02 | Request flooding | Daemon CPU | Medium | High | Rate limiting (100 RPM) |
+| D-03 | Large request body | Memory | Low | High | `max_body_size` (default 10MB) |
+| D-04 | Pathological git history | CPU | Low | High | Commit limit, depth bounds |
+| D-05 | Malformed input parsing | CPU | Low | Medium | Parser timeouts, size limits |
+
+**Mitigations**:
+- `max_file_bytes` (default 1MB), `max_traversal_nodes` (100k)
+- Rate limiter: 100 RPM per client ID
+- `max_body_size` (10MB default)
+- Commit depth limit (10k), file size limits
+- Parser timeouts (30s), input size limits
+
+### Elevation of Privilege (E)
+
+| ID | Threat | Asset | Likelihood | Impact | Mitigation |
+|----|--------|-------|------------|--------|------------|
+| E-01 | Loopback token brute-force | Daemon API | Low | Critical | 256-bit entropy, constant-time compare |
+| E-02 | Config path traversal | Filesystem | Medium | High | Canonicalization + `..` rejection |
+| E-03 | Symlink escape | Filesystem | Medium | High | `follow_links(false)`, containment |
+| E-04 | Daemon restart with malicious config | Daemon state | Low | Critical | Config validation, no auto-reload |
+
+**Mitigations**:
+- Token: 256-bit BLAKE3, constant-time compare
+- Path: `canonicalize()` + `..` check + symlink containment
+- Config: Schema validation, no auto-reload
+
+---
+
+## Attack Surface Summary
+
+### External Attack Surface: **MINIMAL**
+- **Network**: NONE (loopback only, no outbound)
+- **File System**: User-controlled repos only
+- **Config**: User-controlled `autopsy.toml`
+
+### Internal Attack Surface
+| Component | Exposure | Hardening |
+|-----------|----------|-----------|
+| Daemon HTTP | Loopback only | Token auth, rate limit |
+| Storage | Local files | 0600 perms, WAL |
+| Git | Local repos | Native, no subprocess |
+| Config | User file | Schema validation |
+
+---
+
+## Risk Matrix
+
+| Threat | Likelihood | Impact | Risk | Status |
+|--------|------------|--------|------|--------|
+| Spoofing | Low | Medium | **LOW** | ✅ Mitigated |
+| Tampering | Low | Critical | **LOW** | ✅ Mitigated |
+| Repudiation | Low | High | **LOW** | ✅ Mitigated |
+| Info Disclosure | Medium | Low | **LOW** | ✅ Mitigated |
+| DoS | Medium | High | **MEDIUM** | 🟡 Monitored |
+| Elevation | Low | Critical | **LOW** | ✅ Mitigated |
+
+---
+
+## Security Controls Summary
+
+| Control | Implementation | Verification |
+|---------|----------------|--------------|
+| Auth | Loopback token (BLAKE3) | Unit tests |
+| Rate Limit | Token bucket (100 RPM) | Integration tests |
+| Path Safety | Canonicalize + `..` check | Unit tests |
+| Symlink Safety | `follow_links(false)` | Unit tests |
+| Resource Limits | `max_*` config | Integration tests |
+| Rate Limiting | Token bucket | Integration tests |
+| Error Sanitization | No paths in JSON | Unit tests |
+| Constant-time Compare | `subtle::ConstantTimeEq` | Unit tests |
+| Audit Logging | Append-only SQLite | Integration tests |
+
+---
+
+## Residual Risk
+
+| Risk | Residual Level | Acceptance |
+|------|----------------|------------|
+| DoS via pathological input | Low | Accepted (bounds enforced) |
+| Local privilege escalation | Very Low | Accepted (token entropy) |
+| Supply chain compromise | Very Low | Accepted (cargo deny) |
+| Zero-day in dependencies | Low | Monitored (cargo audit) |
+
+---
+
+## Review Schedule
+
+| Review Type | Frequency | Owner |
+|-------------|-----------|-------|
+| Threat Model Review | 6 months | Security Team |
+| Architecture Changes | Per PR | Security Team |
+| New Dependencies | Per PR | Automated (cargo deny) |
+| Incident Response | Post-incident | Security Team |
+
+---
+
+## Appendices
+
+### A. Data Flow Diagram (DFD) Level 1
+
+```
+[Client] ──(HTTPS/WS + Token)──► [Daemon] ──(SQLite)──► [Storage]
+    │                              │
+    │                              ├──► [Git Repo] (read-only)
+    │                              │
+    │                              └──► [Config] (validated)
+    │
+    └──► [User] (Human/Automated)
+```
+
+### B. Trust Levels
+
+| Zone | Trust Level | Components |
+|------|-------------|------------|
+| User Workstation | High | CLI, TUI, Electron |
+| Daemon Loopback | High | Daemon HTTP, Storage |
+| Git Repos | Medium | User-controlled |
+| Network | None | No outbound |
+
+---
+
+*Document Version: 1.0*
+*Classification: Internal*
+*Review Date: 2025-05-24*

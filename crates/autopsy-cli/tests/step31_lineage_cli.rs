@@ -245,7 +245,7 @@ fn run(repo: &Repo, args: &LineageArgs) -> extensions::Outcome {
 }
 
 fn json(outcome: &extensions::Outcome) -> serde_json::Value {
-    serde_json::from_str(&outcome.json).expect("lineage output is JSON")
+    outcome.envelope.payload.clone()
 }
 
 #[test]
@@ -533,7 +533,7 @@ fn lineage_is_deterministic_across_runs() {
     let repo = repo_similarity_move();
     let first = run(&repo, &LineageArgs::default());
     let second = run(&repo, &LineageArgs::default());
-    assert_eq!(first.json, second.json);
+    assert_eq!(first.envelope.payload, second.envelope.payload);
     assert_eq!(first.text, second.text);
     assert_eq!(first.exit_code, second.exit_code);
 }

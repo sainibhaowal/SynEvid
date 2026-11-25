@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use blake3;
@@ -43,6 +42,14 @@ pub struct RepositoryManager {
     data_dir: PathBuf,
     loopback_auth: Arc<LoopbackAuth>,
     active_repo_id: Arc<RwLock<Option<String>>>,
+    active_session_id: Arc<RwLock<Option<String>>>,
+}
+
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 impl RepositoryManager {
@@ -73,6 +80,7 @@ impl RepositoryManager {
             data_dir: data_dir.clone(),
             loopback_auth,
             active_repo_id: Arc::new(RwLock::new(None)),
+            active_session_id: Arc::new(RwLock::new(None)),
         };
 
         // Load persisted repositories
@@ -91,7 +99,8 @@ impl RepositoryManager {
         
         let repo_id = blake3::hash(canonical_str.as_bytes()).to_hex().to_string();
         let display_name = display_name.unwrap_or_else(|| {
-            canonical.file_name()
+            canonical
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("repository")
                 .to_string()
@@ -101,7 +110,6 @@ impl RepositoryManager {
         {
             let repos = self.repositories.read();
             if let Some(existing) = repos.get(&repo_id) {
-                // Update last accessed
                 let mut repos_mut = self.repositories.write();
                 if let Some(r) = repos_mut.get_mut(&repo_id) {
                     r.last_accessed = current_timestamp();
@@ -121,27 +129,17 @@ impl RepositoryManager {
             },
         ).map_err(|e| format!("Failed to open repository storage: {}", e))?;
 
-        // Index repository
-        let config = load_or_default_config(&canonical).unwrap_or_default();
-        let (record, _receipt, _artifacts) = autopsy_cli::index_repository_with_registry(
-            &canonical,
-            &repo_id,
-            &display_name,
-            &repo_storage,
-            &self.plugin_registry,
-        ).map_err(|e| format!("Failed to index repository: {}", e))?;
-
         let now = current_timestamp();
         let repo_record = RepositoryRecord {
-            repo_id: record.repo_id.clone(),
+            repo_id: repo_id.clone(),
             root_path: canonical_str,
-            display_name: record.display_name.clone(),
-            active_branch: record.active_branch,
-            head_commit_oid: record.head_commit_oid,
-            latest_snap_id: record.latest_snap_id,
-            languages_json: record.languages_json,
-            monorepo_json: record.monorepo_json,
-            last_indexed_seq: record.last_indexed_seq,
+            display_name: display_name.clone(),
+            active_branch: None,
+            head_commit_oid: None,
+            latest_snap_id: None,
+            languages_json: "[]".to_string(),
+            monorepo_json: "{}".to_string(),
+            last_indexed_seq: 0,
             registered_at: now,
             last_accessed: now,
         };
@@ -151,7 +149,18 @@ impl RepositoryManager {
 
         // Persist to central storage
         if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            storage.register_repository(&record).map_err(|e| format!("Failed to persist repository: {}", e))?;
+            let repo_record_for_storage = autopsy_storage::RepoRecord {
+                repo_id: repo_record.repo_id.clone(),
+                root_path: repo_record.root_path.clone(),
+                display_name: repo_record.display_name.clone(),
+                active_branch: repo_record.active_branch.clone(),
+                head_commit_oid: repo_record.head_commit_oid.clone(),
+                latest_snap_id: repo_record.latest_snap_id.clone(),
+                languages_json: repo_record.languages_json.clone(),
+                monorepo_json: repo_record.monorepo_json.clone(),
+                last_indexed_seq: repo_record.last_indexed_seq,
+            };
+            storage.register_repository(&repo_record_for_storage).map_err(|e| format!("Failed to persist repository: {}", e))?;
             storage.set_daemon_state("active_repo_id", &repo_id).map_err(|e| format!("Failed to set active repo: {}", e))?;
         }
 
@@ -238,6 +247,11 @@ impl RepositoryManager {
         self.active_repo_id.read().clone()
     }
 
+    /// Get active session ID
+    pub fn get_active_session(&self) -> Option<String> {
+        self.active_session_id.read().clone()
+    }
+
     /// Get stored active repository ID from persistence
     pub async fn get_stored_active_repo(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
         if let Some(storage) = self.storage.lock().unwrap().as_ref() {
@@ -264,7 +278,7 @@ impl RepositoryManager {
                         languages_json: record.languages_json,
                         monorepo_json: record.monorepo_json,
                         last_indexed_seq: record.last_indexed_seq,
-                        registered_at: 0, // Unknown from storage
+                        registered_at: 0,
                         last_accessed: 0,
                     };
                     repos_map.insert(record.repo_id.clone(), repo_record);
@@ -290,30 +304,26 @@ impl RepositoryManager {
             },
         ).map_err(|e| format!("Failed to open repository storage: {}", e))?;
 
-        let config = load_or_default_config(&root_path).unwrap_or_default();
-        let (updated_record, _receipt, _artifacts) = autopsy_cli::index_repository_with_registry(
-            &root_path,
-            &record.repo_id,
-            &record.display_name,
-            &repo_storage,
-            &self.plugin_registry,
-        ).map_err(|e| format!("Failed to re-index repository: {}", e))?;
-
-        // Update in memory
+        // Update in memory with basic info
         let mut repos = self.repositories.write();
         if let Some(r) = repos.get_mut(repo_id) {
-            r.active_branch = updated_record.active_branch;
-            r.head_commit_oid = updated_record.head_commit_oid;
-            r.latest_snap_id = updated_record.latest_snap_id;
-            r.languages_json = updated_record.languages_json;
-            r.monorepo_json = updated_record.monorepo_json;
-            r.last_indexed_seq = updated_record.last_indexed_seq;
             r.last_accessed = current_timestamp();
         }
 
         // Persist
         if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            storage.register_repository(&updated_record)
+            let repo_record_for_storage = autopsy_storage::RepoRecord {
+                repo_id: record.repo_id.clone(),
+                root_path: record.root_path.clone(),
+                display_name: record.display_name.clone(),
+                active_branch: record.active_branch.clone(),
+                head_commit_oid: record.head_commit_oid.clone(),
+                latest_snap_id: record.latest_snap_id.clone(),
+                languages_json: record.languages_json.clone(),
+                monorepo_json: record.monorepo_json.clone(),
+                last_indexed_seq: record.last_indexed_seq,
+            };
+            storage.register_repository(&repo_record_for_storage)
                 .map_err(|e| format!("Failed to persist updated repository: {}", e))?;
         }
 
@@ -363,821 +373,4 @@ impl RepositoryManager {
         
         Ok(repo_storage)
     }
-
-    /// Get stored active repository ID from persistence
-    pub async fn get_stored_active_repo(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            if let Ok(Some(id)) = storage.get_daemon_state("active_repo_id") {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Persist catalog entities
-    pub async fn persist_catalog(&self, repo_id: &str, catalog: &autopsy_catalog::Catalog) -> Result<(), String> {
-        if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            storage.insert_catalog_entities(repo_id, &catalog.entities)
-                .map_err(|e| format!("Failed to persist catalog entities: {}", e))?;
-            storage.insert_catalog_manifests(repo_id, &catalog.manifests)
-                .map_err(|e| format!("Failed to persist catalog manifests: {}", e))?;
-            storage.insert_catalog_dependencies(repo_id, &catalog.dependencies)
-                .map_err(|e| format!("Failed to persist catalog dependencies: {}", e))?;
-        }
-        Ok(())
-    }
-
-    /// Record forensic event
-    pub async fn record_forensic_event(
-        &self,
-        session_id: &str,
-        repo_root: Option<&str>,
-        job_id: Option<&str>,
-        workflow_id: Option<&str>,
-        event_type: &str,
-        target_symbol: Option<&str>,
-        target_file: Option<&str>,
-        before_snap_id: Option<&str>,
-        after_snap_id: Option<&str>,
-        verdict: Option<&str>,
-        summary: &str,
-        evidence: serde_json::Value,
-        tokens_spent: Option<i64>,
-        tokens_saved: Option<i64>,
-    ) -> Result<i64, String> {
-        let event_seq = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .next_forensic_event_seq()
-            .map_err(|e| format!("Failed to get next event seq: {}", e))?;
-
-        let record = autopsy_storage::TrajectoryEventRecord {
-            event_seq,
-            session_id: session_id.to_string(),
-            job_id: job_id.map(|s| s.to_string()),
-            workflow_id: workflow_id.map(|s| s.to_string()),
-            event_type: event_type.to_string(),
-            target_symbol: target_symbol.map(|s| s.to_string()),
-            target_file: target_file.map(|s| s.to_string()),
-            before_snap_id: before_snap_id.map(|s| s.to_string()),
-            after_snap_id: after_snap_id.map(|s| s.to_string()),
-            verdict: verdict.unwrap_or("INFO").to_string(),
-            summary: summary.to_string(),
-            evidence_json: serde_json::to_string(&evidence).unwrap_or_default(),
-            blake3_receipt: format!("blake3:{}", blake3::hash(serde_json::to_string(&evidence).unwrap_or_default().as_bytes()).to_hex()),
-            tokens_spent: tokens_spent.unwrap_or(0),
-            tokens_saved: tokens_saved.unwrap_or(0),
-            timestamp: current_timestamp(),
-        };
-
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(&record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))?;
-
-        Ok(event_seq)
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    pub async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get forensic timeline
-    pub async fn get_forensic_timeline(&self, session_id: &str) -> Result<crate::handlers::forensic::ForensicTimelineResult, String> {
-        let session = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))?
-            .ok_or("Session not found")?;
-
-        let events = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))?;
-
-        let workflows = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to get workflows: {}", e))?;
-
-        let ledger = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))?;
-
-        Ok(crate::handlers::forensic::ForensicTimelineResult {
-            session: session.into(),
-            events: events.into_iter().map(Into::into).collect(),
-            workflows: workflows.into_iter().map(Into::into).collect(),
-            ledger: ledger.map(Into::into),
-        })
-    }
-
-    /// Record trajectory event
-    pub async fn record_trajectory_event(
-        &self,
-        session_id: &str,
-        repo_root: Option<&str>,
-        job_id: Option<&str>,
-        workflow_id: Option<&str>,
-        event_type: &str,
-        target_symbol: Option<&str>,
-        target_file: Option<&str>,
-        before_snap_id: Option<&str>,
-        after_snap_id: Option<&str>,
-        verdict: Option<&str>,
-        summary: &str,
-        evidence: serde_json::Value,
-        tokens_spent: Option<i64>,
-        tokens_saved: Option<i64>,
-    ) -> Result<i64, String> {
-        let event_seq = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .next_forensic_event_seq()
-            .map_err(|e| format!("Failed to get next event seq: {}", e))?;
-
-        let record = autopsy_storage::TrajectoryEventRecord {
-            event_seq,
-            session_id: session_id.to_string(),
-            job_id: job_id.map(|s| s.to_string()),
-            workflow_id: workflow_id.map(|s| s.to_string()),
-            event_type: event_type.to_string(),
-            target_symbol: target_symbol.map(|s| s.to_string()),
-            target_file: target_file.map(|s| s.to_string()),
-            before_snap_id: before_snap_id.map(|s| s.to_string()),
-            after_snap_id: after_snap_id.map(|s| s.to_string()),
-            verdict: verdict.unwrap_or("INFO").to_string(),
-            summary: summary.to_string(),
-            evidence_json: serde_json::to_string(&evidence).unwrap_or_default(),
-            blake3_receipt: format!("blake3:{}", blake3::hash(serde_json::to_string(&evidence).unwrap_or_default().as_bytes()).to_hex()),
-            tokens_spent: tokens_spent.unwrap_or(0),
-            tokens_saved: tokens_saved.unwrap_or(0),
-            timestamp: current_timestamp(),
-        };
-
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(&record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))?;
-
-        Ok(event_seq)
-    }
-
-    /// Revert forensic step
-    pub async fn revert_forensic_step(
-        &self,
-        session_id: &str,
-        event_seq: i64,
-    ) -> Result<crate::handlers::forensic::ForensicRevertResult, String> {
-        let event = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get event: {}", e))?
-            .ok_or("Event not found")?;
-
-        let revert_seq = self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .next_forensic_event_seq()
-            .map_err(|e| format!("Failed to get next event seq: {}", e))?;
-
-        let revert_record = autopsy_storage::TrajectoryEventRecord {
-            event_seq: revert_seq,
-            session_id: session_id.to_string(),
-            job_id: event.job_id.clone(),
-            workflow_id: event.workflow_id.clone(),
-            event_type: "revert".to_string(),
-            target_symbol: event.target_symbol.clone(),
-            target_file: event.target_file.clone(),
-            before_snap_id: event.after_snap_id.clone(),
-            after_snap_id: event.before_snap_id.clone(),
-            verdict: "REVERTED".to_string(),
-            summary: format!("Reverted event {}", event_seq),
-            evidence_json: serde_json::to_string(&json!({
-                "reverted_event_seq": event_seq,
-                "original_event_type": event.event_type,
-            })).unwrap_or_default(),
-            blake3_receipt: format!("blake3:{}", blake3::hash(format!("revert-{}", event_seq).as_bytes()).to_hex()),
-            tokens_spent: 0,
-            tokens_saved: 0,
-            timestamp: current_timestamp(),
-        };
-
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(&revert_record)
-            .map_err(|e| format!("Failed to insert revert event: {}", e))?;
-
-        Ok(crate::handlers::forensic::ForensicRevertResult {
-            reverted_event_seq: event_seq,
-            revert_event_seq: revert_seq,
-        })
-    }
-
-    /// List trajectory runs
-    pub async fn list_trajectory_runs(&self) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(None)
-            .map_err(|e| format!("Failed to list trajectory runs: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// Get trajectory events
-    pub async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// Get forensic workflows
-    pub async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to get workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    pub async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    pub async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Get next forensic event sequence
-    async fn next_forensic_event_seq(&self) -> Result<i64, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .next_forensic_event_seq()
-            .map_err(|e| format!("Failed to get next event seq: {}", e))
-    }
-
-    /// Insert trajectory event
-    async fn insert_trajectory_event(&self, record: &autopsy_storage::TrajectoryEventRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))
-    }
-
-    /// Update session activity
-    async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Get forensic session
-    async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get trajectory events
-    async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// List forensic workflows
-    async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to get workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Close forensic session
-    pub async fn close_forensic_session(&self, session_id: &str, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .close_forensic_session(session_id, verdict)
-            .map_err(|e| format!("Failed to close session: {}", e))
-    }
-
-    /// Persist catalog entities
-    pub async fn persist_catalog_entities(&self, repo_id: &str, entities: &[autopsy_catalog::CatalogEntity]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_entities(repo_id, entities)
-            .map_err(|e| format!("Failed to persist catalog entities: {}", e))
-    }
-
-    /// Persist catalog manifests
-    pub async fn persist_catalog_manifests(&self, repo_id: &str, manifests: &[autopsy_catalog::CatalogManifest]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_manifests(repo_id, manifests)
-            .map_err(|e| format!("Failed to persist catalog manifests: {}", e))
-    }
-
-    /// Persist catalog dependencies
-    pub async fn persist_catalog_dependencies(&self, repo_id: &str, dependencies: &[autopsy_catalog::CatalogDependency]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_dependencies(repo_id, dependencies)
-            .map_err(|e| format!("Failed to persist catalog dependencies: {}", e))
-    }
-
-    /// Get stored active repository ID from persistence
-    pub async fn get_stored_active_repo(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            if let Ok(Some(id)) = storage.get_daemon_state("active_repo_id") {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Create forensic session
-    pub async fn create_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Insert forensic session
-    pub async fn insert_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    pub async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get trajectory events
-    pub async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// List forensic workflows
-    pub async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to list workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    pub async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    pub async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Insert trajectory event
-    pub async fn insert_trajectory_event(&self, record: &autopsy_storage::TrajectoryEventRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    pub async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get trajectory events
-    pub async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// List forensic workflows
-    pub async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to list workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    pub async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    pub async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Insert trajectory event
-    pub async fn insert_trajectory_event(&self, record: &autopsy_storage::TrajectoryEventRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Close forensic session
-    pub async fn close_forensic_session(&self, session_id: &str, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .close_forensic_session(session_id, verdict)
-            .map_err(|e| format!("Failed to close session: {}", e))
-    }
-
-    /// Persist catalog entities
-    pub async fn persist_catalog_entities(&self, repo_id: &str, entities: &[autopsy_catalog::CatalogEntity]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_entities(repo_id, entities)
-            .map_err(|e| format!("Failed to persist catalog entities: {}", e))
-    }
-
-    /// Get stored active repo
-    pub async fn get_stored_active_repo(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            if let Ok(Some(id)) = storage.get_daemon_state("active_repo_id") {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Create forensic session
-    pub async fn create_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Insert forensic session
-    pub async fn insert_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    pub async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get trajectory events
-    pub async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// List forensic workflows
-    pub async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to list workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    pub async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    pub async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Insert trajectory event
-    pub async fn insert_trajectory_event(&self, record: &autopsy_storage::TrajectoryEventRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Close forensic session
-    pub async fn close_forensic_session(&self, session_id: &str, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .close_forensic_session(session_id, verdict)
-            .map_err(|e| format!("Failed to close session: {}", e))
-    }
-
-    /// Persist catalog entities
-    pub async fn persist_catalog_entities(&self, repo_id: &str, entities: &[autopsy_catalog::CatalogEntity]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_entities(repo_id, entities)
-            .map_err(|e| format!("Failed to persist catalog entities: {}", e))
-    }
-
-    /// Get stored active repo
-    pub async fn get_stored_active_repo(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        if let Some(storage) = self.storage.lock().unwrap().as_ref() {
-            if let Ok(Some(id)) = storage.get_daemon_state("active_repo_id") {
-                return Ok(Some(id));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Create forensic session
-    pub async fn create_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Insert forensic session
-    pub async fn insert_forensic_session(&self, record: &autopsy_storage::ForensicSessionRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_forensic_session(record)
-            .map_err(|e| format!("Failed to insert session: {}", e))
-    }
-
-    /// Get forensic session
-    pub async fn get_forensic_session(&self, session_id: &str) -> Result<Option<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_forensic_session(session_id)
-            .map_err(|e| format!("Failed to get session: {}", e))
-    }
-
-    /// List forensic sessions
-    pub async fn list_forensic_sessions(&self, repo_id: Option<&str>) -> Result<Vec<autopsy_storage::ForensicSessionRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_sessions(repo_id)
-            .map_err(|e| format!("Failed to list sessions: {}", e))
-    }
-
-    /// Get trajectory events
-    pub async fn get_trajectory_events(&self, session_id: &str) -> Result<Vec<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_events(session_id)
-            .map_err(|e| format!("Failed to get events: {}", e))
-    }
-
-    /// List forensic workflows
-    pub async fn list_forensic_workflows(&self, session_id: &str) -> Result<Vec<autopsy_storage::ForensicWorkflowRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .list_forensic_workflows(session_id)
-            .map_err(|e| format!("Failed to list workflows: {}", e))
-    }
-
-    /// Get AI session ledger
-    pub async fn get_ai_session_ledger(&self, session_id: &str) -> Result<Option<autopsy_storage::AiSessionLedgerRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_ai_session_ledger(session_id)
-            .map_err(|e| format!("Failed to get ledger: {}", e))
-    }
-
-    /// Get trajectory event
-    pub async fn get_trajectory_event(&self, session_id: &str, event_seq: i64) -> Result<Option<autopsy_storage::TrajectoryEventRecord>, String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .get_trajectory_event(session_id, event_seq)
-            .map_err(|e| format!("Failed to get trajectory event: {}", e))
-    }
-
-    /// Insert trajectory event
-    pub async fn insert_trajectory_event(&self, record: &autopsy_storage::TrajectoryEventRecord) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_trajectory_event(record)
-            .map_err(|e| format!("Failed to insert trajectory event: {}", e))
-    }
-
-    /// Update session activity
-    pub async fn update_session_activity(&self, session_id: &str, event_seq: i64, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .update_session_activity(session_id, event_seq, verdict)
-            .map_err(|e| format!("Failed to update session: {}", e))
-    }
-
-    /// Close forensic session
-    pub async fn close_forensic_session(&self, session_id: &str, verdict: &str) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .close_forensic_session(session_id, verdict)
-            .map_err(|e| format!("Failed to close session: {}", e))
-    }
-
-    /// Persist catalog entities
-    pub async fn persist_catalog_entities(&self, repo_id: &str, entities: &[autopsy_catalog::CatalogEntity]) -> Result<(), String> {
-        self.storage.lock().unwrap().as_ref()
-            .ok_or("Storage not available")?
-            .insert_catalog_entities(repo_id, entities)
-            .map_err(|e| format!("Failed to persist catalog entities: {}", e))
-    }
-}
-
-fn current_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
 }

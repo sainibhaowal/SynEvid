@@ -145,9 +145,7 @@ fn radius_of(root: &Path, reference: &str, strict: bool) -> extensions::Outcome 
 }
 
 fn radius_json(outcome: &extensions::Outcome) -> serde_json::Value {
-    let document: serde_json::Value =
-        serde_json::from_str(&outcome.json).expect("the CLI emits canonical JSON");
-    document["blast_radius"].clone()
+    outcome.envelope.payload["blast_radius"].clone()
 }
 
 #[test]
@@ -206,8 +204,7 @@ fn gate_the_output_always_has_both_halves_so_a_radius_can_be_checked() {
     let root = scratch("both-halves");
     catalog_fixture(&root);
     for reference in ["component:default/checkout", "component:default/ghost"] {
-        let document: serde_json::Value =
-            serde_json::from_str(&radius_of(&root, reference, false).json).expect("valid JSON");
+        let document = radius_of(&root, reference, false).envelope.payload.clone();
         let object = document.as_object().expect("an object");
         assert_eq!(
             object.keys().collect::<Vec<_>>(),
@@ -305,7 +302,7 @@ fn gate_the_radius_output_is_byte_identical_across_ten_runs() {
     let first = radius_of(&root, "component:default/checkout", false);
     for run in 0..10 {
         let again = radius_of(&root, "component:default/checkout", false);
-        assert_eq!(first.json, again.json, "run {run} differed");
+        assert_eq!(first.envelope.payload, again.envelope.payload, "run {run} differed");
         assert_eq!(first.exit_code, again.exit_code, "run {run} differed");
     }
 }

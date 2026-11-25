@@ -1,48 +1,248 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://synevid.local/schemas/evidence-envelope.schema.json",
-  "title": "SynEvid Shared Evidence Envelope",
-  "description": "The transport contract shared by Rust, daemon, CLI, TUI, MCP, and web adapters. Null means the producer could not establish that fact and must not be interpreted as PASS.",
-  "type": "object",
-  "additionalProperties": true,
-  "required": [
-    "operation_id",
-    "repository_id",
-    "canonical_path",
-    "snapshot_id",
-    "coverage_state",
-    "verdict",
-    "warnings",
-    "latency_ms",
-    "blake3_digest",
-    "evidence_receipt"
-  ],
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CoverageState": {
+      "description": "Canonical coverage states",
+      "oneOf": [
+        {
+          "description": "All analyzed files carried full adapter coverage",
+          "enum": [
+            "verified"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A stated construct (dynamic/unsupported) limited the graph",
+          "enum": [
+            "partial"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Engine refuses to pretend",
+          "enum": [
+            "unknown"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Coverage could not be determined",
+          "enum": [
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Coverage determination failed",
+          "enum": [
+            "error"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "EvidenceReceipt": {
+      "description": "Evidence receipt with provenance",
+      "properties": {
+        "adapter_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Adapter versions used",
+          "type": "object"
+        },
+        "algorithm": {
+          "description": "Hash algorithm used",
+          "type": "string"
+        },
+        "digest": {
+          "description": "BLAKE3 digest of the canonical response",
+          "type": "string"
+        },
+        "engine_version": {
+          "description": "Engine version that produced this envelope",
+          "type": "string"
+        },
+        "source": {
+          "description": "Source of this envelope",
+          "type": "string"
+        },
+        "test_reference": {
+          "description": "Test reference schema",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "Timestamp of envelope creation (operational metadata only)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "engine_version",
+        "source",
+        "test_reference",
+        "timestamp"
+      ],
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "Canonical verdict states - hard boundary: UNKNOWN/PARTIAL can never become PASS",
+      "oneOf": [
+        {
+          "description": "No violation found within verified scope",
+          "enum": [
+            "PASS"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Verified violation exists",
+          "enum": [
+            "FAIL"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Possible issue but not conclusive",
+          "enum": [
+            "WARN"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Some relevant input/behavior not analyzable",
+          "enum": [
+            "PARTIAL"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Engine cannot prove the claim",
+          "enum": [
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Operation could not complete",
+          "enum": [
+            "ERROR"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Required service/artifact not reachable",
+          "enum": [
+            "UNAVAILABLE"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Canonical evidence envelope - the single source of truth for all responses",
   "properties": {
-    "operation_id": { "type": ["string", "null"] },
-    "repository_id": { "type": ["string", "null"] },
-    "canonical_path": { "type": ["string", "null"] },
-    "snapshot_id": { "type": ["string", "null"] },
+    "blake3_digest": {
+      "description": "BLAKE3 digest of the canonical response body",
+      "type": "string"
+    },
+    "canonical_path": {
+      "description": "Canonical repository path",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "coverage_state": {
-      "type": "string",
-      "enum": ["verified", "partial", "unknown", "error", "unavailable"]
+      "allOf": [
+        {
+          "$ref": "#/definitions/CoverageState"
+        }
+      ],
+      "description": "Coverage state - MUST be one of the canonical states"
+    },
+    "event_seq": {
+      "description": "Event sequence number (for live event replay)",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "evidence_receipt": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EvidenceReceipt"
+        }
+      ],
+      "description": "Evidence receipt with provenance"
+    },
+    "latency_ms": {
+      "description": "Request latency in milliseconds",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "operation_id": {
+      "description": "Unique operation identifier (BLAKE3 over canonical request)",
+      "type": "string"
+    },
+    "repository_id": {
+      "description": "Repository identity",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_id": {
+      "description": "Session identity (for forensic sessions)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshot_id": {
+      "description": "Snapshot identity (if applicable)",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "verdict": {
-      "type": "string",
-      "enum": ["VERIFIED", "PASS", "FAIL", "WARN", "PARTIAL", "UNKNOWN", "ERROR", "UNAVAILABLE", "INFO"]
+      "allOf": [
+        {
+          "$ref": "#/definitions/Verdict"
+        }
+      ],
+      "description": "Verdict - MUST be one of the canonical states"
     },
-    "warnings": { "type": "array", "items": { "type": "string" } },
-    "latency_ms": { "type": ["number", "null"], "minimum": 0 },
-    "blake3_digest": { "type": ["string", "null"], "pattern": "^blake3:[0-9a-f]{64}$" },
-    "evidence_receipt": {
-      "type": ["object", "null"],
-      "required": ["algorithm", "digest", "source"],
-      "properties": {
-        "algorithm": { "const": "BLAKE3" },
-        "digest": { "type": ["string", "null"] },
-        "source": { "type": "string", "minLength": 1 },
-        "test_reference": { "type": ["string", "null"] }
+    "warnings": {
+      "default": [],
+      "description": "Warnings (non-fatal issues)",
+      "items": {
+        "type": "string"
       },
-      "additionalProperties": true
+      "type": "array"
+    },
+    "workflow_id": {
+      "description": "Workflow identity (for multi-step operations)",
+      "type": [
+        "string",
+        "null"
+      ]
     }
-  }
+  },
+  "required": [
+    "blake3_digest",
+    "coverage_state",
+    "evidence_receipt",
+    "operation_id",
+    "verdict"
+  ],
+  "title": "EvidenceEnvelope",
+  "type": "object"
 }

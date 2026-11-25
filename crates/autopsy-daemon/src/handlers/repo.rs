@@ -16,12 +16,13 @@ pub struct ConnectRequest {
     pub display_name: Option<String>,
 }
 
+#[axum::debug_handler]
 pub async fn connect(
     State(state): State<crate::AppState>,
     Json(request): Json<ConnectRequest>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let repo_manager = &state.repository_manager;
-    let record = repo_manager.connect_repository(&request.root_path, request.display_name).await?;
+    let record = repo_manager.register_repository(&std::path::PathBuf::from(&request.root_path), request.display_name).await?;
     
     Ok(Json(json!({
         "status": "connected",
@@ -39,10 +40,11 @@ pub async fn connect(
 }
 
 /// List all repositories
+#[axum::debug_handler]
 pub async fn list(
     State(state): State<crate::AppState>,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    let repos = state.repository_manager.list_repositories().await?;
+    let repos = state.repository_manager.list_repositories();
     
     Ok(Json(json!(repos)))
 }
@@ -53,6 +55,7 @@ pub struct SwitchRequest {
     pub repo_id: String,
 }
 
+#[axum::debug_handler]
 pub async fn switch(
     State(state): State<crate::AppState>,
     Json(request): Json<SwitchRequest>,
@@ -76,6 +79,7 @@ pub struct RemoveRequest {
     pub repo_id: String,
 }
 
+#[axum::debug_handler]
 pub async fn remove(
     State(state): State<crate::AppState>,
     Json(request): Json<RemoveRequest>,
@@ -89,17 +93,20 @@ pub async fn remove(
 }
 
 /// Export repository
+#[axum::debug_handler]
 pub async fn export(
     State(state): State<crate::AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    let active_repo_id = state.repository_manager.get_active_repo_id();
     let repo_id = params.get("repo_id")
-        .or_else(|| state.repository_manager.get_active_repo_id().await.as_ref())
+        .cloned()
+        .or(active_repo_id)
         .ok_or_else(|| crate::error::AppError::Repository("No active repository".to_string()))?;
     
     let snapshot_id = params.get("snapshot_id")
         .cloned()
-        .or_else(|| state.repository_manager.get_repository(&params["repo_id"]).await?.and_then(|r| r.latest_snap_id))
+        .or_else(|| state.repository_manager.get_repository(&repo_id).and_then(|r| r.latest_snap_id))
         .ok_or_else(|| crate::error::AppError::Repository("No snapshot available".to_string()))?;
     
     // Export would be implemented here
@@ -111,6 +118,7 @@ pub async fn export(
 }
 
 /// List repositories (legacy endpoint)
+#[axum::debug_handler]
 pub async fn list_repos(
     State(state): State<crate::AppState>,
 ) -> Result<Json<Value>, crate::error::AppError> {
@@ -123,13 +131,13 @@ pub struct BrowseRequest {
     pub path: Option<String>,
 }
 
+#[axum::debug_handler]
 pub async fn browse(
     State(state): State<crate::AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let path = params.get("path").map(|s| s.as_str()).unwrap_or("");
-    let repo_manager = &state.repository_manager;
-    let repo_id = state.repository_manager.get_active_repo_id().await
+    let _repo_id = state.repository_manager.get_active_repo_id()
         .ok_or_else(|| crate::error::AppError::Repository("No active repository".to_string()))?;
     
     // Browse would be implemented here
@@ -143,11 +151,11 @@ pub async fn browse(
 }
 
 /// List discovered files
+#[axum::debug_handler]
 pub async fn files(
     State(state): State<crate::AppState>,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    let repo_manager = &state.repository_manager;
-    let repo_id = state.repository_manager.get_active_repo_id().await
+    let repo_id = state.repository_manager.get_active_repo_id()
         .ok_or_else(|| crate::error::AppError::Repository("No active repository".to_string()))?;
     
     Ok(Json(json!({
@@ -158,6 +166,7 @@ pub async fn files(
 }
 
 /// Get file content
+#[axum::debug_handler]
 pub async fn file_content(
     State(state): State<crate::AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,

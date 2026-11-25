@@ -1369,17 +1369,43 @@ pub fn handle_via_daemon(cli: &Cli) -> Result<i32, CliError> {
 }
 
 fn print_result(cli: &Cli, value: &Value) -> Result<i32, CliError> {
+    // Try to deserialize as EvidenceEnvelope first (new format)
+    let envelope = serde_json::from_value::<autopsy_envelope::EvidenceEnvelope>(value.clone())
+        .unwrap_or_else(|_| autopsy_envelope::EvidenceEnvelope {
+            operation_id: "legacy".to_string(),
+            repository_id: None,
+            canonical_path: None,
+            snapshot_id: None,
+            session_id: None,
+            workflow_id: None,
+            event_seq: None,
+            verdict: autopsy_envelope::Verdict::Unknown,
+            coverage_state: autopsy_envelope::CoverageState::Unknown,
+            warnings: vec![],
+            latency_ms: None,
+            blake3_digest: "".to_string(),
+            evidence_receipt: autopsy_envelope::EvidenceReceipt {
+                algorithm: "BLAKE3".to_string(),
+                digest: "".to_string(),
+                source: "legacy".to_string(),
+                test_reference: "".to_string(),
+                timestamp: chrono::Utc::now(),
+                engine_version: "0.6.0".to_string(),
+                adapter_versions: Default::default(),
+            },
+            payload: value.clone(),
+        });
+    
     match cli.format {
         OutputFormat::Json => println!(
             "{}",
-            serde_json::to_string_pretty(value)
+            serde_json::to_string_pretty(&envelope)
                 .map_err(|error| CliError::Analysis(error.to_string()))?
         ),
         OutputFormat::Text => {
             println!(
                 "daemon: {}",
-                value
-                    .get("status")
+                envelope.payload.get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("UNKNOWN")
             );
@@ -1390,7 +1416,7 @@ fn print_result(cli: &Cli, value: &Value) -> Result<i32, CliError> {
                 "last_event_seq",
                 "storage_health",
             ] {
-                if let Some(item) = value.get(key) {
+                if let Some(item) = envelope.payload.get(key) {
                     let rendered = item
                         .as_str()
                         .map(str::to_owned)
@@ -1401,7 +1427,7 @@ fn print_result(cli: &Cli, value: &Value) -> Result<i32, CliError> {
         }
         OutputFormat::Sarif => println!(
             "{}",
-            serde_json::to_string(value).map_err(|error| CliError::Analysis(error.to_string()))?
+            serde_json::to_string(&envelope).map_err(|error| CliError::Analysis(error.to_string()))?
         ),
     }
     Ok(EXIT_PASS)

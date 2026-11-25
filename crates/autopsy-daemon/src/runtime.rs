@@ -43,8 +43,14 @@ impl From<String> for ClientType {
 }
 
 /// Lease identifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RuntimeLeaseId(pub String);
+
+impl std::fmt::Display for RuntimeLeaseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// Runtime lease record
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,8 +139,8 @@ impl RuntimeManager {
         workflow_id: Option<String>,
         last_event_seq: Option<i64>,
     ) -> Result<serde_json::Value, String> {
-        let client_id = crate::ClientId(client_id);
-        let client_type = client_type.into();
+        let client_id = ClientId(client_id);
+        let client_type: ClientType = client_type.into();
 
         // Generate lease ID
         let lease_id = RuntimeLeaseId(self.generate_lease_id(&client_id));
@@ -147,7 +153,7 @@ impl RuntimeManager {
         let lease = RuntimeLease {
             lease_id: lease_id.clone(),
             client_id: client_id.clone(),
-            client_type: client_type.into(),
+            client_type,
             repository_id: repository_id.clone(),
             session_id: session_id.clone(),
             workflow_id: workflow_id.clone(),
@@ -166,10 +172,12 @@ impl RuntimeManager {
             *self.active_session_id.write() = Some(session_id.clone());
         }
 
+        let client_type_for_log = lease.client_type.clone();
+
         // Store lease
         self.leases.write().insert(lease_id.clone(), lease);
 
-        info!("Runtime connected: client_id={}, client_type={:?}, lease_id={}", client_id.0, client_type, lease_id.0);
+        info!("Runtime connected: client_id={}, client_type={:?}, lease_id={}", client_id.0, client_type_for_log, lease_id.0);
 
         Ok(serde_json::json!({
             "lease_id": lease_id.0,
@@ -224,11 +232,11 @@ impl RuntimeManager {
             // Try to find lease by client_id
             self.leases.read().iter()
                 .find(|(_, l)| l.client_id.0 == client_id.as_deref().unwrap_or(""))
-                .map(|(id, _)| id.clone())
+                .map(|(id, _)| id.0.clone())
         });
 
         if let Some(lease_id) = lease_id {
-            self.leases.write().remove(&RuntimeLeaseId(lease_id));
+            self.leases.write().remove(&RuntimeLeaseId(lease_id.clone()));
             info!("Runtime disconnected: lease_id={}", lease_id);
         }
 
@@ -304,19 +312,19 @@ impl RuntimeManager {
         events: &Arc<crate::events::EventStore>,
     ) -> Result<(), String> {
         // Restore active repository from storage
-        if let Some(repo_id) = repositories.get_stored_active_repo().await? {
+        if let Some(repo_id) = repositories.get_stored_active_repo().await.map_err(|e| e.to_string())? {
             *self.active_repo_id.write() = Some(repo_id);
         }
 
         // Restore active session from events
-        if let Some(session_id) = events.get_latest_session().await? {
+        if let Some(session_id) = events.get_latest_session().await.map_err(|e| e.to_string())? {
             *self.active_session_id.write() = Some(session_id);
         }
 
         Ok(())
     }
 
-    fn generate_lease_id(&self, client_id: &crate::ClientId) -> String {
+    fn generate_lease_id(&self, client_id: &ClientId) -> String {
         let mut counter = self.lease_counter.lock().unwrap();
         *counter += 1;
         let input = format!("{}-{}-{}", client_id.0, *counter, std::time::SystemTime::now()

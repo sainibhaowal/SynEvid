@@ -3,13 +3,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use blake3;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use rusqlite;
 
 /// Event sequence ID (monotonic)
@@ -41,8 +40,8 @@ pub struct EventStore {
     next_seq: Arc<Mutex<EventSeq>>,
     // Broadcast channel for live subscribers
     broadcast_tx: broadcast::Sender<EventRecord>,
-    // SQLite storage (optional, for durability)
-    sqlite: Option<Arc<rusqlite::Connection>>,
+    // SQLite storage (optional, for durability) - wrapped in Mutex for Send/Sync
+    sqlite: Arc<Mutex<Option<rusqlite::Connection>>>,
 }
 
 impl EventStore {
@@ -51,39 +50,43 @@ impl EventStore {
         let (broadcast_tx, _) = broadcast::channel(10000);
 
         // Initialize SQLite for durable event storage
-        let sqlite = if storage_path.exists() || storage_path.parent().map(|p| p.exists()).unwrap_or(false) {
-            let conn = rusqlite::Connection::open(&storage_path)?;
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS events (
-                    seq_id INTEGER PRIMARY KEY,
-                    event_type TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    source_client_id TEXT NOT NULL,
-                    source_client_type TEXT NOT NULL,
-                    source_lease_id TEXT,
-                    repository_id TEXT,
-                    session_id TEXT,
-                    workflow_id TEXT,
-                    payload TEXT NOT NULL,
-                    evidence_digest TEXT NOT NULL
-                )",
-                [],
-            )?;
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_seq ON events(seq_id)", [])?;
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repository_id)", [])?;
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)", [])?;
-            Some(Arc::new(conn))
-        } else {
-            None
-        };
+        let sqlite = Arc::new(Mutex::new(None));
+        let storage_path_clone = storage_path.clone();
+        
+        // Initialize database in a blocking task
+        let conn = rusqlite::Connection::open(&storage_path_clone)?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS events (
+                seq_id INTEGER PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                source_client_id TEXT NOT NULL,
+                source_client_type TEXT NOT NULL,
+                source_lease_id TEXT,
+                repository_id TEXT,
+                session_id TEXT,
+                workflow_id TEXT,
+                payload TEXT NOT NULL,
+                evidence_digest TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_seq ON events(seq_id)", [])?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repository_id)", [])?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)", [])?;
+        
+        *sqlite.lock().unwrap() = Some(conn);
 
         // Load last sequence ID from SQLite
-        let next_seq = if let Some(conn) = &sqlite {
-            let mut stmt = conn.prepare("SELECT COALESCE(MAX(seq_id), 0) + 1 FROM events")?;
-            let seq: i64 = stmt.next()?.and_then(|row| row.read::<i64, _>(0).ok()).unwrap_or(1);
-            Arc::new(Mutex::new(seq))
-        } else {
-            Arc::new(Mutex::new(1))
+        let next_seq = {
+            let conn_guard = sqlite.lock().unwrap();
+            if let Some(conn) = conn_guard.as_ref() {
+                let mut stmt = conn.prepare("SELECT COALESCE(MAX(seq_id), 0) + 1 FROM events")?;
+                let seq: i64 = stmt.query_row([], |row| row.get(0)).unwrap_or(1);
+                Arc::new(Mutex::new(seq))
+            } else {
+                Arc::new(Mutex::new(1))
+            }
         };
 
         Ok(Self {
@@ -100,127 +103,98 @@ impl EventStore {
         self.broadcast_tx.subscribe()
     }
 
-    /// Publish a new event
-    pub fn publish(
-        &self,
-        event_type: &str,
-        payload: Value,
-        source_client_id: &str,
-        source_client_type: &str,
-        source_lease_id: Option<&str>,
-        repository_id: Option<&str>,
-        session_id: Option<&str>,
-        workflow_id: Option<&str>,
-    ) -> EventSeq {
+    /// Append an event to the store
+    pub async fn append(&self, mut event: EventRecord) -> EventSeq {
+        // Assign sequence ID
         let seq = {
             let mut next = self.next_seq.lock().unwrap();
-            let seq = *next;
             *next += 1;
-            seq
+            *next
         };
+        event.seq_id = seq;
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-
-        // Compute evidence digest
-        let digest_input = format!("{}:{}:{}", seq, event_type, payload);
-        let evidence_digest = format!("blake3:{}", blake3::hash(digest_input.as_bytes()).to_hex());
-
-        let event = EventRecord {
-            seq_id: seq,
-            event_type: event_type.to_string(),
-            timestamp,
-            source_client_id: source_client_id.to_string(),
-            source_client_type: source_client_type.to_string(),
-            source_lease_id: source_lease_id.map(|s| s.to_string()),
-            repository_id: repository_id.map(|s| s.to_string()),
-            session_id: session_id.map(|s| s.to_string()),
-            workflow_id: workflow_id.map(|s| s.to_string()),
-            payload,
-            evidence_digest,
-        };
-
-        // Store in memory buffer
-        {
-            let mut buffer = self.memory_buffer.write();
-            buffer.insert(seq, event.clone());
-            
-            // Keep only last 10000 events in memory
-            if buffer.len() > 10000 {
-                let first_key = *buffer.keys().next().unwrap();
-                buffer.remove(&first_key);
-            }
-        }
-
-        // Persist to SQLite
-        if let Some(conn) = &self.sqlite {
-            let payload_json = serde_json::to_string(&event.payload).unwrap_or_default();
-            if let Err(e) = conn.execute(
-                "INSERT INTO events (seq_id, event_type, timestamp, source_client_id, source_client_type, source_lease_id, repository_id, session_id, workflow_id, payload, evidence_digest)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    seq,
-                    &event.event_type,
-                    event.timestamp as i64,
-                    &event.source_client_id,
-                    &event.source_client_type,
-                    &event.source_lease_id,
-                    &event.repository_id,
-                    &event.session_id,
-                    &event.workflow_id,
-                    &payload_json,
-                    &event.evidence_digest,
-                ]
-            ) {
-                warn!("Failed to persist event to SQLite: {}", e);
-            }
-        }
+        // Add to memory buffer
+        self.memory_buffer.write().insert(seq, event.clone());
 
         // Broadcast to subscribers
-        let _ = self.broadcast_tx.send(event);
+        let _ = self.broadcast_tx.send(event.clone());
 
-        debug!("Published event seq={} type={}", seq, event_type);
+        // Persist to SQLite in background
+        let sqlite = self.sqlite.clone();
+        let event_clone = event.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(mut conn_guard) = sqlite.lock() {
+                if let Some(conn) = conn_guard.as_mut() {
+                    let _ = conn.execute(
+                        "INSERT INTO events (seq_id, event_type, timestamp, source_client_id, source_client_type, source_lease_id, repository_id, session_id, workflow_id, payload, evidence_digest)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        rusqlite::params![
+                            event_clone.seq_id,
+                            event_clone.event_type,
+                            event_clone.timestamp as i64,
+                            event_clone.source_client_id,
+                            event_clone.source_client_type,
+                            event_clone.source_lease_id,
+                            event_clone.repository_id,
+                            event_clone.session_id,
+                            event_clone.workflow_id,
+                            serde_json::to_string(&event_clone.payload).unwrap_or_default(),
+                            event_clone.evidence_digest,
+                        ],
+                    );
+                }
+            }
+        });
+
         seq
     }
 
-    /// Get events since a sequence ID (for replay)
-    pub fn get_events_since(&self, since_seq: EventSeq, limit: usize) -> Vec<EventRecord> {
-        // First check memory buffer
-        let buffer = self.memory_buffer.read();
-        let mut events: Vec<_> = buffer.range((since_seq + 1)..)
+    /// Get events since a sequence ID
+    pub async fn get_events_since(&self, since_seq: EventSeq, limit: usize) -> Vec<EventRecord> {
+        let mut events: Vec<EventRecord> = self.memory_buffer.read()
+            .range((std::ops::Bound::Excluded(since_seq), std::ops::Bound::Unbounded))
             .take(limit)
             .map(|(_, v)| v.clone())
             .collect();
 
-        if events.len() >= limit {
-            return events;
-        }
-
         // If not enough in memory, query SQLite
-        if let Some(conn) = &self.sqlite {
+        if events.len() < limit {
             let remaining = limit - events.len();
-            let mut stmt = conn.prepare(
-                "SELECT seq_id, event_type, timestamp, source_client_id, source_client_type, 
-                       source_lease_id, repository_id, session_id, workflow_id, payload, evidence_digest
-                 FROM events 
-                 WHERE seq_id > ? 
-                 ORDER BY seq_id ASC 
-                 LIMIT ?"
-            ).ok();
+            let sqlite = self.sqlite.clone();
+            let since = since_seq;
             
-            if let Some(mut stmt) = stmt {
-                if let Ok(rows) = stmt.query(rusqlite::params![since_seq, remaining as i64]) {
-                    for row in rows {
-                        if let Ok(event) = Self::row_to_event(&row) {
-                            // Avoid duplicates from memory buffer
-                            if !events.iter().any(|e| e.seq_id == event.seq_id) {
-                                events.push(event);
+            // Use blocking task for SQLite query
+            if let Ok(extra_events) = tokio::task::spawn_blocking(move || {
+                let mut extra = Vec::new();
+                if let Ok(conn_guard) = sqlite.lock() {
+                    if let Some(conn) = conn_guard.as_ref() {
+                        let mut stmt = conn.prepare(
+                            "SELECT seq_id, event_type, timestamp, source_client_id, source_client_type, 
+                                   source_lease_id, repository_id, session_id, workflow_id, payload, evidence_digest
+                              FROM events 
+                              WHERE seq_id > ? 
+                              ORDER BY seq_id ASC 
+                              LIMIT ?"
+                        ).ok();
+                        
+                        if let Some(mut stmt) = stmt {
+                            let rows = stmt.query(rusqlite::params![since, remaining as i64]);
+                            if let Ok(mut rows) = rows {
+                                while let Some(row) = rows.next().ok().flatten() {
+                                    if let Ok(event) = Self::row_to_event(row) {
+                                        // Avoid duplicates from memory buffer
+                                        if !extra.iter().any(|e: &EventRecord| e.seq_id == event.seq_id) {
+                                            extra.push(event);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                extra
+            }).await {
+                events.extend(extra_events);
             }
         }
 
@@ -229,42 +203,50 @@ impl EventStore {
 
     /// Get latest event sequence ID
     pub fn latest_seq(&self) -> EventSeq {
-        *self.next_seq.lock().unwrap().saturating_sub(1)
+        self.next_seq.lock().unwrap().saturating_sub(1)
     }
 
     /// Get latest session ID from events
     pub async fn get_latest_session(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        if let Some(conn) = &self.sqlite {
-            let mut stmt = conn.prepare(
-                "SELECT DISTINCT session_id FROM events 
-                 WHERE session_id IS NOT NULL 
-                 ORDER BY seq_id DESC LIMIT 1"
-            )?;
-            if let Ok(mut rows) = stmt.query([]) {
-                if let Some(row) = rows.next()? {
-                    return Ok(row.read::<String, _>(0).ok());
+        let sqlite = self.sqlite.clone();
+        let session_id = tokio::task::spawn_blocking(move || -> Result<Option<String>, rusqlite::Error> {
+            if let Ok(conn_guard) = sqlite.lock() {
+                if let Some(conn) = conn_guard.as_ref() {
+                    let mut stmt = conn.prepare(
+                        "SELECT DISTINCT session_id FROM events 
+                         WHERE session_id IS NOT NULL 
+                         ORDER BY seq_id DESC LIMIT 1"
+                    )?;
+                    let mut rows = stmt.query([])?;
+                    if let Some(row) = rows.next()? {
+                        return Ok(row.get(0).ok());
+                    }
                 }
             }
-        }
-        Ok(None)
+            Ok(None)
+        }).await??;
+        
+        Ok(session_id)
     }
 
     fn row_to_event(row: &rusqlite::Row) -> Result<EventRecord, rusqlite::Error> {
-        let payload_str: String = row.read(9)?;
+        let payload_str: String = row.get(9)?;
         let payload: Value = serde_json::from_str(&payload_str).unwrap_or(Value::Null);
         
+        let timestamp: i64 = row.get(2)?;
+        
         Ok(EventRecord {
-            seq_id: row.read(0)?,
-            event_type: row.read(1)?,
-            timestamp: row.read::<i64, _>(2)? as u64,
-            source_client_id: row.read(3)?,
-            source_client_type: row.read(4)?,
-            source_lease_id: row.read(5)?,
-            repository_id: row.read(6)?,
-            session_id: row.read(7)?,
-            workflow_id: row.read(8)?,
+            seq_id: row.get(0)?,
+            event_type: row.get(1)?,
+            timestamp: timestamp as u64,
+            source_client_id: row.get(3)?,
+            source_client_type: row.get(4)?,
+            source_lease_id: row.get(5)?,
+            repository_id: row.get(6)?,
+            session_id: row.get(7)?,
+            workflow_id: row.get(8)?,
             payload,
-            evidence_digest: row.read(10)?,
+            evidence_digest: row.get(10)?,
         })
     }
 }

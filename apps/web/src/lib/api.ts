@@ -1,5 +1,27 @@
 // SynEvid Reactive Engine & Daemon API Client (v0.6.0)
-// Connects to local daemon on http://127.0.0.1:3333 (synevid-ui or autopsy ui)
+// Connects to local daemon on http://127.0.0.1:3333 (autopsy-daemon)
+
+import type { 
+  EvidenceEnvelope, 
+  Verdict, 
+  CoverageState, 
+  EvidenceReceipt,
+  CommandRequest,
+  CommandResponse,
+  ClientType,
+  OutputFormat,
+  CancellationToken,
+  EventRecord,
+  RuntimeLease,
+  RuntimeConnectRequest,
+  RuntimeHeartbeatRequest,
+  RuntimeDisconnectRequest,
+  CommandDefinition,
+  OFFLINE_COMMANDS,
+  supportsOffline
+} from '@/types/command-protocol';
+
+import type { EvidenceEnvelope as SharedEvidenceEnvelope } from '@/types/evidence-envelope';
 
 export interface GitMutationResult {
   success: boolean;

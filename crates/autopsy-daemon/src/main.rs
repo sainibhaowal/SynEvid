@@ -4,13 +4,23 @@
 //! - `autopsy ui` (CLI-embedded server in crates/autopsy-cli/src/ui.rs)
 //! - `synevid-ui` (Electron sidecar in apps/synevid-ui/src/server.rs)
 //!
-//! This is a thin wrapper that delegates to the working `synevid-ui` implementation.
+//! This binary now runs the complete server implementation directly.
 //! All clients (CLI, TUI, MCP, Web, Electron) connect to this daemon.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use axum::serve;
 use clap::Parser;
-use synevid_ui::server::DashboardServer;
+use autopsy_daemon::server::router;
+use autopsy_daemon::config::DaemonConfig;
+use autopsy_daemon::events::EventStore;
+use autopsy_daemon::runtime::RuntimeManager;
+use autopsy_daemon::repository::RepositoryManager;
+use autopsy_daemon::auth::LoopbackAuth;
+use autopsy_daemon::AppState;
+use autopsy_daemon::error::AppError;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,7 +63,8 @@ struct Args {
     json_logs: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Initialize tracing
@@ -133,20 +144,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Managed runtime: {}", args.managed_runtime);
     tracing::info!("Auth enabled: {}", !args.no_auth);
 
-    // Create and run server
-    let addr: std::net::SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
-    let server = if args.managed_runtime {
-        DashboardServer::new_managed_runtime(repo_root, args.host.clone(), args.port)
+    // Create application state
+    let loopback_auth = if args.no_auth {
+        Arc::new(autopsy_daemon::auth::LoopbackAuth::disabled())
     } else {
-        DashboardServer::new(repo_root, args.host.clone(), args.port)
+        Arc::new(autopsy_daemon::auth::LoopbackAuth::new(&data_dir)?)
     };
 
+    let event_store = Arc::new(autopsy_daemon::events::EventStore::new(&data_dir)?);
+    let runtime_manager = Arc::new(autopsy_daemon::runtime::RuntimeManager::new(loopback_auth.clone()));
+    let repository_manager = Arc::new(autopsy_daemon::repository::RepositoryManager::new(&data_dir, loopback_auth.clone()).await?);
+
+    let config = autopsy_daemon::config::DaemonConfig {
+        host: args.host.clone(),
+        port: args.port,
+        data_dir: data_dir.clone(),
+        repo_root: Some(repo_root.clone()),
+        managed_runtime: args.managed_runtime,
+        no_auth: args.no_auth,
+        log_level: args.log_level.clone(),
+        ..Default::default()
+    };
+
+    let state = AppState {
+        config,
+        event_store,
+        runtime_manager,
+        repository_manager,
+        loopback_auth,
+    };
+
+    // Build router
+    let app = router(state.clone())?.with_state(state);
+
+    // Determine address
+    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
+
+    tracing::info!(
+        "Starting SynEvid Authenticated Daemon v{}",
+        env!("CARGO_PKG_VERSION")
+    );
+    tracing::info!("Managed runtime: {}", args.managed_runtime);
+    tracing::info!("Auth enabled: {}", !args.no_auth);
     tracing::info!("Daemon listening on http://{}", addr);
     tracing::info!("Data directory: {}", data_dir.display());
     tracing::info!("Press Ctrl+C to stop");
 
-    // Run server (blocks until shutdown)
-    server.run()?;
+    // Run server
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve(listener, app).await?;
 
     Ok(())
 }

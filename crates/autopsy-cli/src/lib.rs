@@ -272,6 +272,8 @@ pub enum CliError {
     Report(#[from] autopsy_report::ReportError),
     #[error("Invariant error: {0}")]
     Invariant(String),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 /// Baseline debt configuration (.autopsy/baseline.json).
@@ -404,6 +406,11 @@ impl CliError {
                 "io_failure",
                 "a filesystem read/write failed outside storage",
                 "check file permissions and path existence, then re-run the command",
+            ),
+            CliError::Serialization(_) => config(
+                "serialization_failed",
+                "a JSON serialization or deserialization operation failed",
+                "verify the input data structure matches the expected schema, then re-run the command",
             ),
             CliError::Report(_) => config(
                 "report_render_failed",
@@ -1384,8 +1391,8 @@ fn run_extension(
         // Persistence reads the **full** report: a compact agent view is a presentation
         // choice, not the engine's answer, and a slice that is persisted as if it were
         // the whole would be a lie with rows in it.
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&outcome.json) {
-            if let Ok(storage) = get_storage(cli) {
+        let value = &outcome.envelope.payload;
+        if let Ok(storage) = get_storage(cli) {
                 // Temporal journal: `journal` is the engine's canonical projection,
                 // an array of facts.
                 if let Some(facts) = value.get("journal").and_then(|v| v.as_array()) {
@@ -1514,9 +1521,8 @@ fn run_extension(
                     }
                 }
             }
-        }
         if let Ok(note) =
-            extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.json)
+            extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.envelope.payload)
         {
             println!("{}", note);
         }

@@ -46,11 +46,6 @@ pub const OFFLINE_COMMANDS: &[&str] = &[
     "version",
 ];
 
-/// Check if a command supports offline mode
-pub fn supports_offline(command_id: &str) -> bool {
-    OFFLINE_COMMANDS.contains(&command_id)
-}
-
 /// Unique command identifier
 pub type CommandId = String;
 
@@ -998,6 +993,10 @@ pub fn all_commands() -> Vec<CommandDefinition> {
         },
     ]
 }
+
+/// Offline mode validation
+pub mod offline;
+pub use offline::{validate_offline_mode, supports_offline};
 
 /// Generate JSON Schema for the protocol
 pub fn generate_schema() -> serde_json::Value {

@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use figment::{Figment, providers::{Format, Toml, Env}};
+use figment::{Figment, providers::{Format, Toml, Env, Serialized}};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DurationSeconds};
 
 /// Daemon configuration loaded from CLI args, env vars, and config file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,15 +28,12 @@ pub struct DaemonConfig {
     pub log_level: String,
     /// Enable structured JSON logging
     pub json_logs: bool,
-    /// Read timeout for requests
-    #[serde_as(as = "DurationSeconds<u64>")]
-    pub read_timeout: Duration,
-    /// Write timeout for responses
-    #[serde_as(as = "DurationSeconds<u64>")]
-    pub write_timeout: Duration,
-    /// Idle timeout for keep-alive connections
-    #[serde_as(as = "DurationSeconds<u64>")]
-    pub idle_timeout: Duration,
+    /// Read timeout for requests (seconds)
+    pub read_timeout_secs: u64,
+    /// Write timeout for responses (seconds)
+    pub write_timeout_secs: u64,
+    /// Idle timeout for keep-alive connections (seconds)
+    pub idle_timeout_secs: u64,
     /// Max request body size (bytes)
     pub max_body_size: usize,
     /// Enable WebSocket support
@@ -46,9 +42,8 @@ pub struct DaemonConfig {
     pub max_ws_frame_size: usize,
     /// Max concurrent connections
     pub max_connections: usize,
-    /// Request timeout
-    #[serde_as(as = "DurationSeconds<u64>")]
-    pub request_timeout: Duration,
+    /// Request timeout (seconds)
+    pub request_timeout_secs: u64,
     /// Enable request/response compression
     pub compression: bool,
     /// Trusted proxy headers
@@ -66,16 +61,16 @@ impl Default for DaemonConfig {
             no_auth: false,
             log_level: "info".to_string(),
             json_logs: false,
-            read_timeout: Duration::from_secs(30),
-            write_timeout: Duration::from_secs(30),
-            idle_timeout: Duration::from_secs(60),
-            max_body_size: 50 * 1024 * 1024, // 50MB
+            read_timeout_secs: 30,
+            write_timeout_secs: 30,
+            idle_timeout_secs: 60,
+            max_body_size: 1024 * 1024 * 10, // 10 MB
             enable_websocket: true,
-            max_ws_frame_size: 16 * 1024 * 1024, // 16MB
+            max_ws_frame_size: 1024 * 1024, // 1 MB
             max_connections: 1000,
-            request_timeout: Duration::from_secs(120),
+            request_timeout_secs: 60,
             compression: true,
-            trusted_proxies: vec!["127.0.0.1".to_string(), "::1".to_string()],
+            trusted_proxies: vec![],
         }
     }
 }
@@ -126,6 +121,22 @@ impl DaemonConfig {
         }
         
         Ok(config)
+    }
+    
+    pub fn read_timeout(&self) -> Duration {
+        Duration::from_secs(self.read_timeout_secs)
+    }
+    
+    pub fn write_timeout(&self) -> Duration {
+        Duration::from_secs(self.write_timeout_secs)
+    }
+    
+    pub fn idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.idle_timeout_secs)
+    }
+    
+    pub fn request_timeout(&self) -> Duration {
+        Duration::from_secs(self.request_timeout_secs)
     }
     
     pub fn socket_addr(&self) -> SocketAddr {

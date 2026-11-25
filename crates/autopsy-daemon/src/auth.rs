@@ -100,7 +100,7 @@ impl LoopbackAuth {
             })
     }
 
-    pub fn disabled(&self) -> bool {
+    pub fn is_disabled(&self) -> bool {
         self.disabled
     }
 }

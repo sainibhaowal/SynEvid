@@ -113,3 +113,15 @@ impl IntoResponse for AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
+
+impl From<String> for AppError {
+    fn from(s: String) -> Self {
+        AppError::Internal(s)
+    }
+}
+
+impl From<&str> for AppError {
+    fn from(s: &str) -> Self {
+        AppError::Internal(s.to_string())
+    }
+}

@@ -1,169 +1,175 @@
 #!/usr/bin/env python3
 """
-Scan for fabricated/hardcoded operational output in source code.
-This script detects hardcoded metrics, fake counts, canned results, etc.
-that would violate Gate G7 (no fabricated output).
+Fabricated Output Scanner for SynEvid CI
+
+Scans source code for hardcoded/fabricated operational metrics that should
+come from the daemon or engine, not be hardcoded in presentation layers.
+
+Exit codes:
+  0 - No fabricated output found
+  1 - Fabricated output detected
+  2 - Error during scan
 """
 
 import os
 import re
 import sys
+import argparse
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Set
 
-# Patterns that indicate fabricated/hardcoded operational output
+# Patterns that indicate fabricated/hardcoded output
 FORBIDDEN_PATTERNS = [
-    # Hardcoded counts/metrics
-    (r'\b\d+\s+affected\s+callers?\b', "Hardcoded affected caller count"),
-    (r'\b14\s+affected\s+callers?\b', "Specific hardcoded count '14 affected callers'"),
-    (r'\b\d+\s+callers?\s+found\b', "Hardcoded caller count"),
-    (r'\b\d+\s+symbols?\s+analyzed\b', "Hardcoded symbol count"),
-    (r'\b\d+\s+files?\s+changed\b', "Hardcoded file change count"),
-    (r'\b\d+\s+errors?\s+found\b', "Hardcoded error count"),
-    (r'\b\d+\s+warnings?\b', "Hardcoded warning count"),
+    # Specific hardcoded numbers that should come from engine
+    (r'\b14 affected callers?\b', 'Hardcoded "14 affected callers" metric'),
+    (r'\b\d+ affected callers?\b', 'Hardcoded "N affected callers" metric'),
+    (r'\b\d+ newly dead symbols?\b', 'Hardcoded "N newly dead symbols" metric'),
+    (r'\b\d+ broken imports?\b', 'Hardcoded "N broken imports" metric'),
+    (r'\b\d+ syntax errors?\b', 'Hardcoded "N syntax errors" metric'),
     
-    # Fake latency/timing
-    (r'\b\d+\.?\d*\s*ms\s+latency\b', "Hardcoded latency value"),
-    (r'\b\d+\.?\d*\s*ms\s+p95\b', "Hardcoded p95 latency"),
-    (r'\b\d+\.?\d*\s*ms\s+p99\b', "Hardcoded p99 latency"),
+    # Fake/mock indicators
+    (r'\bfake\b', 'Contains "fake" - likely test data in production code'),
+    (r'\bmock\b', 'Contains "mock" - likely test data in production code'),
+    (r'\bstub\b', 'Contains "stub" - likely test data in production code'),
+    (r'\bplaceholder\b', 'Contains "placeholder" - incomplete implementation'),
+    (r'\btodo\b', 'Contains "TODO" - incomplete implementation'),
+    (r'\bfixme\b', 'Contains "FIXME" - incomplete implementation'),
+    (r'\bhack\b', 'Contains "hack" - workaround in production'),
     
-    # Fake percentages
-    (r'\b100%\s+coverage\b', "Hardcoded 100% coverage"),
-    (r'\b\d+%\s+cache\s+hit\b', "Hardcoded cache hit percentage"),
+    # Hardcoded verdicts that should come from engine
+    (r'verdict.*["\']PASS["\']', 'Hardcoded PASS verdict'),
+    (r'verdict.*["\']FAIL["\']', 'Hardcoded FAIL verdict'),
+    (r'verdict.*["\']WARN["\']', 'Hardcoded WARN verdict'),
     
-    # Canned success/failure messages
-    (r'"success":\s*true\s*(?!.*[\[{])', "Hardcoded success true without dynamic data"),
-    (r'"verdict":\s*"PASS"\s*(?!.*[\[{])', "Hardcoded PASS verdict without evidence"),
-    (r'"verdict":\s*"FAIL"\s*(?!.*[\[{])', "Hardcoded FAIL verdict without evidence"),
+    # Hardcoded coverage states
+    (r'coverage.*["\']verified["\']', 'Hardcoded verified coverage'),
+    (r'coverage.*["\']partial["\']', 'Hardcoded partial coverage'),
+    (r'coverage.*["\']unknown["\']', 'Hardcoded unknown coverage'),
     
-    # Mock/fake indicators in source code (not tests)
-    (r'\bfake\b', "Contains 'fake' in production code"),
-    (r'\bmock\b', "Contains 'mock' in production code"),
-    (r'\bstub\b', "Contains 'stub' in production code"),
-    (r'\bhardcoded\b', "Contains 'hardcoded' in production code"),
-    (r'\bTODO\b', "TODO in production code"),
-    (r'\bFIXME\b', "FIXME in production code"),
-    (r'\bXXX\b', "XXX marker in production code"),
+    # Hardcoded digests/IDs
+    (r'blake3:[a-f0-9]{64}', 'Hardcoded BLAKE3 digest'),
+    (r'operation_id.*["\'][a-f0-9]{16,}["\']', 'Hardcoded operation ID'),
+    (r'repository_id.*["\'][a-f0-9]{64}["\']', 'Hardcoded repository ID'),
+    (r'snapshot_id.*["\'][a-f0-9]{64}["\']', 'Hardcoded snapshot ID'),
     
-    # Placeholder values
-    (r'"placeholder"', "Placeholder string in production code"),
-    (r'"example"', "Example value in production code"),
-    (r'"test"', "Test value in production code"),
-    (r'"dummy"', "Dummy value in production code"),
-    
-    # Suspicious static returns
-    (r'return\s+(?:true|false|0|1|null|undefined|"")\s*;', "Static return without computation"),
-    (r'return\s+\[\]\s*;', "Empty array return"),
-    (r'return\s+\{\}\s*;', "Empty object return"),
+    # Latency metrics that should be measured
+    (r'latency_ms.*:\s*\d+', 'Hardcoded latency metric'),
+    (r'computation_latency_ms.*:\s*\d+', 'Hardcoded computation latency'),
 ]
 
-# Files/directories to exclude from scanning
-EXCLUDE_DIRS = {
-    'target', 'node_modules', '.git', 'dist', 'build', 'dist-newstyle',
-    '__pycache__', '.pytest_cache', '.mypy_cache', 'coverage', 'docs',
-    'examples', 'fixtures', 'testdata', 'snapshots', 'playwright-report'
+# Files/directories to skip
+SKIP_PATHS = {
+    'target', 'node_modules', '.git', 'dist', 'build',
+    '__pycache__', '.pytest_cache', '.coverage',
+    'test', 'tests', 'spec', 'specs', 'fixtures',
+    '.d.ts', '.map', '.min.js', '.min.css',
 }
 
-EXCLUDE_FILES = {
-    'Cargo.lock', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock',
-    'CHANGELOG.md', 'README.md', 'LICENSE', 'CONTRIBUTING.md',
-    'CODEOWNERS', 'SECURITY.md', 'go.sum', 'go.mod'
+# File extensions to scan
+SCAN_EXTENSIONS = {
+    '.rs', '.ts', '.tsx', '.js', '.jsx', '.py', 
+    '.json', '.toml', '.md', '.txt', '.sh', '.ps1'
 }
 
-EXCLUDE_PATTERNS = [
-    r'.*/tests/.*\.rs$',           # Test files
-    r'.*/tests/.*\.ts$',           # Test files
-    r'.*/tests/.*\.py$',           # Test files
-    r'.*/tests/.*\.js$',           # Test files
-    r'.*/test/.*\.rs$',            # Test files
-    r'.*/test/.*\.ts$',            # Test files
-    r'.*/test/.*\.py$',            # Test files
-    r'.*/test/.*\.js$',            # Test files
-    r'.*_test\.rs$',               # Rust test files
-    r'.*_test\.py$',               # Python test files
-    r'.*_test\.ts$',               # TypeScript test files
-    r'.*_test\.js$',               # JS test files
-    r'.*\.test\.rs$',              # Rust test files
-    r'.*\.test\.ts$',              # TypeScript test files
-    r'.*\.spec\.rs$',              # Spec files
-    r'.*\.spec\.ts$',              # Spec files
-    r'.*/fixtures/.*',             # Fixture files
-    r'.*/testdata/.*',             # Test data files
-    r'.*/snapshots/.*',            # Snapshot files
-    r'.*\.snap$',                  # Snapshot files
-    r'.*/examples/.*',             # Example files
-    r'.*/scripts/.*',              # Script files
-]
 
-def should_exclude(path: Path) -> bool:
-    """Check if a path should be excluded from scanning."""
-    # Check directory exclusions
+def should_skip(path: Path) -> bool:
+    """Check if path should be skipped."""
     for part in path.parts:
-        if part in EXCLUDE_DIRS:
+        if part in SKIP_PATHS:
             return True
-    
-    # Check file exclusions
-    if path.name in EXCLUDE_FILES:
-        return True
-    
-    # Check pattern exclusions
-    path_str = str(path)
-    for pattern in EXCLUDE_PATTERNS:
-        if re.search(pattern, path_str):
+        if part.startswith('.'):
             return True
-    
     return False
 
-def scan_file(filepath: Path) -> List[Tuple[int, str, str]]:
-    """Scan a single file for forbidden patterns."""
+
+def should_scan(path: Path) -> bool:
+    """Check if file should be scanned."""
+    if should_skip(path):
+        return False
+    return path.suffix in SCAN_EXTENSIONS
+
+
+def scan_file(path: Path, patterns: List[Tuple[re.Pattern, str]]) -> List[Tuple[int, str, str]]:
+    """Scan a file for forbidden patterns."""
     violations = []
+    
     try:
-        content = filepath.read_text(encoding='utf-8', errors='ignore')
-    except Exception:
+        content = path.read_text(encoding='utf-8')
+    except (UnicodeDecodeError, PermissionError):
         return violations
     
     lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        for pattern, description in FORBIDDEN_PATTERNS:
-            if re.search(pattern, line, re.IGNORECASE):
-                violations.append((line_num, line.strip(), description))
+    for i, line in enumerate(lines, 1):
+        for pattern, description in patterns:
+            if pattern.search(line):
+                violations.append((i, description, line.strip()[:120]))
     
     return violations
 
+
 def main():
-    repo_root = Path(__file__).parent.parent
-    print(f"Scanning for fabricated output in: {repo_root}")
+    parser = argparse.ArgumentParser(description='Scan for fabricated output')
+    parser.add_argument('--root', default='.', help='Root directory to scan')
+    parser.add_argument('--fail-on-warning', action='store_true', 
+                        help='Treat warnings as errors')
+    parser.add_argument('--exclude', action='append', default=[],
+                        help='Additional paths to exclude')
+    parser.add_argument('--verbose', '-v', action='store_true')
+    args = parser.parse_args()
+    
+    root = Path(args.root).resolve()
+    exclude_paths = {Path(e).resolve() for e in args.exclude}
+    
+    # Compile patterns
+    patterns = [(re.compile(p, re.IGNORECASE), d) for p, d in FORBIDDEN_PATTERNS]
     
     all_violations = []
     files_scanned = 0
     
-    # Scan Rust files
-    for ext in ['*.rs', '*.ts', '*.tsx', '*.py', '*.js', '*.jsx', '*.go', '*.java', '*.cs', '*.cpp', '*.c', '*.h']:
-        for filepath in repo_root.rglob(ext):
-            if should_exclude(filepath):
-                continue
+    for file_path in root.rglob('*'):
+        if not file_path.is_file():
+            continue
+        if any(file_path.is_relative_to(e) for e in exclude_paths):
+            continue
+        if not should_scan(file_path):
+            continue
             
-            violations = scan_file(filepath)
-            if violations:
-                all_violations.append((filepath, violations))
-            files_scanned += 1
+        files_scanned += 1
+        violations = scan_file(file_path, patterns)
+        
+        if violations:
+            for line_num, desc, line in violations:
+                rel_path = file_path.relative_to(root)
+                all_violations.append((str(rel_path), line_num, desc, line))
     
-    print(f"\nFiles scanned: {files_scanned}")
-    print(f"Files with violations: {len(all_violations)}")
-    
+    # Report results
     if all_violations:
-        print("\n=== VIOLATIONS FOUND ===")
-        for filepath, violations in all_violations:
-            rel_path = filepath.relative_to(repo_root)
-            print(f"\n{rel_path}:")
-            for line_num, line, description in violations:
-                print(f"  Line {line_num}: {description}")
-                print(f"    {line[:120]}")
-        print(f"\nTotal violations: {sum(len(v) for _, v in all_violations)}")
+        print(f"\n{'='*60}")
+        print(f"FABRICATED OUTPUT DETECTED")
+        print(f"{'='*60}")
+        print(f"Files scanned: {files_scanned}")
+        print(f"Violations found: {len(all_violations)}")
+        print()
+        
+        # Group by file
+        by_file = {}
+        for file_path, line_num, desc, line in all_violations:
+            if file_path not in by_file:
+                by_file[file_path] = []
+            by_file[file_path].append((line_num, desc, line))
+        
+        for file_path, violations in by_file.items():
+            print(f"\n{file_path}:")
+            for line_num, desc, line in violations:
+                print(f"  Line {line_num}: {desc}")
+                print(f"    {line}")
+        
+        print(f"\n{'='*60}")
         return 1
     else:
-        print("\n✓ No fabricated output detected.")
+        print(f"✓ No fabricated output detected ({files_scanned} files scanned)")
         return 0
+
 
 if __name__ == '__main__':
     sys.exit(main())
