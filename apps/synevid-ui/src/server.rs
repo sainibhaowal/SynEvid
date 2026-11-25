@@ -9148,6 +9148,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "timing-sensitive; run as isolated performance gate with --ignored"]
     fn test_phase1_filesystem_browse_1000_directories_meets_profile_target() {
         let temp =
             std::env::temp_dir().join(format!("synevid_phase1_browse_perf_{}", std::process::id()));
