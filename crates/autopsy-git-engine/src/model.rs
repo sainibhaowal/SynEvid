@@ -19,6 +19,16 @@ pub struct CommitGalaxyNode {
     pub symbols_added: usize,
     pub symbols_deleted: usize,
     pub blast_radius_score: usize,
+    /// File-count risk is a presentation heuristic, not semantic proof.
+    #[serde(default)]
+    pub heuristic_verdict: String,
+    /// Semantic verification is unavailable until a language-adapter diff is attached.
+    #[serde(default)]
+    pub semantic_verdict: String,
+    #[serde(default)]
+    pub coverage_state: String,
+    #[serde(default)]
+    pub evidence_kind: String,
     pub verdict: String,
 }
 

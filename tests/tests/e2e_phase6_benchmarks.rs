@@ -3,8 +3,8 @@
 //! Validates:
 //! - Corpus repositories (>= 5 TypeScript repositories with valid configurations).
 //! - Task suite completeness (>= 50 tasks across 5 categories matching schema).
-//! - Ground truth integrity (merged test specifications, held-out validation set).
-//! - Benchmark execution and pre-registered gate satisfaction (>=10pp recall lift or >=40% cost cut).
+//! - Task shape and held-out partition.
+//! - Fail-closed integrity audit refuses scores while oracle/comparator integrity is invalid.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -45,24 +45,36 @@ fn python_command() -> (String, Vec<String>) {
         return (explicit, Vec::new());
     }
 
-    let candidates: Vec<(&str, Vec<&str>)> = if cfg!(windows) {
-        vec![
-            ("python3", Vec::new()),
-            ("python", Vec::new()),
-            ("py", vec!["-3"]),
-        ]
+    let candidates: Vec<(String, Vec<String>)> = if cfg!(windows) {
+        let mut list = vec![
+            ("python3".to_string(), Vec::new()),
+            ("python".to_string(), Vec::new()),
+            ("py".to_string(), vec!["-3".to_string()]),
+        ];
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            let py_dir = Path::new(&local_app_data).join("Programs").join("Python");
+            if let Ok(entries) = std::fs::read_dir(&py_dir) {
+                for entry in entries.flatten() {
+                    let py_exe = entry.path().join("python.exe");
+                    if py_exe.exists() {
+                        list.push((py_exe.to_string_lossy().to_string(), Vec::new()));
+                    }
+                }
+            }
+        }
+        list
     } else {
-        vec![("python3", Vec::new()), ("python", Vec::new())]
+        vec![
+            ("python3".to_string(), Vec::new()),
+            ("python".to_string(), Vec::new()),
+        ]
     };
 
     for (program, prefix_args) in candidates {
-        let mut probe = Command::new(program);
+        let mut probe = Command::new(&program);
         probe.args(&prefix_args).arg("--version");
         if probe.output().is_ok_and(|output| output.status.success()) {
-            return (
-                program.to_owned(),
-                prefix_args.into_iter().map(str::to_owned).collect(),
-            );
+            return (program, prefix_args);
         }
     }
 
@@ -218,7 +230,7 @@ fn test_benchmark_task_suite_conformance() {
 }
 
 #[test]
-fn test_benchmark_harness_execution_and_pre_registered_gate() {
+fn test_benchmark_harness_refuses_unreviewed_oracle_and_leaky_comparators() {
     let root = workspace_root();
     let runner_script = root.join("benchmarks").join("run_benchmarks.py");
     assert!(runner_script.exists(), "run_benchmarks.py must exist");
@@ -261,63 +273,24 @@ fn test_benchmark_harness_execution_and_pre_registered_gate() {
         eprintln!("Benchmark runner stderr:\n{}", stderr);
     }
 
-    assert!(
-        output.status.success(),
-        "Benchmark runner should pass pre-registered gate (exit code: {:?})",
-        output.status.code()
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "invalid benchmark integrity must fail closed before scoring"
     );
+    assert!(stdout.contains("[NOT EVALUABLE]"));
+    assert!(stdout.contains("answer-key fields"));
 
-    // Verify reproduction reports are generated in output directory
+    // A rejected benchmark must not emit numeric scores or a passing gate.
     let json_report = temp_out.join("reproduction_report.json");
     let md_report = temp_out.join("reproduction_report.md");
-
     assert!(
-        json_report.exists(),
-        "reproduction_report.json must be generated"
+        !json_report.exists(),
+        "invalid benchmark must not emit JSON scores"
     );
     assert!(
-        md_report.exists(),
-        "reproduction_report.md must be generated"
-    );
-
-    let json_content = fs::read_to_string(&json_report).expect("Failed to read JSON report");
-    let report_val: Value = serde_json::from_str(&json_content).expect("Valid report JSON");
-
-    let gate_val = report_val
-        .get("pre_registered_gate")
-        .expect("Must have pre_registered_gate");
-    let passed = gate_val
-        .get("passed")
-        .and_then(|p| p.as_bool())
-        .unwrap_or(false);
-    assert!(passed, "Pre-registered gate must evaluate to passed=true");
-
-    let recall_lift = gate_val
-        .get("recall_lift_pp")
-        .and_then(|r| r.as_f64())
-        .unwrap_or(0.0);
-    let cost_cut = gate_val
-        .get("cost_cut_percent")
-        .and_then(|c| c.as_f64())
-        .unwrap_or(0.0);
-    let new_failure_classes = gate_val
-        .get("new_failure_classes_found")
-        .and_then(|n| n.as_i64())
-        .unwrap_or(0);
-
-    println!(
-        "Gate telemetry: recall_lift=+{:.2}pp, cost_cut={:.2}%, new_failure_classes={}",
-        recall_lift, cost_cut, new_failure_classes
-    );
-
-    // Assert that the pre-registered gate condition (01 Ch.12) is satisfied:
-    // recall_lift >= 10.0pp OR cost_cut >= 40.0% OR new_failure_classes > 0
-    assert!(
-        recall_lift >= 10.0 || cost_cut >= 40.0 || new_failure_classes > 0,
-        "Gate conditions not met: recall_lift={:.2}, cost_cut={:.2}, new_classes={}",
-        recall_lift,
-        cost_cut,
-        new_failure_classes
+        !md_report.exists(),
+        "invalid benchmark must not emit a gate report"
     );
 
     let _ = fs::remove_dir_all(&temp_out);

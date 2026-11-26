@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "CancellationToken": {
+      "description": "Cancellation token for long-running operations",
+      "properties": {
+        "expires_at": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expires_at",
+        "token"
+      ],
+      "type": "object"
+    },
+    "ClientType": {
+      "description": "Client type classification",
+      "enum": [
+        "cli",
+        "tui",
+        "mcp",
+        "ui",
+        "electron",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "OutputFormat": {
+      "description": "Output format",
+      "enum": [
+        "json",
+        "text",
+        "sarif",
+        "markdown",
+        "html",
+        "bundle"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Canonical command request - all clients send this",
+  "properties": {
+    "args": {
+      "additionalProperties": true,
+      "description": "Typed command arguments (command-specific)",
+      "type": "object"
+    },
+    "cancellation_token": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CancellationToken"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Cancellation token"
+    },
+    "client_id": {
+      "description": "Client metadata",
+      "type": "string"
+    },
+    "client_type": {
+      "$ref": "#/definitions/ClientType"
+    },
+    "command_id": {
+      "description": "Unique command identifier",
+      "type": "string"
+    },
+    "event_receipt": {
+      "description": "Event receipt request",
+      "type": "boolean"
+    },
+    "offline": {
+      "description": "Explicit offline mode - if true, command runs without daemon Only valid for commands in OFFLINE_COMMANDS",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "output_format": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutputFormat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Desired output format"
+    },
+    "repository_id": {
+      "description": "Repository identity",
+      "type": "string"
+    },
+    "session_id": {
+      "description": "Session identity (for forensic sessions)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshot_pin": {
+      "description": "Snapshot pin (for reproducible analysis)",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_id": {
+      "description": "Workflow identity (for multi-step operations)",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "args",
+    "client_id",
+    "client_type",
+    "command_id",
+    "event_receipt",
+    "repository_id"
+  ],
+  "title": "CommandRequest",
+  "type": "object"
+}

@@ -32,7 +32,7 @@ export default function AiCockpitSection({
   const [ledger, setLedger] = useState<AiSessionLedger | null>(null);
 
   // Test working cache interactive query
-  const [testSymbol, setTestSymbol] = useState<string>('PaymentService.chargeCard');
+  const [testSymbol, setTestSymbol] = useState<string>('');
   const [queryStatus, setQueryStatus] = useState<string | null>(null);
   const [cacheResult, setCacheResult] = useState<any>(null);
 
@@ -69,20 +69,36 @@ export default function AiCockpitSection({
   };
 
   const handleTestCacheQuery = async () => {
+    if (!activeSessionId || !testSymbol.trim()) {
+      setQueryStatus('Select an active session and enter a symbol before querying the working cache.');
+      setCacheResult(null);
+      return;
+    }
     setQueryStatus('Querying SQLite working cache...');
     try {
       const data = await api.queryAiCache({
-        session_id: activeSessionId || 'sess_default',
-        symbol: testSymbol,
+        session_id: activeSessionId,
+        symbol: testSymbol.trim(),
         query_kind: 'callers',
       });
       setCacheResult(data);
-      setQueryStatus(`Received: ${data.status} (${data.tokens_saved || 0} measured tokens saved)`);
+      const saved = typeof data.tokens_saved === 'number' ? `${data.tokens_saved} measured tokens saved` : 'token savings not measured';
+      setQueryStatus(`Received: ${data.status} (${saved})`);
     } catch (error) {
       setQueryStatus(error instanceof Error ? error.message : 'Working-cache query failed');
       setCacheResult(null);
     }
   };
+
+  const measuredQueries = ledger?.queries_count ?? 0;
+  const measuredSaved = ledger?.tokens_saved ?? 0;
+  const measuredSpent = ledger?.tokens_spent ?? 0;
+  const measuredHitRatio = measuredQueries > 0
+    ? ((ledger?.cache_hits ?? 0) / measuredQueries) * 100
+    : null;
+  const measuredReduction = measuredSaved + measuredSpent > 0
+    ? (measuredSaved / (measuredSaved + measuredSpent)) * 100
+    : null;
 
   return (
     <div className="space-y-6 font-sans">
@@ -117,30 +133,36 @@ export default function AiCockpitSection({
               <span>Token Reduction Efficiency</span>
               <Zap className="w-3.5 h-3.5 text-emerald-400" />
             </div>
-            <div className="text-2xl font-bold text-emerald-400 mt-1">91.5%</div>
-            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Requirement: &gt;= 60%</div>
+            <div className="text-2xl font-bold text-emerald-400 mt-1">
+              {measuredReduction === null ? 'Not measured' : `${measuredReduction.toFixed(1)}%`}
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Measured from this session</div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)]">
             <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase">Tokens Saved (Session)</div>
             <div className="text-2xl font-bold text-[var(--text-primary)] mt-1">
-              +{(ledger?.tokens_saved || 24850).toLocaleString()}
+              {ledger ? `+${measuredSaved.toLocaleString()}` : 'Not measured'}
             </div>
-            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Tokens Spent: {ledger?.tokens_spent || 180}</div>
+            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+              Tokens Spent: {ledger ? measuredSpent.toLocaleString() : 'Not measured'}
+            </div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)]">
             <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase">Working Cache Hits</div>
             <div className="text-2xl font-bold text-sky-400 mt-1">
-              {ledger?.cache_hits || 18} / {(ledger?.queries_count || 22)}
+              {ledger ? `${ledger.cache_hits} / ${measuredQueries}` : 'Not measured'}
             </div>
-            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Hit Ratio: 81.8%</div>
+            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+              Hit Ratio: {measuredHitRatio === null ? 'Not measured' : `${measuredHitRatio.toFixed(1)}%`}
+            </div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)]">
             <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase">P95 Verification Latency</div>
-            <div className="text-2xl font-bold text-cyan-400 mt-1">&lt; 25ms</div>
-            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">Simulate-edit budget: &lt;= 50ms</div>
+            <div className="text-2xl font-bold text-cyan-400 mt-1">Not measured</div>
+            <div className="text-[10px] text-[var(--text-muted)] mt-0.5">No session latency sample available</div>
           </div>
         </div>
       </div>
@@ -221,7 +243,7 @@ export default function AiCockpitSection({
             type="text"
             value={testSymbol}
             onChange={(e) => setTestSymbol(e.target.value)}
-            placeholder="Target symbol (e.g. PaymentService.chargeCard)"
+              placeholder="Target symbol from the active repository"
             className="flex-1 px-3 py-2 rounded-lg bg-[var(--card-elevated)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500"
           />
           <button

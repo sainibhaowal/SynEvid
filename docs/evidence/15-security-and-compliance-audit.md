@@ -3,6 +3,9 @@
 Date: 2026-10-09. Audited `Resource/Completed/4.1/*.md` end to end
 against the implementation; every gap below was reproduced before fixing.
 
+> **Benchmark correction (2026-11-23):** any impact benchmark gate claim in
+> this historical audit is superseded by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 ## 1. Gaps found and fixed
 
 | # | Plan requirement | Gap (reproduced) | Fix | Proof |

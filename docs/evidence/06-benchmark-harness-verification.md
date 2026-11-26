@@ -1,5 +1,11 @@
 # Phase 6 Evidence: Benchmark Harness & Evaluation Suite Verification
 
+> **Further correction (2026-11-23):** the historical re-measurement described
+> below is **NOT EVALUABLE** as accuracy evidence. Labels are not certified
+> exhaustive by independent reviewers, query scope is missing, and the
+> Grep/LSP baselines consume answer-key fields; Baseline B is not an LSP client.
+> Its metrics and gate are superseded by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 > **SUPERSEDED (2026-10-09):** Baseline-C figures below (100% precision,
 > 353 tokens, 16 classes, cost-gate PASS) came from a simulated baseline
 > that copied ground truth into predictions. Baseline-C was rewritten to

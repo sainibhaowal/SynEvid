@@ -269,7 +269,7 @@ export const WORKSPACE_MANUALS: Record<string, WorkspaceManual> = {
           diagramSteps: [
             { label: '1. Unsaved Buffer', sublabel: 'In-memory edit patch', badge: 'Zero-Disk-Write', color: 'cyan' },
             { label: '2. Transient AST', sublabel: 'Tree-sitter signature diff', badge: '<20ms', color: 'indigo' },
-            { label: '3. Caller Cross-Check', sublabel: 'Arity & type contract test', badge: '<25ms', color: 'amber' },
+            { label: '3. Caller Cross-Check', sublabel: 'Arity & type contract test', badge: 'Measured', color: 'amber' },
             { label: '4. Verdict Receipt', sublabel: 'PASS, WARN, or FAIL receipt', badge: 'BLAKE3', color: 'rose' }
           ],
           mathFormulas: [

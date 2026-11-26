@@ -22,7 +22,7 @@ test('the shipped bundle (dist/index.bundle.js) serves the full tool surface', a
   t.after(() => client.close());
 
   const listed = await client.request('tools/list');
-  assert.equal(listed.tools.length, 21, 'every tool must ship in the release bundle');
+  assert.equal(listed.tools.length, 22, 'every tool must ship in the release bundle');
 
   // Exercise real tool calls through the bundle: the point of the packaged
   // artifact is that an installed agent host reaches the engine end-to-end.
@@ -39,7 +39,7 @@ test('the shipped bundle (dist/index.bundle.js) serves the full tool surface', a
   );
 
   // And the digest-bearing path must survive bundling untouched.
-  const verify = await callTool(client, 'autopsy_verify', { repo_root: REPO_API_ROOT });
+  const verify = await callTool(client, 'autopsy_verify', { repo_root: REPO_API_ROOT, offline: true });
   assert.equal(verify.envelope.exit_code, 0);
   assert.ok(verify.envelope.report.result_digest, 'digest-bearing answers must survive bundling');
 });

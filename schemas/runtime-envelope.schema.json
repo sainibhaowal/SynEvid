@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synevid.dev/schemas/runtime-envelope.schema.json",
+  "title": "SynEvid authenticated runtime envelope",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "daemon_id",
+    "client_id",
+    "client_type",
+    "repository_id",
+    "snapshot_id",
+    "event_seq",
+    "replay"
+  ],
+  "properties": {
+    "protocol_version": { "const": "v1" },
+    "daemon_id": { "type": "string", "pattern": "^daemon_[0-9a-f]{64}$" },
+    "client_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "client_type": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "repository_id": { "type": ["string", "null"] },
+    "session_id": { "type": ["string", "null"] },
+    "workflow_id": { "type": ["string", "null"] },
+    "snapshot_id": { "type": ["string", "null"] },
+    "event_seq": { "type": "integer", "minimum": 0 },
+    "lease_id": { "type": ["string", "null"] },
+    "connected_clients": { "type": "array" },
+    "replay": {
+      "type": "object",
+      "required": ["ordered", "idempotent"],
+      "properties": {
+        "ordered": { "const": true },
+        "idempotent": { "const": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

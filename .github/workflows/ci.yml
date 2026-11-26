@@ -2,7 +2,7 @@ name: CI Quality & Cross-Platform Matrix
 
 on:
   push:
-    branches: ["main", "master", "develop"]
+    branches: ["main", "master", "develop", "phase3-loose-history-performance"]
   pull_request:
     types: [opened, synchronize, reopened]
     branches: ["main", "master", "develop"]
@@ -99,6 +99,16 @@ jobs:
         # cross-platform scheduler-contention failures.
         run: cargo test --workspace --all-targets --release -- --nocapture --test-threads=1
 
+      - name: Run SSE wake-up latency gate in isolation
+        # Keep this timing-sensitive percentile out of the concurrently running
+        # unit harness; it remains a hard gate in its own process on each runner.
+        run: cargo test -p synevid-ui --lib test_phase1_live_event_wakeup_p95_is_below_15ms --release -- --ignored --nocapture
+
+      - name: Run 1,000-file incremental simulation latency gate in isolation
+        # This p95 is sensitive to machine load from the long workspace suite;
+        # keep its strict 50 ms limit and execute it in a dedicated process.
+        run: cargo test -p autopsy-tests --test phase1_incremental_determinism test_phase1_incremental_1000_file_simulation_p95 --release -- --ignored --nocapture --test-threads=1
+
       - name: Run Documentation Tests
         run: cargo test --workspace --doc
 
@@ -138,8 +148,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install PyYAML, Ruff and Pytest
-        run: pip install pyyaml ruff pytest
+      - name: Install Python dependencies
+        run: pip install -r scripts/requirements.txt ruff pytest
 
       - name: Ruff Lint & Format Check (benchmarks)
         run: |
@@ -148,22 +158,11 @@ jobs:
 
       - name: Pytest Harness Smoke Tests
         run: |
-          python3 -m pytest benchmarks/tests/ -q
+          python3 -m pytest benchmarks/tests/ scripts/tests/ -q
 
       - name: Validate All Public JSON Schemas
         run: |
-          python3 -c '
-          import glob, json, sys
-          schemas = glob.glob("schemas/*.json")
-          if not schemas:
-              print("Error: No schemas found!")
-              sys.exit(1)
-          for s in schemas:
-              with open(s, "r") as f:
-                  data = json.load(f)
-                  title = data.get("title", "unnamed")
-                  print(f"Validated schema {s}: {title}")
-          '
+          python3 scripts/validate-schemas.py
 
       - name: Validate autopsy.toml, invariants.yml & baseline.json Syntax
         run: |
@@ -213,6 +212,43 @@ jobs:
       - name: Test VS Code Extension (headless, zero-build)
         run: cd apps/vscode-extension && npm test
 
+  phase6-analytics-browser-e2e:
+    name: Phase 6 Analytics Receipt Browser E2E (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build daemon from this source revision
+        run: cargo build -p synevid-ui
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/desktop-electron/package-lock.json
+
+      - name: Install Web and Electron dependencies
+        run: |
+          npm ci --prefix apps/web
+          npm ci --prefix apps/desktop-electron
+
+      - name: Install headless display
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run real daemon + Next + Electron analytics receipt/restart flow
+        run: xvfb-run --auto-servernum node --test --test-name-pattern="Phase 1 and Phase 6" apps/web/test/phase1_daemon_browser.behavior.test.mjs
+
   electron-native-packaged-smoke:
     name: Electron Native Packaged Smoke (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -223,17 +259,23 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
+            command: dist:win
           - name: macOS
             os: macos-latest
+            command: dist:mac
           - name: Linux
             os: ubuntu-latest
+            command: dist:linux
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Install Linux headless display
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb fakeroot rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -263,25 +305,64 @@ jobs:
         working-directory: apps/desktop-electron
         run: npm ci --no-audit --no-fund
 
-      - name: Build unsigned unpacked Electron runtime
+      - name: Run Electron desktop and packaged-security unit tests
+        working-directory: apps/desktop-electron
+        run: npm test
+
+      - name: Build real Phase 1 daemon browser test target
+        run: cargo build -p synevid-ui
+
+      - name: Run real Electron + daemon browser workflow on Linux
+        if: runner.os == 'Linux'
+        working-directory: apps/web
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm test
+
+      - name: Run real Electron + daemon browser workflow on Windows and macOS
+        if: runner.os != 'Linux'
+        working-directory: apps/web
+        run: npm test
+
+      - name: Build unsigned native Electron installers
         working-directory: apps/desktop-electron
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run dist:dir
+        run: npm run ${{ matrix.command }}
 
-      - name: Run packaged smoke on Linux virtual display
+      - name: Generate Electron dependency SBOM
+        working-directory: apps/desktop-electron
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "dist/sbom-synevid-electron-${{ matrix.name }}.cdx.json"
+
+      - name: Generate cockpit dependency SBOM
+        working-directory: apps/web
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-cockpit-${{ matrix.name }}.cdx.json"
+
+      - name: Generate MCP dependency SBOM
+        working-directory: apps/mcp-server
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file "../../apps/desktop-electron/dist/sbom-synevid-mcp-${{ matrix.name }}.cdx.json"
+
+      - name: Verify native Electron release artifacts
+        working-directory: apps/desktop-electron
+        env:
+          SYNEVID_RELEASE_OS: ${{ runner.os == 'Windows' && 'win32' || runner.os == 'macOS' && 'darwin' || 'linux' }}
+        run: npm run verify:artifacts
+
+      - name: Install and smoke native artifacts on Linux virtual display
         if: runner.os == 'Linux'
         working-directory: apps/desktop-electron
-        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:packaged
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run smoke:installers
 
-      - name: Run packaged smoke on Windows and macOS
+      - name: Install and smoke native artifacts on Windows and macOS
         if: runner.os != 'Linux'
         working-directory: apps/desktop-electron
-        run: npm run smoke:packaged
+        run: npm run smoke:installers
 
   phase3-loose-history-performance:
-    name: Phase 3 Loose Git History Budget (Ubuntu)
-    runs-on: ubuntu-latest
+    name: Phase 3 Loose Git History Budget (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     timeout-minutes: 20
     steps:
       - name: Checkout Source Code
@@ -324,6 +405,53 @@ jobs:
           log-level: warn
           command: check
 
+  gate-g7-parity:
+    name: Gate G7 - Cross-Client Parity Verification
+    runs-on: ubuntu-latest
+    needs: [cross-platform-matrix, determinism-and-boundary-gate]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build autopsy-daemon release
+        run: cargo build -p autopsy-daemon --release
+
+      - name: Build autopsy-cli release
+        run: cargo build -p autopsy-cli --release
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Gate G7 Parity Verification
+        run: |
+          chmod +x scripts/gate-g7.sh
+          ./scripts/gate-g7.sh
+
+  scan-fabricated-output:
+    name: Fabricated Output Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Fabricated Output Scanner
+        run: |
+          python3 scripts/scan-fabricated-output.py --root . --exclude target --exclude node_modules --exclude .git --exclude dist --exclude build
+
   pre-merge-verification-gate:
     name: Pre-Merge Verification Gate
     runs-on: ubuntu-latest
@@ -334,10 +462,13 @@ jobs:
       - schemas-and-configs
       - msrv-check
       - mcp-server-check
+      - phase6-analytics-browser-e2e
       - electron-native-packaged-smoke
       - phase3-loose-history-performance
       - installer-and-wiring-check
       - supply-chain-audit
+      - gate-g7-parity
+      - scan-fabricated-output
     if: always()
     steps:
       - name: Assess All Prerequisite Gates & Generate Summary
@@ -351,8 +482,13 @@ jobs:
           echo "| Public Schemas & Engine Configurations | ${{ needs.schemas-and-configs.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| MSRV 1.90 Build (declared rust-version) | ${{ needs.msrv-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| TypeScript MCP Server & Web Inspector | ${{ needs.mcp-server-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 6 Analytics Receipt Browser E2E | ${{ needs.phase6-analytics-browser-e2e.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Native Electron Packaged Smoke (Windows/macOS/Linux) | ${{ needs.electron-native-packaged-smoke.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase 3 Loose Git History Budget | ${{ needs.phase3-loose-history-performance.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| One-Line Installer & Host Wiring (offline self-test) | ${{ needs.installer-and-wiring-check.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Supply-Chain Audit (cargo-deny) | ${{ needs.supply-chain-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate G7 Cross-Client Parity | ${{ needs.gate-g7-parity.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fabricated Output Scanner | ${{ needs.scan-fabricated-output.result }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.rust-lint-and-format.result }}" != "success" ] || \
              [ "${{ needs.cross-platform-matrix.result }}" != "success" ] || \
@@ -360,12 +496,17 @@ jobs:
              [ "${{ needs.schemas-and-configs.result }}" != "success" ] || \
              [ "${{ needs.msrv-check.result }}" != "success" ] || \
              [ "${{ needs.mcp-server-check.result }}" != "success" ] || \
+             [ "${{ needs.phase6-analytics-browser-e2e.result }}" != "success" ] || \
+             [ "${{ needs.electron-native-packaged-smoke.result }}" != "success" ] || \
+             [ "${{ needs.phase3-loose-history-performance.result }}" != "success" ] || \
              [ "${{ needs.installer-and-wiring-check.result }}" != "success" ] || \
-             [ "${{ needs.supply-chain-audit.result }}" != "success" ]; then
+             [ "${{ needs.supply-chain-audit.result }}" != "success" ] || \
+             [ "${{ needs.gate-g7-parity.result }}" != "success" ] || \
+             [ "${{ needs.scan-fabricated-output.result }}" != "success" ]; then
             echo "❌ **ERROR: One or more pre-merge verification checks failed! Pull request merge is blocked.**" >> $GITHUB_STEP_SUMMARY
             echo "ERROR: One or more pre-merge verification checks failed!"
             exit 1
           fi
 
-          echo "✅ **SUCCESS: All multi-platform tests, lints, schemas, boundaries, and determinism gates passed. Ready for merge.**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **SUCCESS: All multi-platform tests, lints, schemas, boundaries, determinism, parity, and fabricated output gates passed. Ready for merge.**" >> $GITHUB_STEP_SUMMARY
           echo "SUCCESS: All gates green."

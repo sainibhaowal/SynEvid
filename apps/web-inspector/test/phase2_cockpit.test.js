@@ -11,6 +11,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
+function cargoExecutable() {
+  if (process.env.CARGO) return process.env.CARGO;
+  const installed = path.join(
+    os.homedir(),
+    '.cargo',
+    'bin',
+    process.platform === 'win32' ? 'cargo.exe' : 'cargo',
+  );
+  return fs.existsSync(installed) ? installed : 'cargo';
+}
+
 test('FR-P1-008: Repository picker supports desktop, browser, and filesystem-browser paths', () => {
   const modalPath = path.join(REPO_ROOT, 'apps/web/src/components/ConnectRepoModal.tsx');
   const modal = fs.readFileSync(modalPath, 'utf8');
@@ -141,7 +152,11 @@ async function waitForDaemon(baseUrl, child, getStderr) {
   throw new Error(`Daemon did not become healthy: ${getStderr()}`);
 }
 
-test('FR-P2-004/005: Temporary repository drives graph selection and unsaved simulation end to end', { timeout: 240000 }, async () => {
+// A clean Windows release build can legitimately exceed four minutes on a
+// cold workspace. The behavioral assertions still have their own daemon
+// health and request timeouts; this outer budget prevents the test runner from
+// cancelling a real release build before it reaches those assertions.
+test('FR-P2-004/005: Temporary repository drives graph selection and unsaved simulation end to end', { timeout: 600000 }, async () => {
   // Build a release daemon.  The native Electron dev runtime may hold the
   // shared target/debug daemon open on Windows; the release target remains
   // independent, so the E2E test can run while another runtime is active.
@@ -159,7 +174,7 @@ test('FR-P2-004/005: Temporary repository drives graph selection and unsaved sim
   let daemonStderr = '';
 
   try {
-    execFileSync('cargo', ['build', '--release', '-p', 'synevid-ui'], {
+    execFileSync(cargoExecutable(), ['build', '--release', '-p', 'synevid-ui'], {
       cwd: REPO_ROOT,
       stdio: 'pipe',
       env: { ...process.env, CARGO_TARGET_DIR: cargoTargetDir },
@@ -220,6 +235,29 @@ test('FR-P2-004/005: Temporary repository drives graph selection and unsaved sim
     assert.equal(ego.target_node.file_path, sourcePath);
     assert.ok(ego.incoming_callers.some((edge) => edge.source_file === callerPath && edge.source_line === 2 && edge.target_line === 2));
 
+    // The HTTP impact endpoint and embedded terminal are presentation clients
+    // of one daemon-owned computation.  Compare the real receipt and complete
+    // impacted set, not human-readable terminal prose.
+    const impactResponse = await fetch(`${baseUrl}/api/impact?seed=${encodeURIComponent(targetNode.id)}`);
+    const impact = await impactResponse.json();
+    assert.equal(impact.verdict, 'PASS');
+    assert.equal(impact.coverage_state, 'verified');
+    assert.ok(impact.impact?.impact_digest, JSON.stringify(impact));
+
+    const terminalResponse = await fetch(`${baseUrl}/api/v1/terminal/exec`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: `autopsy impact -s ${targetNode.id}` }),
+    });
+    const terminal = await terminalResponse.json();
+    assert.equal(terminal.exit_code, 0, JSON.stringify(terminal));
+    assert.ok(!terminal.stdout.includes('14 affected'), terminal.stdout);
+    const terminalImpact = JSON.parse(terminal.stdout);
+    assert.equal(terminalImpact.verdict, impact.verdict);
+    assert.equal(terminalImpact.snapshot_id, impact.snapshot_id);
+    assert.equal(terminalImpact.impact.impact_digest, impact.impact.impact_digest);
+    assert.deepEqual(terminalImpact.impact.impacted_entities, impact.impact.impacted_entities);
+
     const sourceResponse = await fetch(`${baseUrl}/api/v1/files/content?path=${encodeURIComponent(sourcePath)}&repo_id=${connected.repo_id}`);
     const source = await sourceResponse.json();
     assert.equal(source.content, originalSource);
@@ -254,7 +292,10 @@ test('FR-P2-004/005: Temporary repository drives graph selection and unsaved sim
     assert.ok(simulation.damaged_callers.some((caller) => caller.file_path === callerPath && caller.calling_line === 2));
     assert.ok(['verified', 'partial', 'unknown'].includes(simulation.coverage_state.toLowerCase()));
     assert.ok(Number.isFinite(simulation.computation_latency_ms));
-    assert.ok(simulation.computation_latency_ms <= 50, `Simulation took ${simulation.computation_latency_ms}ms (round trip ${roundTripMs.toFixed(1)}ms)`);
+    assert.ok(
+      simulation.computation_latency_ms <= 50,
+      `Simulation took ${simulation.computation_latency_ms}ms (round trip ${roundTripMs.toFixed(1)}ms)`,
+    );
     assert.ok(roundTripMs <= 150, `Simulation round trip took ${roundTripMs.toFixed(1)}ms`);
     assert.equal(await fs.promises.readFile(path.join(projectRoot, sourcePath), 'utf8'), originalSource, 'Unsaved buffer must not alter repository source');
 

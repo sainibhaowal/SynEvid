@@ -22,8 +22,9 @@ function readVersion(command, args) {
 }
 
 const nodeMajor = Number(process.versions.node.split('.')[0]);
-if (!Number.isFinite(nodeMajor) || nodeMajor < 20) {
-  fail(`Node.js 20 or newer is required; found ${process.versions.node}.`);
+const nodeMinor = Number(process.versions.node.split('.')[1]);
+if (!Number.isFinite(nodeMajor) || nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 12)) {
+  fail(`Node.js 22.12 or newer is required; found ${process.versions.node}.`);
 }
 
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -36,7 +37,7 @@ const npmVersion =
     ? readVersion(process.execPath, [npmExecutable, '--version'])
     : readVersion(npmExecutable, ['--version']);
 if (!npmVersion) {
-  fail('npm was not found. Install Node.js 20+ with npm, then run this command again.');
+  fail('npm was not found. Install Node.js 22.12+ with npm, then run this command again.');
 }
 
 if (!fs.existsSync(webPackage)) {

@@ -3,9 +3,13 @@
 //! Hard boundary: No HashMap iteration in canonical serialization paths;
 //! all maps in canonical structures use BTreeMap to ensure deterministic ordering.
 
+pub mod finding;
 pub mod global_id;
+pub mod report_types;
 
+pub use finding::*;
 pub use global_id::{GlobalEntityId, GlobalIdError, URN_PREFIX, normalize_path};
+pub use report_types::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

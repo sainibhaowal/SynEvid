@@ -37,6 +37,7 @@
 
 use crate::{Cli, CliError, EXIT_PASS, EXIT_POLICY_FAIL, EXIT_UNSUPPORTED, OutputFormat};
 use autopsy_domain::CoverageState;
+use autopsy_envelope::{EvidenceEnvelope, Verdict, CoverageState as EnvelopeCoverage, EnvelopeBuilder, EnvelopeError};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,17 +51,46 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub exit_code: i32,
-    pub json: String,
+    pub envelope: EvidenceEnvelope,
     pub text: String,
 }
 
 impl Outcome {
-    fn new<T: serde::Serialize>(exit_code: i32, value: &T, text: String) -> Result<Self, CliError> {
+    pub fn new<T: serde::Serialize>(
+        exit_code: i32, 
+        value: &T, 
+        text: String,
+        command_id: &str,
+        engine_version: &str,
+    ) -> Result<Self, CliError> {
+        let payload = serde_json::to_value(value).map_err(|error| {
+            CliError::Analysis(format!("report is not serializable: {error}"))
+        })?;
+        
+        let verdict = match exit_code {
+            0 => Verdict::Pass,
+            2 => Verdict::Fail,
+            3 => Verdict::Error,
+            4 => Verdict::Unknown,
+            _ => Verdict::Error,
+        };
+        
+        let coverage = match exit_code {
+            0 => EnvelopeCoverage::Verified,
+            4 => EnvelopeCoverage::Unknown,
+            _ => EnvelopeCoverage::Partial,
+        };
+        
+        let envelope = EnvelopeBuilder::new(command_id.to_string(), engine_version.to_string())
+            .verdict(verdict)
+            .coverage_state(coverage)
+            .payload(payload)
+            .build()
+            .map_err(|e| CliError::Analysis(format!("envelope build failed: {e}")))?;
+        
         Ok(Self {
             exit_code,
-            json: serde_json::to_string_pretty(value).map_err(|error| {
-                CliError::Analysis(format!("report is not serializable: {error}"))
-            })?,
+            envelope,
             text,
         })
     }
@@ -69,7 +99,7 @@ impl Outcome {
     /// approximated: SARIF describes findings, and none of these reports is one.
     pub fn print(&self, format: OutputFormat) -> Result<(), CliError> {
         match format {
-            OutputFormat::Json => println!("{}", self.json),
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&self.envelope)?),
             OutputFormat::Text => print!("{}", self.text),
             OutputFormat::Sarif => {
                 return Err(CliError::Config(
@@ -135,18 +165,18 @@ pub fn apply_compact(outcome: Outcome, args: &CompactArgs) -> Outcome {
         return outcome;
     }
     let top_k = resolve_top_k(args.top_k);
-    let value = match serde_json::from_str::<serde_json::Value>(&outcome.json) {
-        Ok(value) => value,
-        // A report that is not JSON was the caller's bug and will be reproduced by
-        // `print`; compaction must never stand between an agent and its evidence.
-        Err(_) => return outcome,
-    };
+    // Extract payload from envelope
+    let value = outcome.envelope.payload.clone();
     let compacted = compact_projection(&value, top_k);
     match serde_json::to_string_pretty(&compacted) {
-        Ok(json) => Outcome {
-            exit_code: outcome.exit_code,
-            json,
-            text: outcome.text,
+        Ok(json) => {
+            let mut new_envelope = outcome.envelope.clone();
+            new_envelope.payload = compacted;
+            Outcome {
+                exit_code: outcome.exit_code,
+                envelope: new_envelope,
+                text: outcome.text,
+            }
         },
         // Same rule: if the projection cannot serialize, hand back the original rather
         // than failing a report that was already produced.
@@ -399,9 +429,15 @@ pub fn temporal(
     // A repository with no commits is not an analysis failure: it has no history to replay,
     // which is `4` rather than `3`.
     let Some(head) = head else {
+        let envelope = EnvelopeBuilder::new("temporal".to_string(), "0.6.0".to_string())
+            .verdict(Verdict::Unknown)
+            .coverage_state(EnvelopeCoverage::Unavailable)
+            .payload(serde_json::json!({ "journal": null }))
+            .build()
+            .map_err(|e| CliError::Analysis(format!("envelope build failed: {e}")))?;
         return Ok(Outcome {
             exit_code: EXIT_UNSUPPORTED,
-            json: "{\n  \"journal\": null\n}".to_string(),
+            envelope,
             text: "temporal: no commits (HEAD does not resolve), so there is no history to \
                    replay\n"
                 .to_string(),
@@ -421,9 +457,15 @@ pub fn temporal(
         // is not wrong, it is unavailable at this bound — and the message says what to pass
         // instead of leaving a bare error.
         Err(autopsy_temporal::TemporalError::TimelineTooLarge(bound)) => {
+            let envelope = EnvelopeBuilder::new("temporal".to_string(), "0.6.0".to_string())
+                .verdict(Verdict::Unknown)
+                .coverage_state(EnvelopeCoverage::Unavailable)
+                .payload(serde_json::json!({ "journal": null }))
+                .build()
+                .map_err(|e| CliError::Analysis(format!("envelope build failed: {e}")))?;
             return Ok(Outcome {
                 exit_code: EXIT_UNSUPPORTED,
-                json: "{\n  \"journal\": null\n}".to_string(),
+                envelope,
                 text: format!(
                     "temporal: the history does not fit in a bound of {bound} commit(s), and the \\\n                     walker refuses to truncate a timeline silently. Pass --max-commits at least \\\n                     as large as the reachable history.\n"
                 ),
@@ -447,7 +489,7 @@ pub fn temporal(
             snapshot.edges.len(),
             snapshot.digest
         );
-        return Outcome::new(exit_code, &snapshot, text);
+        return Outcome::new(exit_code, &snapshot, text, "temporal", "0.6.0");
     }
 
     let stats = journal.stats();
@@ -489,7 +531,7 @@ pub fn temporal(
         coverage: journal_coverage,
         notes,
     };
-    Outcome::new(exit_code, &output, text)
+    Outcome::new(exit_code, &output, text, "temporal", "0.6.0")
 }
 
 /// The CLI's temporal document: the engine's projection plus the two facts the CLI adds.
@@ -821,7 +863,7 @@ pub fn lineage(cli: &Cli, args: &LineageArgs) -> Result<Outcome, CliError> {
         coverage,
         notes,
     };
-    Outcome::new(exit_code, &output, text)
+    Outcome::new(exit_code, &output, text, "lineage", "0.6.0")
 }
 
 /// Persistence wiring (FR-026 / Step 29): when `--persist` is set, the analysis result is
@@ -832,25 +874,25 @@ pub fn persist_outcome(
     cli: &Cli,
     subcommand_name: &str,
     exit_code: i32,
-    result_json: &str,
+    result_payload: &serde_json::Value,
 ) -> std::result::Result<String, String> {
     use crate::{ANALYZER_VERSION, get_storage};
     if !cli.persist {
         return Ok(String::new());
     }
     let storage = get_storage(cli).map_err(|e| format!("persist: storage open failed: {e}"))?;
-    let digest_text = result_json.as_bytes();
+    let payload_bytes = serde_json::to_vec(result_payload).unwrap_or_default();
     let run_id = format!(
         "{}-{}",
         subcommand_name,
-        &blake3::hash(digest_text).to_hex()[..12]
+        &blake3::hash(&payload_bytes).to_hex()[..12]
     );
     let analysis_run = autopsy_domain::AnalysisRun {
         run_id: run_id.clone(),
         command: subcommand_name.to_string(),
         analyzer_version: ANALYZER_VERSION.to_string(),
         duration_ms: 0,
-        result_digest: blake3::hash(digest_text).to_hex().to_string(),
+        result_digest: blake3::hash(&payload_bytes).to_hex().to_string(),
     };
     storage
         .save_run(&analysis_run, &[], &[])
@@ -1107,7 +1149,7 @@ pub fn test_select(
     if all_required {
         text.push_str("note: everything must run; no narrowing could be justified.\n");
     }
-    Outcome::new(exit_code, &plan, text)
+    Outcome::new(exit_code, &plan, text, "test-select", "0.6.0")
 }
 
 // ---------------------------------------------------------------------------
@@ -1173,7 +1215,7 @@ pub fn contract_dist(
             for note in &report.notes {
                 text.push_str(&format!("  - {note}\n"));
             }
-            return Outcome::new(exit_code, &report, text);
+            return Outcome::new(exit_code, &report, text, "contract-dist", "0.6.0");
         }
     };
 
@@ -1225,7 +1267,7 @@ pub fn contract_dist(
     for note in &delta.notes {
         text.push_str(&format!("  note: {note}\n"));
     }
-    Outcome::new(exit_code, &delta, text)
+    Outcome::new(exit_code, &delta, text, "contract-dist", "0.6.0")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -1322,7 +1364,7 @@ pub fn telemetry(input: &Path, args: &TelemetryArgs) -> Result<Outcome, CliError
             record.coverage,
             record.digest
         );
-        return Outcome::new(exit_code, &record, text);
+        return Outcome::new(exit_code, &record, text, "telemetry", "0.6.0");
     };
 
     let surface_text = read_text(surface_path)?;
@@ -1373,7 +1415,7 @@ pub fn telemetry(input: &Path, args: &TelemetryArgs) -> Result<Outcome, CliError
     for note in &report.notes {
         text.push_str(&format!("  note: {note}\n"));
     }
-    Outcome::new(exit_code, &report, text)
+    Outcome::new(exit_code, &report, text, "cochange", "0.6.0")
 }
 
 /// 64 hex characters, or a 32-byte file. Anything else is refused rather than padded: a salt
@@ -1424,9 +1466,15 @@ pub fn cochange(
         .map_err(|error| CliError::Analysis(format!("HEAD could not be resolved: {error}")))?
         .is_none()
     {
+        let envelope = EnvelopeBuilder::new("cochange".to_string(), "0.6.0".to_string())
+            .verdict(Verdict::Unknown)
+            .coverage_state(EnvelopeCoverage::Unavailable)
+            .payload(serde_json::json!({ "cochange": null }))
+            .build()
+            .map_err(|e| CliError::Analysis(format!("envelope build failed: {e}")))?;
         return Ok(Outcome {
             exit_code: EXIT_UNSUPPORTED,
-            json: "{\n  \"cochange\": null\n}".to_string(),
+            envelope,
             text: "cochange: no commits (HEAD does not resolve), so there is no window to \n\
                    mine\n"
                 .to_string(),
@@ -1481,7 +1529,7 @@ pub fn cochange(
             edge.coverage
         ));
     }
-    Outcome::new(exit_code, &report, text)
+    Outcome::new(exit_code, &report, text, "cochange", "0.6.0")
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,7 +1573,7 @@ pub fn catalog(
     for note in &report.notes {
         text.push_str(&format!("  note: {note}\n"));
     }
-    Outcome::new(exit_code, &report, text)
+    Outcome::new(exit_code, &report, text, "catalog", "0.6.0")
 }
 
 /// The organisational blast radius of one catalog component: who owns it, what the same
@@ -1596,7 +1644,7 @@ pub fn blast_radius(
         "catalog": report,
         "blast_radius": radius,
     });
-    Outcome::new(exit_code, &value, text)
+    Outcome::new(exit_code, &value, text, "blast-radius", "0.6.0")
 }
 
 #[cfg(test)]

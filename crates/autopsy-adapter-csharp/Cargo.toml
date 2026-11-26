@@ -11,5 +11,8 @@ autopsy-symbols = { path = "../autopsy-symbols" }
 autopsy-workspace-registry = { path = "../autopsy-workspace-registry" }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tree-sitter = "0.24"
+# tree-sitter-c-sharp 0.23.1 is generated with ABI 15.  Tree-sitter 0.24
+# rejects that grammar before parsing; keep this adapter on the ABI-15 runtime
+# while the other adapters remain on the workspace's 0.24 line.
+tree-sitter = "0.25.10"
 tree-sitter-c-sharp = "0.23.1"

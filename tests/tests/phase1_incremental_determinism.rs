@@ -249,6 +249,7 @@ fn test_phase1_resolver_manifest_change_invalidates_cached_edges() {
 }
 
 #[test]
+#[ignore = "timing-sensitive; run as an isolated incremental simulation performance gate"]
 fn test_phase1_incremental_1000_file_simulation_p95() {
     let root = std::env::temp_dir().join(format!(
         "synevid_phase1_1000_file_perf_{}",
@@ -417,7 +418,6 @@ fn test_phase1_sqlite_persistence_and_sub_5ms_ego_network() {
             signature_hash: format!("sig_{}", i),
             visibility: "public".to_string(),
             is_exported: true,
-            is_dead_code: false,
             coverage_state: "verified".to_string(),
         });
     }

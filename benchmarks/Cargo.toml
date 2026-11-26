@@ -1,0 +1,19 @@
+[package]
+name = "syn-bench"
+version = "0.1.0"
+edition = "2021"
+description = "SynEvid production benchmarking and stress testing suite"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+blake3 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "process"] }
+autopsy-cli = { path = "../crates/autopsy-cli" }
+autopsy-envelope = { path = "../crates/autopsy-envelope" }
+autopsy-protocol = { path = "../crates/autopsy-protocol" }
+
+[dev-dependencies]
+tempfile = "3.10"

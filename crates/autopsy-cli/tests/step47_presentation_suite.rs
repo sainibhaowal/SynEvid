@@ -28,6 +28,7 @@ fn autopsy_ui_json_output_is_valid_and_actionable() {
         "4444".to_string(),
         "--format".to_string(),
         "json".to_string(),
+        "--offline".to_string(),
     ];
     let exit_code = run_cli(&args);
     assert_eq!(exit_code, EXIT_PASS);
@@ -40,6 +41,7 @@ fn autopsy_tools_reports_full_catalog() {
         "tools".to_string(),
         "--format".to_string(),
         "json".to_string(),
+        "--offline".to_string(),
     ];
     let exit_code = run_cli(&args);
     assert_eq!(exit_code, EXIT_PASS);

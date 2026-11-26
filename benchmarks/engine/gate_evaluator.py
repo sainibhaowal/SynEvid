@@ -70,10 +70,11 @@ class GateEvaluator:
 
         # 3. New Failure Class
         # Structural invariants (e.g., layers, cycles, forbidden deps) detected by C but missed by A and B
-        new_fc_found = agg_c.failure_classes_detected - max(
+        failure_class_delta = agg_c.failure_classes_detected - max(
             agg_a.failure_classes_detected, agg_b.failure_classes_detected
         )
-        gate_3 = new_fc_found > 0
+        new_fc_found = max(0, failure_class_delta)
+        gate_3 = failure_class_delta > 0
 
         passed = gate_1 or gate_2 or gate_3
 
@@ -120,7 +121,7 @@ def write_reproduction_report(
     md_path = output_dir / "reproduction_report.md"
 
     report_data = {
-        "title": "Synevid Phase 6 Benchmark Reproduction Report",
+        "title": "SynEvid Impact Benchmark Reproduction (RQ1-RQ5)",
         "pre_registered_gate": gate_result.to_dict(),
         "aggregate_metrics": {
             "baseline_a_grep": agg_a.to_dict(),
@@ -129,18 +130,26 @@ def write_reproduction_report(
         },
         "task_results": {k: [r.to_dict() for r in v] for k, v in task_results.items()},
     }
+    if gate_result.cost_cut_percent < 0:
+        token_comparison = (
+            f"{abs(gate_result.cost_cut_percent):.1f}% more than lowest-token baseline"
+        )
+    else:
+        token_comparison = f"{gate_result.cost_cut_percent:.1f}% fewer than lowest-token baseline"
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(report_data, f, indent=2)
 
     # Markdown report
     md_lines = [
-        "# Synevid Phase 6 Benchmark Reproduction Report",
+        "# SynEvid Impact Benchmark Reproduction (RQ1-RQ5)",
         "",
         "## 1. Executive Summary & Pre-Registered Gate Status",
         "",
-        f"- **Gate Decision:** **{'PASSED (PROCEED)' if gate_result.passed else 'FAILED (STOP per 01 Ch.12)'}**",
+        f"- **Pre-registered gate:** **{'PASS' if gate_result.passed else 'FAIL'}**; this narrow experiment gate is not a production-readiness or overall quality verdict.",
         f"- **Rationale:** {gate_result.rationale}",
+        "- A passing OR-gate can coexist with failures on the other criteria; inspect all rows below.",
+        "- This impact corpus is not the Phase 6 analytics dead-code/Git-risk evaluation and does not establish product readiness.",
         "",
         "| Gate Criterion | Requirement | Observed | Status |",
         "| :--- | :--- | :--- | :--- |",
@@ -150,15 +159,17 @@ def write_reproduction_report(
         "",
         "## 2. Comparative Benchmark Telemetry (50 Tasks Across 5 TypeScript Repositories)",
         "",
-        "| Metric | Baseline A (Agent + Grep) | Baseline B (Agent + LSP) | Baseline C (Agent + Autopsy) | Autopsy Advantage |",
+        "| Metric | Baseline A (Grep heuristic) | Baseline B (LSP heuristic) | Baseline C (SynEvid CLI) | Difference vs best baseline |",
         "| :--- | :---: | :---: | :---: | :--- |",
         f"| **Mean Recall** | {agg_a.mean_recall * 100:.2f}% | {agg_b.mean_recall * 100:.2f}% | **{agg_c.mean_recall * 100:.2f}%** | **+{gate_result.recall_lift_pp:.2f}pp lift** |",
-        f"| **Mean Precision** | {agg_a.mean_precision * 100:.2f}% | {agg_b.mean_precision * 100:.2f}% | **{agg_c.mean_precision * 100:.2f}%** | Zero false textual matches |",
-        f"| **Mean F1 Score** | {agg_a.mean_f1 * 100:.2f}% | {agg_b.mean_f1 * 100:.2f}% | **{agg_c.mean_f1 * 100:.2f}%** | Superior balance |",
-        f"| **Mean Tool Calls** | {agg_a.mean_tool_calls:.2f} | {agg_b.mean_tool_calls:.2f} | **{agg_c.mean_tool_calls:.2f}** | 1 atomic verification call |",
-        f"| **Mean Tokens** | {agg_a.mean_tokens:.0f} | {agg_b.mean_tokens:.0f} | **{agg_c.mean_tokens:.0f}** | **-{gate_result.cost_cut_percent:.1f}% tokens** |",
-        f"| **Mean Latency (ms)** | {agg_a.mean_time_ms:.1f} ms | {agg_b.mean_time_ms:.1f} ms | **{agg_c.mean_time_ms:.1f} ms** | Sub-50ms deterministic Rust |",
-        f"| **Failure Classes Detected** | {agg_a.failure_classes_detected} | {agg_b.failure_classes_detected} | **{agg_c.failure_classes_detected}** | Detects cycles & layers |",
+        f"| **Mean Precision** | {agg_a.mean_precision * 100:.2f}% | {agg_b.mean_precision * 100:.2f}% | **{agg_c.mean_precision * 100:.2f}%** | {(agg_c.mean_precision - max(agg_a.mean_precision, agg_b.mean_precision)) * 100:+.2f}pp |",
+        f"| **Mean F1 Score** | {agg_a.mean_f1 * 100:.2f}% | {agg_b.mean_f1 * 100:.2f}% | **{agg_c.mean_f1 * 100:.2f}%** | {(agg_c.mean_f1 - max(agg_a.mean_f1, agg_b.mean_f1)) * 100:+.2f}pp |",
+        f"| **Mean Tool Calls** | {agg_a.mean_tool_calls:.2f} | {agg_b.mean_tool_calls:.2f} | **{agg_c.mean_tool_calls:.2f}** | {(agg_c.mean_tool_calls - min(agg_a.mean_tool_calls, agg_b.mean_tool_calls)):+.2f} vs lowest-count baseline |",
+        f"| **Mean Tokens** | {agg_a.mean_tokens:.0f} | {agg_b.mean_tokens:.0f} | **{agg_c.mean_tokens:.0f}** | {token_comparison} |",
+        f"| **Mean Latency (ms)** | {agg_a.mean_time_ms:.1f} ms | {agg_b.mean_time_ms:.1f} ms | **{agg_c.mean_time_ms:.1f} ms** | {(agg_c.mean_time_ms - min(agg_a.mean_time_ms, agg_b.mean_time_ms)):+.1f} ms vs fastest baseline |",
+        f"| **Failure Classes Detected** | {agg_a.failure_classes_detected} | {agg_b.failure_classes_detected} | **{agg_c.failure_classes_detected}** | {gate_result.new_failure_classes_found} additional classes vs best baseline |",
+        "",
+        "This harness uses deterministic grep/LSP heuristics as comparison baselines, not live autonomous agents. Token and tool-call counts are harness estimates. Results apply only to this task corpus; they do not measure Phase 6 analytics, general repositories, or production readiness.",
         "",
         "## 3. Evaluation Breakdown by Task Category",
         "",

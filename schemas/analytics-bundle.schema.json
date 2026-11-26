@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synevid.dev/schemas/analytics-bundle.schema.json",
+  "title": "SynEvid Deterministic Analytics Bundle",
+  "type": "object",
+  "required": ["bundle_schema", "report_id", "report", "artifacts"],
+  "properties": {
+    "bundle_schema": { "const": "synevid.analytics-bundle.v1" },
+    "report_id": { "$ref": "analytics-report.schema.json#/$defs/digest" },
+    "report": { "$ref": "analytics-report.schema.json" },
+    "artifacts": {
+      "type": "object",
+      "required": ["json", "markdown", "html", "sarif"],
+      "properties": {
+        "json": { "$ref": "#/$defs/textArtifact" },
+        "markdown": { "$ref": "#/$defs/textArtifact" },
+        "html": { "$ref": "#/$defs/textArtifact" },
+        "sarif": { "$ref": "#/$defs/textArtifact" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "textArtifact": {
+      "type": "object",
+      "required": ["digest", "content"],
+      "properties": {
+        "digest": { "$ref": "analytics-report.schema.json#/$defs/digest" },
+        "content": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

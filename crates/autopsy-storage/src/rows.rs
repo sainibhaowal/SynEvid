@@ -107,6 +107,111 @@ fn validate_i64(label: &str, value: i64) -> Result<(), StorageError> {
 }
 
 impl StorageEngine {
+    /// Atomically replaces evidence records for one snapshot and evidence version.
+    /// Empty input is valid only as an explicit empty result for that scoped version.
+    pub fn replace_static_findings(
+        &self,
+        snapshot_id: &str,
+        evidence_version: i64,
+        rows: &[StaticFindingRecord],
+    ) -> Result<(), StorageError> {
+        require_non_empty("snapshot_id", snapshot_id)?;
+        validate_i64("evidence_version", evidence_version)?;
+        if evidence_version == 0 {
+            return Err(StorageError::InvalidRow(
+                "evidence_version must be positive".into(),
+            ));
+        }
+        let mut sorted: Vec<&StaticFindingRecord> = rows.iter().collect();
+        sorted.sort_by(|a, b| a.stable_id.cmp(&b.stable_id));
+        let mut seen = BTreeSet::new();
+        for row in &sorted {
+            require_non_empty("finding_id", &row.finding_id)?;
+            require_non_empty("stable_id", &row.stable_id)?;
+            require_non_empty("evidence_basis", &row.evidence_basis)?;
+            require_non_empty("reason", &row.reason)?;
+            require_non_empty("evidence_digest", &row.evidence_digest)?;
+            validate_coverage(&row.coverage_state)?;
+            if row.snapshot_id != snapshot_id || row.evidence_version != evidence_version {
+                return Err(StorageError::InvalidRow(
+                    "finding snapshot/version does not match replacement scope".into(),
+                ));
+            }
+            if !matches!(
+                row.finding_state.as_str(),
+                "candidate" | "unknown" | "excluded"
+            ) {
+                return Err(StorageError::InvalidRow(
+                    "invalid static finding state".into(),
+                ));
+            }
+            if !seen.insert(row.stable_id.as_str()) {
+                return Err(StorageError::InvalidRow(format!(
+                    "duplicate static finding for stable_id `{}`",
+                    row.stable_id
+                )));
+            }
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM static_findings WHERE snapshot_id = ?1 AND evidence_version = ?2",
+            params![snapshot_id, evidence_version],
+        )?;
+        for row in sorted {
+            tx.execute(
+                "INSERT INTO static_findings
+                 (finding_id, snapshot_id, stable_id, evidence_version, finding_state,
+                  evidence_basis, coverage_state, reason, evidence_digest)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    row.finding_id,
+                    row.snapshot_id,
+                    row.stable_id,
+                    row.evidence_version,
+                    row.finding_state,
+                    row.evidence_basis,
+                    row.coverage_state,
+                    row.reason,
+                    row.evidence_digest
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Loads evidence records in stable-symbol order; legacy booleans are never read.
+    pub fn static_findings_for_snapshot(
+        &self,
+        snapshot_id: &str,
+        evidence_version: i64,
+    ) -> Result<Vec<StaticFindingRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT finding_id, snapshot_id, stable_id, evidence_version, finding_state,
+                    evidence_basis, coverage_state, reason, evidence_digest
+             FROM static_findings WHERE snapshot_id = ?1 AND evidence_version = ?2
+             ORDER BY stable_id",
+        )?;
+        let records = statement
+            .query_map(params![snapshot_id, evidence_version], |row| {
+                Ok(StaticFindingRecord {
+                    finding_id: row.get(0)?,
+                    snapshot_id: row.get(1)?,
+                    stable_id: row.get(2)?,
+                    evidence_version: row.get(3)?,
+                    finding_state: row.get(4)?,
+                    evidence_basis: row.get(5)?,
+                    coverage_state: row.get(6)?,
+                    reason: row.get(7)?,
+                    evidence_digest: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(records)
+    }
+
     /// Persists temporal facts. Idempotent on `fact_id`; rejects duplicate ids in one call
     /// rather than silently letting sort order pick a winner.
     pub fn save_temporal_facts(&self, rows: &[TemporalFactRow]) -> Result<(), StorageError> {
@@ -442,8 +547,37 @@ pub struct GraphNodeRow {
     pub signature_hash: String,
     pub visibility: String,
     pub is_exported: bool,
-    pub is_dead_code: bool,
     pub coverage_state: String,
+}
+
+/// Versioned, graph-scoped dead-code evidence. Legacy boolean values are deliberately
+/// not migrated into findings because they have no reproducible evidence basis.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StaticFindingRecord {
+    pub finding_id: String,
+    pub snapshot_id: String,
+    pub stable_id: String,
+    pub evidence_version: i64,
+    pub finding_state: String,
+    pub evidence_basis: String,
+    pub coverage_state: String,
+    pub reason: String,
+    pub evidence_digest: String,
+}
+
+/// One actual telemetry topology report, pinned to the repository snapshot/window
+/// that produced it. The payload is engine-produced JSON, not a synthesized absence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeObservationWindowRecord {
+    pub window_id: String,
+    pub repository_id: String,
+    pub snapshot_id: String,
+    pub required_windows: i64,
+    pub observed_windows: i64,
+    pub complete_observation: bool,
+    pub coverage_state: String,
+    pub evidence_digest: String,
+    pub report_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -544,7 +678,344 @@ pub struct AiSessionLedgerRecord {
     pub cost_saved_microcents: i64,
 }
 
+/// Persisted analytics report artifact for durable history and replay.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReportHistoryRecord {
+    pub report_id: String,
+    pub repository_id: String,
+    pub snapshot_id: String,
+    pub format: String,
+    pub report_json: String,
+    pub evidence_digest: String,
+    pub created_at: i64,
+    pub schema_version: String,
+}
+
+/// OTLP ingestion log entry for audit trail.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OtlpIngestionLogRecord {
+    pub ingestion_id: String,
+    pub repository_id: String,
+    pub snapshot_id: String,
+    pub window_id: String,
+    pub received_at: i64,
+    pub otlp_digest: String,
+    pub spans_ingested: i64,
+    pub status: String,
+}
+
 impl StorageEngine {
+    pub fn save_runtime_observation_window(
+        &self,
+        row: &RuntimeObservationWindowRecord,
+    ) -> Result<(), StorageError> {
+        for (label, value) in [
+            ("window_id", row.window_id.as_str()),
+            ("repository_id", row.repository_id.as_str()),
+            ("snapshot_id", row.snapshot_id.as_str()),
+            ("evidence_digest", row.evidence_digest.as_str()),
+            ("report_json", row.report_json.as_str()),
+        ] {
+            require_non_empty(label, value)?;
+        }
+        validate_coverage(&row.coverage_state)?;
+        if row.required_windows <= 0 || row.observed_windows < 0 {
+            return Err(StorageError::InvalidRow(
+                "runtime observation window counts are invalid".into(),
+            ));
+        }
+        if row.complete_observation && row.observed_windows < row.required_windows {
+            return Err(StorageError::InvalidRow(
+                "complete observation cannot have fewer observed than required windows".into(),
+            ));
+        }
+        let report: serde_json::Value = serde_json::from_str(&row.report_json)?;
+        let canonical = serde_json::to_vec(&report)?;
+        let actual_digest = format!("blake3:{}", blake3::hash(&canonical).to_hex());
+        if row.evidence_digest != actual_digest {
+            return Err(StorageError::InvalidRow(
+                "runtime report evidence digest does not match payload".into(),
+            ));
+        }
+        let observation = &report["observation"];
+        let observed = observation["windows_observed"].as_i64();
+        let required = observation["required_windows"].as_i64();
+        let complete = observation["complete_observation"].as_bool();
+        if observed != Some(row.observed_windows)
+            || required != Some(row.required_windows)
+            || complete != Some(row.complete_observation)
+        {
+            return Err(StorageError::InvalidRow(
+                "runtime window metadata differs from report payload".into(),
+            ));
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO runtime_observation_windows
+             (window_id, repository_id, snapshot_id, required_windows, observed_windows,
+              complete_observation, coverage_state, evidence_digest, report_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                row.window_id,
+                row.repository_id,
+                row.snapshot_id,
+                row.required_windows,
+                row.observed_windows,
+                i64::from(row.complete_observation),
+                row.coverage_state,
+                row.evidence_digest,
+                row.report_json
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn runtime_observation_windows(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+    ) -> Result<Vec<RuntimeObservationWindowRecord>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT window_id, repository_id, snapshot_id, required_windows, observed_windows,
+                    complete_observation, coverage_state, evidence_digest, report_json
+             FROM runtime_observation_windows WHERE repository_id = ?1 AND snapshot_id = ?2
+             ORDER BY window_id",
+        )?;
+        let rows = statement
+            .query_map(params![repository_id, snapshot_id], |row| {
+                Ok(RuntimeObservationWindowRecord {
+                    window_id: row.get(0)?,
+                    repository_id: row.get(1)?,
+                    snapshot_id: row.get(2)?,
+                    required_windows: row.get(3)?,
+                    observed_windows: row.get(4)?,
+                    complete_observation: row.get::<_, i64>(5)? != 0,
+                    coverage_state: row.get(6)?,
+                    evidence_digest: row.get(7)?,
+                    report_json: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Persists an analytics report artifact for durable history and replay.
+    pub fn save_report_history(&self, record: &ReportHistoryRecord) -> Result<(), StorageError> {
+        require_non_empty("report_id", &record.report_id)?;
+        require_non_empty("repository_id", &record.repository_id)?;
+        require_non_empty("snapshot_id", &record.snapshot_id)?;
+        require_non_empty("format", &record.format)?;
+        require_non_empty("report_json", &record.report_json)?;
+        require_non_empty("evidence_digest", &record.evidence_digest)?;
+        require_non_empty("schema_version", &record.schema_version)?;
+        if record.created_at <= 0 {
+            return Err(StorageError::InvalidRow(
+                "created_at must be positive".into(),
+            ));
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO report_history (
+                report_id, repository_id, snapshot_id, format, report_json, evidence_digest, created_at, schema_version
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+            params![
+                record.report_id,
+                record.repository_id,
+                record.snapshot_id,
+                record.format,
+                record.report_json,
+                record.evidence_digest,
+                record.created_at,
+                record.schema_version,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves report history for a repository and snapshot, ordered newest first.
+    pub fn report_history(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ReportHistoryRecord>, StorageError> {
+        require_non_empty("repository_id", repository_id)?;
+        require_non_empty("snapshot_id", snapshot_id)?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT report_id, repository_id, snapshot_id, format, report_json, evidence_digest, created_at, schema_version
+             FROM report_history WHERE repository_id = ?1 AND snapshot_id = ?2
+             ORDER BY created_at DESC, report_id ASC LIMIT ?3",
+        )?;
+        let rows = statement
+            .query_map(
+                params![
+                    repository_id,
+                    snapshot_id,
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                |row| {
+                    Ok(ReportHistoryRecord {
+                        report_id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        snapshot_id: row.get(2)?,
+                        format: row.get(3)?,
+                        report_json: row.get(4)?,
+                        evidence_digest: row.get(5)?,
+                        created_at: row.get(6)?,
+                        schema_version: row.get(7)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Retrieves durable analytics history across all snapshots of a repository.
+    /// Ordering is deterministic for equal operational timestamps.
+    pub fn report_history_for_repository(
+        &self,
+        repository_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ReportHistoryRecord>, StorageError> {
+        require_non_empty("repository_id", repository_id)?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT report_id, repository_id, snapshot_id, format, report_json, evidence_digest, created_at, schema_version
+             FROM report_history WHERE repository_id = ?1
+             ORDER BY created_at DESC, report_id ASC LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(
+                params![repository_id, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |row| {
+                    Ok(ReportHistoryRecord {
+                        report_id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        snapshot_id: row.get(2)?,
+                        format: row.get(3)?,
+                        report_json: row.get(4)?,
+                        evidence_digest: row.get(5)?,
+                        created_at: row.get(6)?,
+                        schema_version: row.get(7)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Retrieves a specific report by report_id.
+    pub fn get_report_history(
+        &self,
+        report_id: &str,
+    ) -> Result<Option<ReportHistoryRecord>, StorageError> {
+        require_non_empty("report_id", report_id)?;
+        let conn = self.conn.lock().unwrap();
+        let row_opt = conn
+            .query_row(
+                "SELECT report_id, repository_id, snapshot_id, format, report_json, evidence_digest, created_at, schema_version
+                 FROM report_history WHERE report_id = ?1",
+                params![report_id],
+                |row| {
+                    Ok(ReportHistoryRecord {
+                        report_id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        snapshot_id: row.get(2)?,
+                        format: row.get(3)?,
+                        report_json: row.get(4)?,
+                        evidence_digest: row.get(5)?,
+                        created_at: row.get(6)?,
+                        schema_version: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row_opt)
+    }
+
+    /// Logs an OTLP ingestion event for audit trail.
+    pub fn log_otlp_ingestion(&self, record: &OtlpIngestionLogRecord) -> Result<(), StorageError> {
+        require_non_empty("ingestion_id", &record.ingestion_id)?;
+        require_non_empty("repository_id", &record.repository_id)?;
+        require_non_empty("snapshot_id", &record.snapshot_id)?;
+        require_non_empty("window_id", &record.window_id)?;
+        require_non_empty("otlp_digest", &record.otlp_digest)?;
+        require_non_empty("status", &record.status)?;
+        if record.received_at <= 0 {
+            return Err(StorageError::InvalidRow(
+                "received_at must be positive".into(),
+            ));
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO otlp_ingestion_log (
+                ingestion_id, repository_id, snapshot_id, window_id, received_at, otlp_digest, spans_ingested, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(ingestion_id) DO UPDATE SET status = excluded.status;",
+            params![
+                record.ingestion_id,
+                record.repository_id,
+                record.snapshot_id,
+                record.window_id,
+                record.received_at,
+                record.otlp_digest,
+                record.spans_ingested,
+                record.status,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves OTLP ingestion logs for a repository and snapshot.
+    pub fn otlp_ingestion_logs(
+        &self,
+        repository_id: &str,
+        snapshot_id: &str,
+        limit: usize,
+    ) -> Result<Vec<OtlpIngestionLogRecord>, StorageError> {
+        require_non_empty("repository_id", repository_id)?;
+        require_non_empty("snapshot_id", snapshot_id)?;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT ingestion_id, repository_id, snapshot_id, window_id, received_at, otlp_digest, spans_ingested, status
+             FROM otlp_ingestion_log WHERE repository_id = ?1 AND snapshot_id = ?2
+             ORDER BY received_at DESC LIMIT ?3",
+        )?;
+        let rows = statement
+            .query_map(
+                params![
+                    repository_id,
+                    snapshot_id,
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                |row| {
+                    Ok(OtlpIngestionLogRecord {
+                        ingestion_id: row.get(0)?,
+                        repository_id: row.get(1)?,
+                        snapshot_id: row.get(2)?,
+                        window_id: row.get(3)?,
+                        received_at: row.get(4)?,
+                        otlp_digest: row.get(5)?,
+                        spans_ingested: row.get(6)?,
+                        status: row.get(7)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Upserts a repository record.
     pub fn register_repository(&self, repo: &RepoRecord) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap();
@@ -728,7 +1199,7 @@ impl StorageEngine {
         let mut node_stmt = conn.prepare_cached(
             "SELECT snapshot_id, stable_id, node_kind, qualified_name, file_path,
                     start_line, end_line, signature_hash, visibility, is_exported,
-                    is_dead_code, coverage_state
+                    coverage_state
              FROM graph_nodes WHERE snapshot_id = ?1 ORDER BY stable_id",
         )?;
         let nodes = node_stmt
@@ -744,8 +1215,7 @@ impl StorageEngine {
                     signature_hash: row.get(7)?,
                     visibility: row.get(8)?,
                     is_exported: row.get::<_, i64>(9)? != 0,
-                    is_dead_code: row.get::<_, i64>(10)? != 0,
-                    coverage_state: row.get(11)?,
+                    coverage_state: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -883,7 +1353,7 @@ impl StorageEngine {
             let mut statement = conn.prepare_cached(
                 "SELECT node.snapshot_id, node.stable_id, node.node_kind, node.qualified_name,
                         node.file_path, node.start_line, node.end_line, node.signature_hash,
-                        node.visibility, node.is_exported, node.is_dead_code, node.coverage_state
+                        node.visibility, node.is_exported, node.coverage_state
                  FROM graph_nodes AS node
                  JOIN synevid_graph_universe_selected AS selected
                    ON selected.stable_id = node.stable_id
@@ -901,8 +1371,7 @@ impl StorageEngine {
                     signature_hash: row.get(7)?,
                     visibility: row.get(8)?,
                     is_exported: row.get::<_, i64>(9)? != 0,
-                    is_dead_code: row.get::<_, i64>(10)? != 0,
-                    coverage_state: row.get(11)?,
+                    coverage_state: row.get(10)?,
                 })
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -1007,15 +1476,14 @@ impl StorageEngine {
                 "INSERT INTO graph_nodes (
                     snapshot_id, stable_id, node_kind, qualified_name, file_path,
                     start_line, end_line, signature_hash, visibility, is_exported,
-                    is_dead_code, coverage_state
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    coverage_state
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 ON CONFLICT(snapshot_id, stable_id) DO UPDATE SET
                     qualified_name = excluded.qualified_name,
                     start_line = excluded.start_line,
                     end_line = excluded.end_line,
                     signature_hash = excluded.signature_hash,
                     is_exported = excluded.is_exported,
-                    is_dead_code = excluded.is_dead_code,
                     coverage_state = excluded.coverage_state;",
             )?;
 
@@ -1031,7 +1499,6 @@ impl StorageEngine {
                     n.signature_hash,
                     n.visibility,
                     if n.is_exported { 1 } else { 0 },
-                    if n.is_dead_code { 1 } else { 0 },
                     n.coverage_state,
                 ])?;
             }
@@ -1082,7 +1549,7 @@ impl StorageEngine {
         let mut node_stmt = conn.prepare_cached(
             "SELECT snapshot_id, stable_id, node_kind, qualified_name, file_path,
                     start_line, end_line, signature_hash, visibility, is_exported,
-                    is_dead_code, coverage_state
+                    coverage_state
              FROM graph_nodes WHERE snapshot_id = ?1 AND stable_id = ?2 LIMIT 1;",
         )?;
         let target_node = node_stmt
@@ -1098,8 +1565,7 @@ impl StorageEngine {
                     signature_hash: row.get(7)?,
                     visibility: row.get(8)?,
                     is_exported: row.get::<_, i64>(9)? != 0,
-                    is_dead_code: row.get::<_, i64>(10)? != 0,
-                    coverage_state: row.get(11)?,
+                    coverage_state: row.get(10)?,
                 })
             })
             .optional()?;
@@ -1635,7 +2101,6 @@ mod graph_universe_tests {
                     signature_hash: String::new(),
                     visibility: "public".to_string(),
                     is_exported: true,
-                    is_dead_code: false,
                     coverage_state: if index == 14_999 {
                         "partial".to_string()
                     } else {

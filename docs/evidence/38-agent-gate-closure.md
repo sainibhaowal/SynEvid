@@ -1,5 +1,8 @@
 # Evidence 38 — Agent acceptance-gate closure (protocol-level MCP e2e)
 
+> **Benchmark correction (2026-11-23):** any impact-accuracy or promotion claim
+> in this historical record is superseded by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 Closes the roadmap §6 acceptance gate with real artifacts: the agent loop is now
 exercised end-to-end **through the MCP server** over its stdio wire protocol, not
 only through the CLI or in-process handler calls. One honest-documentation item

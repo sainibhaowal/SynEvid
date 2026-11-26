@@ -1,0 +1,138 @@
+name: Phase 5 - Electron Release & Evidence
+
+on:
+  push:
+    tags: ['v0.*']
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: 'npm' }
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test --workspace --lib
+      - run: cargo test -p autopsy-cli
+      - run: cargo test -p autopsy-envelope
+      - run: cargo test -p autopsy-protocol
+      - run: cargo test -p autopsy-daemon
+      - run: cd apps/desktop-electron && npm ci && npm run lint && npm run typecheck
+
+  build-all:
+    needs: lint-and-test
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            artifact: windows-installer
+            package-script: "npm run package -- --win nsis portable"
+            artifacts: "release-build/*.exe release-build/*.zip"
+          - os: ubuntu-latest
+            artifact: linux-installer
+            package-script: "npm run package -- --linux AppImage deb"
+            artifacts: "release-build/*.AppImage release-build/*.deb"
+          - os: macos-latest
+            artifact: macos-installer
+            package-script: "npm run package -- --mac dmg zip"
+            artifacts: "release-build/*.dmg release-build/*.zip"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: 'npm' }
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Build Rust daemon
+        run: cargo build --release -p synevid-ui
+        env:
+          SYNEVID_LOOPBACK_TOKEN: ${{ secrets.SYNEVID_LOOPBACK_TOKEN }}
+      - name: Build Electron app
+        run: |
+          cd apps/desktop-electron
+          npm ci
+          npm run build
+          ${{ matrix.package-script }}
+        env:
+          SYNEVID_LOOPBACK_TOKEN: ${{ secrets.SYNEVID_LOOPBACK_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGN_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGN_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.MACOS_CODE_SIGN_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CODE_SIGN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: apps/desktop-electron/release-build/
+          retention-days: 30
+
+  smoke-test:
+    needs: build-all
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        artifact: [windows-installer, linux-installer, macos-installer]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts
+      - name: Run packaged smoke test
+        run: |
+          node scripts/smoke-packaged.js ./artifacts/*.exe  # or .AppImage / .dmg
+        env:
+          SYNEVID_SMOKE_REPO: ${{ github.workspace }}
+          SYNEVID_LOOPBACK_TOKEN: test-token-123
+
+  generate-evidence:
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Generate evidence
+        run: scripts/generate-evidence.sh
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: evidence/
+          retention-days: 90
+
+  release:
+    needs: [smoke-test, generate-evidence]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release-artifacts/**/*.exe
+            release-artifacts/**/*.AppImage
+            release-artifacts/**/*.deb
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.zip
+          generate_release_notes: true
+      - name: Upload evidence to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: evidence/sha256sums.txt
+          asset_name: sha256sums.txt
+          asset_content_type: text/plain

@@ -14,11 +14,44 @@ import {
   resolveMaxBufferBytes,
 } from '../dist/cli.js';
 import { evidenceEnvelope, refusedEnvelope, repairAdviceFromStderr } from '../dist/evidence.js';
-import { resolveAgainstRepoRoot } from '../dist/server.js';
+import { resolveAgainstRepoRoot, resolveDaemonEndpoint, daemonHeaders } from '../dist/server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_API_ROOT = path.resolve(__dirname, '../../../benchmarks/corpus/repo-api');
+
+test('MCP daemon endpoint honors only explicit loopback origins', () => {
+  const saved = process.env.SYNEVID_DAEMON_URL;
+  try {
+    process.env.SYNEVID_DAEMON_URL = 'http://127.0.0.1:3343';
+    assert.equal(resolveDaemonEndpoint('/api/v1/health'), 'http://127.0.0.1:3343/api/v1/health');
+    process.env.SYNEVID_DAEMON_URL = 'http://example.com:3343';
+    assert.throws(() => resolveDaemonEndpoint('/api/v1/health'), /loopback origin/);
+    process.env.SYNEVID_DAEMON_URL = 'http://127.0.0.1:3343/base';
+    assert.throws(() => resolveDaemonEndpoint('/api/v1/health'), /loopback origin/);
+  } finally {
+    if (saved === undefined) delete process.env.SYNEVID_DAEMON_URL;
+    else process.env.SYNEVID_DAEMON_URL = saved;
+  }
+});
+
+test('MCP daemon reads the current bearer credential from the configured token file', () => {
+  const tokenFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-mcp-token-')), 'token');
+  const savedToken = process.env.SYNEVID_LOOPBACK_TOKEN;
+  const savedTokenFile = process.env.SYNEVID_MCP_TOKEN_FILE;
+  try {
+    fs.writeFileSync(tokenFile, 'credential-for-test\n', { mode: 0o600 });
+    delete process.env.SYNEVID_LOOPBACK_TOKEN;
+    process.env.SYNEVID_MCP_TOKEN_FILE = tokenFile;
+    assert.equal(daemonHeaders().Authorization, 'Bearer credential-for-test');
+  } finally {
+    if (savedToken === undefined) delete process.env.SYNEVID_LOOPBACK_TOKEN;
+    else process.env.SYNEVID_LOOPBACK_TOKEN = savedToken;
+    if (savedTokenFile === undefined) delete process.env.SYNEVID_MCP_TOKEN_FILE;
+    else process.env.SYNEVID_MCP_TOKEN_FILE = savedTokenFile;
+    fs.rmSync(path.dirname(tokenFile), { recursive: true, force: true });
+  }
+});
 
 async function withDaemonFetch(handler, callback) {
   const originalFetch = globalThis.fetch;
@@ -137,10 +170,11 @@ test('createAutopsyMcpServer registers all 11 tools and resources', () => {
     'autopsy_canvas_focus',
     'autopsy_git_time_travel',
     'autopsy_working_memory',
+    'autopsy_analytics_report',
   ]) {
     assert.ok(tools.includes(tool), `Must register ${tool}`);
   }
-  assert.equal(tools.length, 21, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools + 4 Phase 4 tools');
+  assert.equal(tools.length, 22, '5 mandatory + 4 Phase 4.2 + find + session + 6 Phase 3 Git tools + 4 Phase 4 tools + analytics report');
 
   const resources = Object.keys(server._registeredResources);
   const templates = Object.keys(server._registeredResourceTemplates || {});
@@ -782,7 +816,17 @@ test('autopsy_impact and autopsy_verify persist trajectory events and publish li
   assert.ok(verify, 'autopsy_verify must be registered');
   const seen = [];
   const responses = await withDaemonFetch(async (url, request, body) => {
-    assert.equal(request.method, 'POST');
+    if (url.pathname === '/api/v1/runtime/connect') {
+      assert.equal(request.method, 'POST');
+      return { status: 'connected', lease_id: 'lease_test' };
+    }
+    assert.equal(request.method, url.pathname === '/api/impact' || url.pathname === '/api/verify' ? 'GET' : 'POST');
+    if (url.pathname === '/api/impact') {
+      return { status: 'VERIFIED', verdict: 'PASS', coverage_state: 'verified', repo_id: 'repo-test', impact: { impacted_entities: ['seed'] } };
+    }
+    if (url.pathname === '/api/verify') {
+      return { status: 'VERIFIED', verdict: 'PASS', coverage_state: 'verified', repo_id: 'repo-test' };
+    }
     const payload = JSON.parse(body);
     seen.push({ path: url.pathname, payload });
     if (url.pathname === '/api/v1/live/broadcast') return { success: true, seq_id: seen.length };

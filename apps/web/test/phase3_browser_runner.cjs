@@ -30,7 +30,7 @@ async function waitForFixturePath(path) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const calls = await fixtureCalls();
-    if (calls.some((call) => call.path === path)) return calls;
+    if (calls.some((call) => call.method === 'GET' && call.path === path)) return calls;
     await delay(100);
   }
   throw new Error(`Timed out waiting for fixture call ${path}; calls=${JSON.stringify(await fixtureCalls())}`);
@@ -41,6 +41,7 @@ async function main() {
   app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'synevid-electron-browser-')));
   app.commandLine.appendSwitch('disable-gpu');
   app.commandLine.appendSwitch('headless');
+  if (process.platform === 'linux' && process.env.CI) app.commandLine.appendSwitch('no-sandbox');
   await app.whenReady();
 
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://127.0.0.1:3333/*'] }, (details, callback) => {
@@ -56,6 +57,11 @@ async function main() {
   await waitForJavaScript(window, `document.querySelector('button[title^="Git Galaxy"]') !== null`);
   await window.webContents.executeJavaScript(`document.querySelector('button[title^="Git Galaxy"]').click()`);
   await waitForJavaScript(window, `document.body.innerText.includes('Evolutionary Topology')`);
+  // The range request depends on the real Galaxy response initializing the
+  // two commit pins.  Wait for that response before clicking the control so
+  // slow CI machines exercise the same browser workflow as a user, rather
+  // than racing the component's initial loading state.
+  await waitForFixturePath('/api/v1/git/galaxy?limit=200');
 
   await window.webContents.executeJavaScript(`(() => {
     const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent.includes('Range Mode'));

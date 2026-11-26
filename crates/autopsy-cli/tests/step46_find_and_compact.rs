@@ -286,7 +286,13 @@ fn compact_top_k_resolves_default_and_is_clamped() {
 fn apply_compact_is_a_noop_when_not_requested() {
     let outcome = Outcome {
         exit_code: 4,
-        json: serde_json::to_string_pretty(&sample_report(45)).expect("report"),
+        envelope: extensions::Outcome::new(
+            4,
+            &sample_report(45),
+            "text summary".to_string(),
+            "test",
+            "0.6.0",
+        ).expect("build").envelope,
         text: "text summary".to_string(),
     };
     let out = extensions::apply_compact(
@@ -296,12 +302,13 @@ fn apply_compact_is_a_noop_when_not_requested() {
             top_k: None,
         },
     );
+    // The payload should contain "i":44 (compact JSON has no space after colon)
     assert!(
-        out.json.contains("\"i\": 44"),
+        out.envelope.payload.to_string().contains("\"i\":44"),
         "unrequested compaction must leave the full report"
     );
     assert!(
-        !out.json.contains("compact"),
+        !out.envelope.payload.to_string().contains("compact"),
         "no compaction marker on a full report"
     );
     assert_eq!(
@@ -315,7 +322,13 @@ fn apply_compact_is_a_noop_when_not_requested() {
 fn apply_compact_preserves_exit_code_and_text_and_slices_json() {
     let outcome = Outcome {
         exit_code: 2,
-        json: serde_json::to_string_pretty(&sample_report(45)).expect("report"),
+        envelope: extensions::Outcome::new(
+            2,
+            &sample_report(45),
+            "text summary".to_string(),
+            "test",
+            "0.6.0",
+        ).expect("build").envelope,
         text: "text summary".to_string(),
     };
     let out = extensions::apply_compact(
@@ -325,7 +338,7 @@ fn apply_compact_preserves_exit_code_and_text_and_slices_json() {
             top_k: Some(10),
         },
     );
-    let value: serde_json::Value = serde_json::from_str(&out.json).expect("compact json");
+    let value = out.envelope.payload.clone();
     assert_eq!(
         value
             .get("facts")
@@ -347,9 +360,16 @@ fn apply_compact_preserves_exit_code_and_text_and_slices_json() {
 
 #[test]
 fn apply_compact_hands_back_a_non_json_report_unchanged() {
+    // When payload is not an object/array, it should be returned unchanged
     let outcome = Outcome {
         exit_code: 0,
-        json: "not json at all".to_string(),
+        envelope: extensions::Outcome::new(
+            0,
+            &serde_json::json!("not json at all"),
+            String::new(),
+            "test",
+            "0.6.0",
+        ).expect("build").envelope,
         text: String::new(),
     };
     let out = extensions::apply_compact(
@@ -359,8 +379,9 @@ fn apply_compact_hands_back_a_non_json_report_unchanged() {
             top_k: None,
         },
     );
+    // Non-object/array payloads should be returned unchanged
     assert_eq!(
-        out.json, "not json at all",
+        out.envelope.payload.to_string(), "\"not json at all\"",
         "compaction must never stand between an agent and evidence it already produced"
     );
     assert_eq!(out.exit_code, 0);
@@ -545,6 +566,7 @@ fn evidence_commands_accept_compact_and_top_k_and_pass() {
         root.display().to_string(),
         "--format".to_string(),
         "json".to_string(),
+        "--offline".to_string(),
         "catalog".to_string(),
         "--compact".to_string(),
         "--top-k".to_string(),

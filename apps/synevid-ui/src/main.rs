@@ -30,11 +30,20 @@ struct Args {
     /// Automatically open dashboard in default web browser
     #[arg(long)]
     open: bool,
+
+    /// Treat repo_root as daemon-owned application data; restore the active
+    /// user repository only from the persisted repository registry.
+    #[arg(long)]
+    managed_runtime: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let server = DashboardServer::new(args.repo_root, args.host.clone(), args.port);
+    let server = if args.managed_runtime {
+        DashboardServer::new_managed_runtime(args.repo_root, args.host.clone(), args.port)
+    } else {
+        DashboardServer::new(args.repo_root, args.host.clone(), args.port)
+    };
 
     if args.open {
         let url = format!("http://{}:{}", args.host, args.port);

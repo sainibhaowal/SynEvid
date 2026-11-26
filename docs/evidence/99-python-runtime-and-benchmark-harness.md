@@ -1,5 +1,8 @@
 # Production Evidence Receipt: 99
 
+> **Benchmark correction (2026-11-23):** successful harness execution does not
+> validate legacy impact-accuracy claims; they are superseded by [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 **Topic:** Portable Python runtime resolution for the benchmark harness
 **Milestone:** v0.5.0 (strict zero-major versioning invariant)
 **Date:** 2026-11-01

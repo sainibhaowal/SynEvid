@@ -19,7 +19,7 @@ test('an agent reaches an actionable verify in exactly 3 MCP tool calls', async 
 
   // Tool discovery: the surface an agent sees before doing anything.
   const listed = await client.request('tools/list');
-  assert.equal(listed.tools.length, 21, '5 mandatory + 4 Phase-4.2 + find + session + 6 Phase-3 Git + 4 Phase-4');
+  assert.equal(listed.tools.length, 22, '5 mandatory + 4 Phase-4.2 + find + session + 6 Phase-3 Git + 4 Phase-4 + analytics report');
   const names = listed.tools.map((tool) => tool.name);
   for (const expected of [
     'autopsy_status',
@@ -52,6 +52,7 @@ test('an agent reaches an actionable verify in exactly 3 MCP tool calls', async 
   const impact = await callTool(client, 'autopsy_impact', {
     symbol: SEED_STABLE_ID,
     repo_root: REPO_API_ROOT,
+    offline: true,
   });
   assert.equal(impact.envelope.command, 'impact');
   assert.equal(impact.envelope.exit_code, 0);
@@ -63,7 +64,7 @@ test('an agent reaches an actionable verify in exactly 3 MCP tool calls', async 
 
   // Call 3 — the passing verification gate.
   toolCalls += 1;
-  const verify = await callTool(client, 'autopsy_verify', { repo_root: REPO_API_ROOT });
+  const verify = await callTool(client, 'autopsy_verify', { repo_root: REPO_API_ROOT, offline: true });
   assert.equal(verify.envelope.command, 'verify');
   assert.equal(verify.envelope.exit_code, 0);
   assert.equal(verify.envelope.actionable, true);
@@ -105,6 +106,7 @@ test('refusals stay inside the envelope with repair advice; no bare error JSON',
     symbol: SEED_STABLE_ID,
     repo_root: REPO_API_ROOT,
     snapshot_id: 'ghost-snapshot-00000000',
+    offline: true,
   });
   assert.equal(ghost.envelope.command, 'impact');
   assert.equal(ghost.envelope.exit_code, 3);

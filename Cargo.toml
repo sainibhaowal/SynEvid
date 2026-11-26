@@ -31,6 +31,9 @@ members = [
     "crates/autopsy-catalog",
     "crates/autopsy-workspace-registry",
     "crates/autopsy-git-engine",
+    "crates/autopsy-daemon",
+    "crates/autopsy-envelope",
+    "crates/autopsy-protocol",
     "apps/synevid-lsp",
     "apps/synevid-ui",
     "tests",
@@ -67,7 +70,7 @@ serde_yaml = "0.9"
 ignore = "0.4"
 glob = "0.3"
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # Pure-Rust, C-free zlib for read-only git object decompression.
 # rust_backend (miniz_oxide) keeps cross-platform bytes identical (NFR-001).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -76,3 +79,5 @@ crossterm = "0.28"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 notify = "6"
 tiny_http = "0.12"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }

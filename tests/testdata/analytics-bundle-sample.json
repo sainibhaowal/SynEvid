@@ -1,0 +1,43 @@
+{
+  "bundle_schema": "synevid.analytics-bundle.v1",
+  "report_id": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "report": {
+    "schema_version": "synevid.analytics.v1",
+    "report_id": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "result_digest": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "scope": {
+      "repository_id": "repo-fixture",
+      "snapshot_id": "snapshot-fixture",
+      "graph_nodes": 0,
+      "graph_edges": 0,
+      "git_history_limit": 5000
+    },
+    "repository": {},
+    "snapshot": {},
+    "structural_health": {"status": "UNAVAILABLE"},
+    "static_unreferenced": {
+      "status": "UNKNOWN",
+      "finding_language": "candidate_not_proof_of_global_dead_code",
+      "evidence_basis": "no graph data in schema fixture",
+      "candidate_count": 0,
+      "candidates": [],
+      "unknown_count": 0,
+      "unknown": [],
+      "excluded_count": 0
+    },
+    "newly_dead_after_edit": {"status": "UNAVAILABLE"},
+    "runtime_unobserved": {"status": "UNAVAILABLE"},
+    "git_evolution": {"status": "UNAVAILABLE"},
+    "git_velocity": {"status": "UNAVAILABLE"},
+    "ai_session_audit": {"status": "UNAVAILABLE"},
+    "coverage_and_unknowns": {"status": "UNAVAILABLE"},
+    "performance_and_resources": {"status": "UNAVAILABLE"},
+    "errors_and_recovery": {"status": "UNAVAILABLE"}
+  },
+  "artifacts": {
+    "json": {"digest": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "content": "{}"},
+    "markdown": {"digest": "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "content": "# Report"},
+    "html": {"digest": "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "content": "<!doctype html>"},
+    "sarif": {"digest": "blake3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "content": "{}"}
+  }
+}

@@ -22,7 +22,7 @@ repos:
 
       - id: cargo-test
         name: Workspace Test Stack (Unit & Integration)
-        entry: bash -c 'export TMPDIR="${TMPDIR:-$HOME/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --all-targets -- --nocapture'
+        entry: bash -c 'export TMPDIR="${TMPDIR:-$HOME/.cache/tmp}"; mkdir -p "$TMPDIR"; cargo test --workspace --all-targets -- --nocapture --test-threads=1'
         language: system
         types: [rust]
         pass_filenames: false
@@ -57,6 +57,14 @@ repos:
         entry: python3 -c 'import glob, json, sys; [json.load(open(f)) for f in glob.glob("schemas/*.json")]; print("All schemas valid.")'
         language: system
         files: ^schemas/.*\.json$
+        pass_filenames: false
+        always_run: true
+
+      - id: truth-contract-validation
+        name: Phase 0/1 Requirement & Evidence Contract Validation
+        entry: bash -c 'python3 scripts/validate-requirements.py && python3 scripts/validate-evidence-contract.py'
+        language: system
+        files: ^(docs/requirements/registry\.yaml|docs/requirements/TRACEABILITY\.md|schemas/evidence-envelope\.schema\.json|scripts/validate-(requirements|evidence-contract)\.py)$
         pass_filenames: false
         always_run: true
 

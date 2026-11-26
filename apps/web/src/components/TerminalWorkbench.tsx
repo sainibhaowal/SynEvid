@@ -42,72 +42,6 @@ const TABS: TerminalTab[] = [
     statusText: 'LIVE REPL',
     output: '',
   },
-  {
-    id: 'verify',
-    name: 'autopsy-verify',
-    cmd: 'autopsy verify --strict',
-    exitCode: 0,
-    statusText: 'PASS (Exit 0)',
-    output: `[2026-10-16T13:00:00Z INFO autopsy_repo] Scanning repository at /workspace/project
-[2026-10-16T13:00:00Z INFO autopsy_repo] Computed RepoSnapshot: BLAKE3(512 files, 48 configs)
-[2026-10-16T13:00:01Z INFO autopsy_adapter_typescript] Parsing AST via tree-sitter (0 errors)
-[2026-10-16T13:00:01Z INFO autopsy_graph] Multigraph built: 4,821 nodes, 19,402 edges
-[2026-10-16T13:00:02Z INFO autopsy_invariants] Evaluating 4 configured policies (.autopsy/invariants.yml):
-  \x1b[32m✔\x1b[0m architecture-layers  (layers): PASS (presentation -> domain -> infrastructure)
-  \x1b[32m✔\x1b[0m no-circular-deps     (no_new_cycle): PASS (0 new cycles)
-  \x1b[32m✔\x1b[0m api-compatibility    (api_compatibility): PASS (0 breaking changes)
-  \x1b[32m✔\x1b[0m forbidden-deps       (forbidden_dependency): PASS (0 matched edges)
-[2026-10-16T13:00:02Z INFO autopsy_evidence] Sealed BLAKE3 Evidence Receipt:
-  Snapshot: 9f82d1c47a98ef10342ab7168b0c5d2e4f6a8193b7c0d5e2a1f4b8c6d3e2a1f0
-  Digest:   b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
-[2026-10-16T13:00:02Z SUCCESS] Verification Gate PASSED. Exit Code: 0 (strict: coverage full)`,
-  },
-  {
-    id: 'impact',
-    name: 'autopsy-impact',
-    cmd: 'autopsy impact -s "src/services/PaymentService.ts::chargeCard" --profile callers --top-k 5',
-    exitCode: 0,
-    statusText: 'FULL COVERAGE',
-    output: `[2026-10-16T13:00:00Z INFO autopsy_impact] Bounded BFS Traversal (direction: backward, kinds: calls)
-Root Symbol: src/services/PaymentService.ts::chargeCard
-Blast Radius Transitive Closure: 42 impacted call-sites across 4 modules
-
-Ranked Impacted Shortlist (Top 5 Callers by Path Weight):
-  1. [Rank 1] src/api/checkout.ts::handleCheckout (path len: 1, weight: 1.00)
-  2. [Rank 2] src/cron/subscription.ts::renewSubscription (path len: 2, weight: 0.85)
-  3. [Rank 3] src/webhooks/stripe.ts::onPaymentIntent (path len: 2, weight: 0.85)
-  4. [Rank 4] src/admin/refunds.ts::retryFailedCharge (path len: 3, weight: 0.62)
-  5. [Rank 5] tests/e2e/payment.test.ts::testCheckoutFlow (path len: 1, weight: 0.50)
-
-Coverage State: Full (100% deterministic AST call graph)
-Recommended Strategy: Run targeted test slice before commit.`,
-  },
-  {
-    id: 'diff',
-    name: 'autopsy-diff',
-    cmd: 'autopsy diff --format json',
-    exitCode: 0,
-    statusText: 'DIFF (Exit 0)',
-    output: `{
-  "before_snapshot_id": "9f82d1c47a98ef10342ab7168b0c5d2e4f6a8193b7c0d5e2a1f4b8c6d3e2a1f0",
-  "after_snapshot_id": "47c1e8b3f6a2d5908c4b7e1f3a6d9c2058e7b4a1f6d3c9e2b8a5f1d4c7e3b9a6",
-  "summary": {
-    "files_modified": 1,
-    "symbols_added": 2,
-    "symbols_modified": 1,
-    "breaking_contract_changes": 0,
-    "edges_added": 3,
-    "edges_removed": 1
-  },
-  "frontier": {
-    "affected_files": [
-      "src/auth/session.ts",
-      "src/api/checkout.ts"
-    ]
-  },
-  "diff_digest": "4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
-}`,
-  },
 ];
 
 interface CommandLogEntry {
@@ -207,7 +141,7 @@ export default function TerminalWorkbench() {
   // Dynamic Prompt Context
   const [promptUser, setPromptUser] = useState<string>('developer');
   const [promptPath, setPromptPath] = useState<string>('~');
-  const [promptBranch, setPromptBranch] = useState<string>('main');
+  const [promptBranch] = useState<string>('unknown');
 
   // Interactive Terminal State
   const [inputCommand, setInputCommand] = useState<string>('');
@@ -236,11 +170,11 @@ export default function TerminalWorkbench() {
     setCommandLogs([
       {
         command: 'system::init',
-        stdout: `SynEvid Pure-Rust Terminal v0.4.0 (x86_64-linux-gnu / PTY)
-Kernel: Deterministic Verification Engine (INV-SANDBOX-003, Zero External Sub-Processes)
-Hardware Sandboxing: Strict Read-Only Traversal (FR-026) & In-Memory Git DAG Engine
-Type 'help' for command list, or click any quick-run chip below.
-Keyboard Shortcuts: Ctrl+L to clear screen, Up/Down for command history, Tab to autocomplete.`,
+stdout: `SynEvid daemon-backed terminal
+No command has been executed in this session.
+Type 'help' for the supported command list, or use a quick-run action below.
+Results shown here come from the connected repository and daemon; unavailable data is reported explicitly.
+Keyboard shortcuts: Ctrl+L clears the screen, Up/Down navigates command history, Tab autocompletes.`,
         stderr: '',
         exitCode: 0,
         timestamp: new Date().toLocaleTimeString(),

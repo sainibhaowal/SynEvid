@@ -10,6 +10,7 @@
 //! - 3: ANALYSIS ERROR (Configuration, parse, or I/O failure)
 //! - 4: UNSUPPORTED / UNKNOWN (Unsupported syntax or unknown coverage in strict mode)
 
+pub mod daemon;
 pub mod extensions;
 pub mod git_cmd;
 pub mod tui;
@@ -271,6 +272,8 @@ pub enum CliError {
     Report(#[from] autopsy_report::ReportError),
     #[error("Invariant error: {0}")]
     Invariant(String),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 /// Baseline debt configuration (.autopsy/baseline.json).
@@ -404,6 +407,11 @@ impl CliError {
                 "a filesystem read/write failed outside storage",
                 "check file permissions and path existence, then re-run the command",
             ),
+            CliError::Serialization(_) => config(
+                "serialization_failed",
+                "a JSON serialization or deserialization operation failed",
+                "verify the input data structure matches the expected schema, then re-run the command",
+            ),
             CliError::Report(_) => config(
                 "report_render_failed",
                 "the canonical report could not be rendered from a successful analysis",
@@ -459,6 +467,19 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub persist: bool,
 
+    /// Explicitly run analysis WITHOUT the daemon (offline mode).
+    /// Default is to connect to the authenticated daemon.
+    #[arg(long, global = true)]
+    pub offline: bool,
+
+    /// Daemon host (default: 127.0.0.1)
+    #[arg(long, global = true, default_value = "127.0.0.1")]
+    pub daemon_host: String,
+
+    /// Daemon port (default: 3333)
+    #[arg(long, global = true, default_value_t = 3333)]
+    pub daemon_port: u16,
+
     /// Attach a correction receipt to this run (Tier 3.3): the agent's verbatim note
     /// about what actually repaired the problem, stored deterministically in
     /// `.autopsy/suggestions.json` (no timestamps, BLAKE3 id)
@@ -512,6 +533,43 @@ impl From<CliImpactDirection> for ImpactDirection {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Register and activate a repository through the running local SynEvid daemon.
+    Attach {
+        /// Existing repository directory to canonicalize and attach.
+        path: PathBuf,
+        /// Optional display label; the canonical path remains the identity.
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+    /// Read daemon health, active repository, snapshot, cursor, and storage state.
+    Status,
+    /// Fetch the shared daemon analytics report for its active repository.
+    AnalyticsReport {
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Show only compact summary (for MCP/agent consumption)
+        #[arg(long)]
+        compact: bool,
+        /// Show evidence drill-down for findings
+        #[arg(long)]
+        evidence: bool,
+        /// Filter by finding state (verified, candidate, partial, unknown, error, unavailable)
+        #[arg(long)]
+        state: Option<String>,
+        /// Filter by severity (error, warning, info)
+        #[arg(long)]
+        severity: Option<String>,
+    },
+    /// Read the daemon-owned active repository and runtime identity.
+    #[command(name = "active-repo")]
+    ActiveRepo,
+    /// Replay persisted daemon events after a sequence cursor.
+    Events {
+        #[arg(long, default_value_t = 0)]
+        since_seq: i64,
+    },
+    /// Release this CLI client's daemon lease.
+    Disconnect,
     /// Scan repository, compute deterministic snapshot, build dependency graph, and save to storage
     Baseline {
         #[arg(long)]
@@ -999,7 +1057,34 @@ pub fn run_cli(args: &[String]) -> i32 {
 }
 
 pub fn execute(cli: &Cli) -> Result<i32, CliError> {
+    // Default to daemon mode unless --offline is explicitly set
+    if !cli.offline {
+        return daemon::handle_via_daemon(cli);
+    }
+
+    // Offline mode - execute locally
     match &cli.command {
+        Commands::Attach { path, display_name } => {
+            daemon::handle_attach(cli, path, display_name.as_deref())
+        }
+        Commands::Status => daemon::handle_status(cli),
+        Commands::AnalyticsReport {
+            format,
+            compact,
+            evidence,
+            state,
+            severity,
+        } => daemon::handle_analytics_report(
+            cli,
+            format,
+            *compact,
+            *evidence,
+            state.as_deref(),
+            severity.as_deref(),
+        ),
+        Commands::ActiveRepo => daemon::handle_active_repo(cli),
+        Commands::Events { since_seq } => daemon::handle_events(cli, *since_seq),
+        Commands::Disconnect => daemon::handle_disconnect(cli),
         Commands::Baseline {
             revision,
             incremental,
@@ -1306,8 +1391,8 @@ fn run_extension(
         // Persistence reads the **full** report: a compact agent view is a presentation
         // choice, not the engine's answer, and a slice that is persisted as if it were
         // the whole would be a lie with rows in it.
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&outcome.json) {
-            if let Ok(storage) = get_storage(cli) {
+        let value = &outcome.envelope.payload;
+        if let Ok(storage) = get_storage(cli) {
                 // Temporal journal: `journal` is the engine's canonical projection,
                 // an array of facts.
                 if let Some(facts) = value.get("journal").and_then(|v| v.as_array()) {
@@ -1436,9 +1521,8 @@ fn run_extension(
                     }
                 }
             }
-        }
         if let Ok(note) =
-            extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.json)
+            extensions::persist_outcome(cli, "analysis", outcome.exit_code, &outcome.envelope.payload)
         {
             println!("{}", note);
         }
@@ -2501,28 +2585,43 @@ pub fn analyze_file_overlay_from_artifacts_with_registry(
     let Ok(content) = std::str::from_utf8(&canonical) else {
         return Ok(None);
     };
-    let ts_adapter = TypeScriptAdapter::with_root_dir(repo_root);
-    let py_adapter = PythonAdapter::with_root_dir(repo_root);
-    let go_adapter = GoAdapter::with_root_dir(repo_root);
-    let rust_adapter = RustAdapter::with_root_dir(repo_root);
-    let java_adapter = JavaAdapter::with_root_dir(repo_root);
-    let csharp_adapter = CSharpAdapter::with_root_dir(repo_root);
     let parse_ctx = ParseContext {
         project_root: repo_root.to_path_buf(),
         options: BTreeMap::new(),
     };
-    let Some(local) = analyze_single_file(
-        registry,
-        &ts_adapter,
-        &py_adapter,
-        &go_adapter,
-        &rust_adapter,
-        &java_adapter,
-        &csharp_adapter,
-        &parse_ctx,
-        &snapshot.files[&relative_path],
-        content,
-    ) else {
+    // Overlay analysis is a single-file operation. Construct only the
+    // repository-scoped adapter for this file; creating every built-in
+    // adapter here needlessly rescans workspace manifests and tsconfig files
+    // on every simulation while producing no additional evidence.
+    let unit = &snapshot.files[&relative_path];
+    let adapter: Arc<dyn LanguageAdapter> = registry
+        .find_language_analyzer_for_path(Path::new(&relative_path), repo_root)
+        .or_else(|| match unit.language.as_str() {
+            "python" => {
+                Some(Arc::new(PythonAdapter::with_root_dir(repo_root)) as Arc<dyn LanguageAdapter>)
+            }
+            "go" => Some(Arc::new(GoAdapter::with_root_dir(repo_root)) as Arc<dyn LanguageAdapter>),
+            "rust" => {
+                Some(Arc::new(RustAdapter::with_root_dir(repo_root)) as Arc<dyn LanguageAdapter>)
+            }
+            "java" | "kotlin" => {
+                Some(Arc::new(JavaAdapter::with_root_dir(repo_root)) as Arc<dyn LanguageAdapter>)
+            }
+            "csharp" => {
+                Some(Arc::new(CSharpAdapter::with_root_dir(repo_root)) as Arc<dyn LanguageAdapter>)
+            }
+            "typescript" | "javascript" => {
+                Some(Arc::new(TypeScriptAdapter::with_root_dir(repo_root))
+                    as Arc<dyn LanguageAdapter>)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            CliError::Analysis(format!(
+                "no language adapter is registered for {relative_path}"
+            ))
+        })?;
+    let Some(local) = analyze_with_adapter(adapter.as_ref(), &parse_ctx, unit, content) else {
         return Ok(None);
     };
     let Some(parsed) = local.parsed.as_ref() else {
@@ -2530,21 +2629,9 @@ pub fn analyze_file_overlay_from_artifacts_with_registry(
     };
     let parse_result = buffer_parse_result_from_parsed(&relative_path, parsed);
 
-    let edges = if let Some(adapter) =
-        registry.find_language_analyzer_for_path(Path::new(&relative_path), repo_root)
-    {
-        adapter.extract_edges(parsed, &base_artifacts.symbol_index)
-    } else {
-        match snapshot.files[&relative_path].language.as_str() {
-            "python" => py_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-            "go" => go_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-            "rust" => rust_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-            "java" | "kotlin" => java_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-            "csharp" => csharp_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-            _ => ts_adapter.extract_edges(parsed, &base_artifacts.symbol_index),
-        }
-    }
-    .map_err(|error| CliError::Analysis(error.to_string()))?;
+    let edges = adapter
+        .extract_edges(parsed, &base_artifacts.symbol_index)
+        .map_err(|error| CliError::Analysis(error.to_string()))?;
 
     Ok(Some(OverlayFileArtifacts {
         snapshot,

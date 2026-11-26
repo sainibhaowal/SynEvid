@@ -424,7 +424,7 @@
   <div class="brand">
     <span>SYNEVID</span>
     <span class="brand-badge">CODE AUTOPSY</span>
-    <span class="brand-version">v0.2.0</span>
+    <span class="brand-version">v0.6.0</span>
     
     <div class="repo-switcher">
       <span style="font-size:0.8rem; color:var(--text-muted); font-weight:500;">Repo:</span>
@@ -438,10 +438,10 @@
   <div class="header-actions">
     <div id="liveBadge" class="status-pill live-pill">
       <span class="pulse-dot"></span>
-      <span id="liveText">LIVE 18ms</span>
+      <span id="liveText">CONNECTING</span>
     </div>
-    <div id="coveragePill" class="status-pill">COVERAGE: VERIFIED</div>
-    <div id="verifyPill" class="status-pill">PASS</div>
+    <div id="coveragePill" class="status-pill">COVERAGE: UNKNOWN</div>
+    <div id="verifyPill" class="status-pill">UNKNOWN</div>
     <button class="btn-sm" onclick="openCapabilitiesModal()">Capabilities</button>
     <button class="btn-refresh" onclick="refreshAll()">Refresh</button>
   </div>
@@ -487,7 +487,7 @@
     <div class="panel">
       <div class="panel-title">
         <span>Reactive Daemon Event Bus (/api/v1/live)</span>
-        <span class="badge badge-sub50">Sub-15ms Live Stream</span>
+        <span class="badge badge-sub50">Live stream: awaiting measurement</span>
       </div>
       <div id="eventLogContainer" style="font-family:var(--font-mono); font-size:0.8rem; background:var(--bg-elevated); padding:0.75rem; border-radius:6px; max-height:160px; overflow-y:auto; line-height:1.6;">
         <div style="color:var(--text-muted);">Listening for real-time daemon events...</div>
@@ -495,7 +495,7 @@
     </div>
 
     <div class="panel">
-      <div class="panel-title">Foundational Architectural Invariants (Phase 1 v0.2.0)</div>
+      <div class="panel-title">Foundational Architectural Invariants (current daemon evidence)</div>
       <table class="data-table">
         <thead>
           <tr>
@@ -508,7 +508,7 @@
           <tr>
             <td><strong>Pluggable Trait Registry</strong></td>
             <td><code>autopsy-plugin-api</code>: Languages, Resolvers, Layouts &amp; Gates modularized</td>
-            <td><span class="badge badge-pass">100% WIRED</span></td>
+            <td><span class="badge badge-pass">EVIDENCE-BACKED</span></td>
           </tr>
           <tr>
             <td><strong>Local SQLite WAL Persistence</strong></td>
@@ -518,12 +518,12 @@
           <tr>
             <td><strong>Seeded Graph Layout</strong></td>
             <td><code>autopsy-graph-layout</code>: Barnes-Hut PRNG seeded by BLAKE3(digest), 10<sup>-4</sup> precision</td>
-            <td><span class="badge badge-pass">DETERMINISTIC</span></td>
+            <td><span class="badge badge-pass">100-RUN TESTS</span></td>
           </tr>
           <tr>
             <td><strong>Sub-50ms Reactive Daemon</strong></td>
             <td>Incremental AST &amp; blast recomputation (&le;50ms p95), Bi-directional SSE event bus</td>
-            <td><span class="badge badge-pass">&lt;50ms P95</span></td>
+            <td><span class="badge badge-pass">REQUEST SAMPLES</span></td>
           </tr>
           <tr>
             <td><strong>Zero-LLM Correctness Core</strong></td>
@@ -554,7 +554,7 @@
           <button class="btn-sm" onclick="resetUniverseView()">Reset</button>
         </div>
         <div class="canvas-info" id="universeInfo">
-          Mode: 2D Force Layout &bull; Nodes: 5 &bull; Edges: 4 &bull; Seed: BLAKE3(snapshot)
+          Waiting for indexed graph data.
         </div>
       </div>
       <div style="font-size:0.85rem; color:var(--text-muted); display:flex; justify-content:space-between;">
@@ -569,19 +569,19 @@
     <div class="panel">
       <div class="panel-title">
         <span>Symbol Ego-Network &amp; Calling Line Inspector</span>
-        <span class="badge badge-pass" id="egoQueryLatency">Latency: 2ms (&lt;5ms SQLite WAL)</span>
+        <span class="badge" id="egoQueryLatency">Latency: not measured</span>
       </div>
 
       <div class="search-box">
-        <input type="text" id="egoInput" placeholder="Symbol ID (e.g. PaymentService.chargeCard or src/index.ts)..." value="PaymentService.chargeCard">
+        <input type="text" id="egoInput" placeholder="Enter a symbol ID from the indexed repository...">
         <button onclick="fetchEgoNetwork()">Inspect Ego Network</button>
       </div>
 
       <!-- Target Node Summary Card -->
       <div class="card" style="margin-bottom:1.5rem; background:var(--bg-elevated);" id="targetNodeCard">
         <div class="card-header">Target Node</div>
-        <div class="card-value" id="egoTargetSymbol" style="font-size:1.25rem;">PaymentService.chargeCard</div>
-        <div class="card-subtext" id="egoTargetFile">File: src/services/PaymentService.ts (Lines: 35-60) &bull; Function &bull; Public</div>
+        <div class="card-value" id="egoTargetSymbol" style="font-size:1.25rem;">No symbol selected</div>
+        <div class="card-subtext" id="egoTargetFile">Select a symbol from the indexed graph to inspect it.</div>
       </div>
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.5rem;">
@@ -597,7 +597,7 @@
               </tr>
             </thead>
             <tbody id="inboundCallersBody">
-              <tr><td colspan="3" style="color:var(--text-muted);">Loading callers...</td></tr>
+              <tr><td colspan="3" style="color:var(--text-muted);">No symbol selected.</td></tr>
             </tbody>
           </table>
         </div>
@@ -614,7 +614,7 @@
               </tr>
             </thead>
             <tbody id="outboundCalleesBody">
-              <tr><td colspan="3" style="color:var(--text-muted);">Loading callees...</td></tr>
+              <tr><td colspan="3" style="color:var(--text-muted);">No symbol selected.</td></tr>
             </tbody>
           </table>
         </div>
@@ -628,8 +628,8 @@
       <div class="panel-title">
         <span>Sub-50ms In-Memory Buffer &amp; Damage Simulator</span>
         <div style="display:flex; gap:0.5rem; align-items:center;">
-          <span class="badge badge-sub50" id="simLatencyBadge">Latency: 12ms (&le;50ms p95)</span>
-          <span class="badge badge-pass" id="simVerdictBadge">PASS</span>
+          <span class="badge" id="simLatencyBadge">Latency: not measured</span>
+          <span class="badge" id="simVerdictBadge">UNKNOWN</span>
         </div>
       </div>
 
@@ -638,27 +638,10 @@
         <div class="editor-wrapper">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary);">Target File Buffer:</label>
-            <span style="font-family:var(--font-mono); font-size:0.78rem; color:var(--accent-cyan);">src/services/PaymentService.ts</span>
+            <input id="simFilePathInput" type="text" style="font-family:var(--font-mono); font-size:0.78rem; color:var(--accent-cyan); background:transparent; border:0; text-align:right;" placeholder="repository-relative file path" aria-label="Simulation target file path">
           </div>
 
-          <div class="preset-bar">
-            <span style="font-size:0.75rem; color:var(--text-muted); align-self:center;">Presets:</span>
-            <button class="preset-btn" onclick="loadSimPreset('clean')">Clean Method</button>
-            <button class="preset-btn" onclick="loadSimPreset('breaking_arity')">Breaking Arity (taxRate: number)</button>
-            <button class="preset-btn" onclick="loadSimPreset('syntax_error')">Syntax Error (((</button>
-            <button class="preset-btn" onclick="loadSimPreset('dead_code')">Remove legacyFormat (Dead Code)</button>
-          </div>
-
-          <textarea class="editor-textarea" id="simBufferInput" oninput="onSimBufferChange()" spellcheck="false">// In-Memory Unsaved Keystroke Buffer (Simulating VSCode / UI editor keystrokes)
-export class PaymentService {
-  public chargeCard(token: string, amount: number): boolean {
-    return true;
-  }
-
-  public legacyFormat(value: string): string {
-    return value.toUpperCase();
-  }
-}</textarea>
+          <textarea class="editor-textarea" id="simBufferInput" oninput="onSimBufferChange()" spellcheck="false" placeholder="Select a repository file and enter an unsaved buffer to simulate."></textarea>
           <div style="font-size:0.75rem; color:var(--text-muted);">
             Changes recomputed incrementally with zero filesystem writes. Triggers AST parse &amp; graph reachability.
           </div>
@@ -671,7 +654,7 @@ export class PaymentService {
           </h4>
           <div id="simDamagedList">
             <div style="color:var(--text-muted); font-size:0.85rem; padding:1rem; background:var(--bg-elevated); border-radius:6px;">
-              No broken callers detected. All signatures match callers across workspace.
+              Run a simulation against a selected repository file to see evidence-backed callers.
             </div>
           </div>
 
@@ -680,7 +663,7 @@ export class PaymentService {
           </h4>
           <div id="simDeadList">
             <div style="color:var(--text-muted); font-size:0.85rem; padding:1rem; background:var(--bg-elevated); border-radius:6px;">
-              No orphaned or dead symbols introduced.
+              Run a simulation to evaluate newly unreferenced symbols within the analyzed scope.
             </div>
           </div>
         </div>
@@ -767,7 +750,7 @@ export class PaymentService {
     </div>
     <div style="margin-bottom:1.5rem;">
       <label style="display:block; font-size:0.85rem; color:var(--text-secondary); margin-bottom:0.35rem;">Display Name (Optional):</label>
-      <input type="text" id="connectNameInput" style="width:100%; padding:0.6rem; background:var(--bg-elevated); border:1px solid var(--border-subtle); color:#fff; border-radius:6px; font-family:var(--font-mono); outline:none;" placeholder="PaymentService Monorepo">
+      <input type="text" id="connectNameInput" style="width:100%; padding:0.6rem; background:var(--bg-elevated); border:1px solid var(--border-subtle); color:#fff; border-radius:6px; font-family:var(--font-mono); outline:none;" placeholder="Repository display name (optional)">
     </div>
     <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
       <button class="btn-sm" onclick="closeConnectModal()">Cancel</button>
@@ -842,7 +825,7 @@ export class PaymentService {
         document.getElementById('liveBadge').style.borderColor = 'rgba(245, 158, 11, 0.4)';
       };
       evtSource.onopen = () => {
-        document.getElementById('liveText').innerText = 'LIVE 18ms';
+        document.getElementById('liveText').innerText = 'LIVE';
         document.getElementById('liveBadge').style.borderColor = 'rgba(6, 182, 212, 0.3)';
       };
     } catch(err) {
@@ -853,15 +836,15 @@ export class PaymentService {
   // STATUS & OVERVIEW
   async function fetchStatus() {
     try {
-      const res = await fetch('/api/status');
+      const res = await fetch('/api/v1/status');
       const data = await res.json();
-      document.getElementById('statSnapshot').innerText = data.snapshot_id || 'Active Worktree';
-      document.getElementById('statRepo').innerText = 'Repository: ' + (data.repo_root || '.');
-      document.getElementById('statCoverage').innerText = (data.coverage_state || 'VERIFIED').toUpperCase();
-      document.getElementById('statCoverageFiles').innerText = 'Scanned files: ' + (data.files_scanned || 0);
-      document.getElementById('statSymbols').innerText = data.symbol_count || 0;
-      document.getElementById('statEdges').innerText = 'Edges: ' + (data.edge_count || 0);
-      document.getElementById('coveragePill').innerText = 'COVERAGE: ' + (data.coverage_state || 'VERIFIED').toUpperCase();
+      document.getElementById('statSnapshot').innerText = data.snapshot_id || 'No active snapshot';
+      document.getElementById('statRepo').innerText = 'Repository: ' + (data.repo_root || 'Unavailable');
+      document.getElementById('statCoverage').innerText = (data.coverage_state || 'UNKNOWN').toUpperCase();
+      document.getElementById('statCoverageFiles').innerText = data.files_scanned == null ? 'Files: not measured' : 'Scanned files: ' + data.files_scanned;
+      document.getElementById('statSymbols').innerText = data.symbol_count == null ? 'Not measured' : data.symbol_count;
+      document.getElementById('statEdges').innerText = 'Edges: ' + (data.edge_count == null ? 'not measured' : data.edge_count);
+      document.getElementById('coveragePill').innerText = 'COVERAGE: ' + (data.coverage_state || 'UNKNOWN').toUpperCase();
     } catch(e) { console.error('Status fetch error:', e); }
   }
 
@@ -1100,13 +1083,17 @@ export class PaymentService {
 
   // EGO NETWORK INSPECTOR
   async function fetchEgoNetwork() {
-    const symbolId = document.getElementById('egoInput').value.trim() || 'PaymentService.chargeCard';
+    const symbolId = document.getElementById('egoInput').value.trim();
+    if (!symbolId) {
+      document.getElementById('egoQueryLatency').innerText = 'Latency: not measured';
+      return;
+    }
     const t0 = performance.now();
     try {
       const res = await fetch(`/api/v1/graph/ego/${encodeURIComponent(symbolId)}`);
       const ego = await res.json();
       const elapsed = Math.round(performance.now() - t0);
-      document.getElementById('egoQueryLatency').innerText = `Latency: ${elapsed}ms (<5ms SQLite WAL)`;
+      document.getElementById('egoQueryLatency').innerText = `Latency: ${elapsed}ms (request sample)`;
 
       if (ego.target_node) {
         const tn = ego.target_node;
@@ -1157,68 +1144,38 @@ export class PaymentService {
     simDebounceTimer = setTimeout(triggerSimulation, 40);
   }
 
-  const PRESETS = {
-    clean: `// Clean Method Matching Callers
-export class PaymentService {
-  public chargeCard(token: string, amount: number): boolean {
-    return true;
-  }
-
-  public legacyFormat(value: string): string {
-    return value.toUpperCase();
-  }
-}`,
-    breaking_arity: `// Introducing Breaking Arity Parameter: taxRate: number
-export class PaymentService {
-  public chargeCard(token: string, amount: number, taxRate: number): boolean {
-    return true;
-  }
-
-  public legacyFormat(value: string): string {
-    return value.toUpperCase();
-  }
-}`,
-    syntax_error: `// Broken Syntax
-export class PaymentService {
-  public chargeCard(((syntax_error_mock
-}`,
-    dead_code: `// Removed legacyFormat function entirely
-export class PaymentService {
-  public chargeCard(token: string, amount: number): boolean {
-    return true;
-  }
-}`
-  };
-
-  function loadSimPreset(presetKey) {
-    if (PRESETS[presetKey]) {
-      document.getElementById('simBufferInput').value = PRESETS[presetKey];
-      triggerSimulation();
-    }
-  }
-
   async function triggerSimulation() {
+    const filePath = document.getElementById('simFilePathInput').value.trim();
     const buffer = document.getElementById('simBufferInput').value;
+    if (!filePath || !buffer.trim()) {
+      document.getElementById('simLatencyBadge').innerText = 'Latency: not measured';
+      document.getElementById('simVerdictBadge').innerText = 'UNKNOWN';
+      document.getElementById('simVerdictBadge').className = 'badge';
+      document.getElementById('simDamagedList').innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem; padding:1rem; background:var(--bg-elevated); border-radius:6px;">Select a repository-relative file and provide an unsaved buffer before simulating.</div>';
+      return;
+    }
     const t0 = performance.now();
     try {
       const res = await fetch('/api/v1/simulate/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          file_path: 'src/services/PaymentService.ts',
+          file_path: filePath,
           unsaved_buffer: buffer
         })
       });
       const data = await res.json();
       const clientElapsed = Math.round(performance.now() - t0);
-      const latency = data.computation_latency_ms || clientElapsed;
+      const latency = typeof data.computation_latency_ms === 'number' && data.computation_latency_ms > 0
+        ? data.computation_latency_ms
+        : clientElapsed;
 
       const latBadge = document.getElementById('simLatencyBadge');
-      latBadge.innerText = `Latency: ${latency}ms (\u2264 50ms p95 guarantee met)`;
+      latBadge.innerText = `Latency: ${latency}ms (request sample)`;
       latBadge.className = latency <= 50 ? 'badge badge-sub50' : 'badge badge-warn';
 
       const vBadge = document.getElementById('simVerdictBadge');
-      vBadge.innerText = data.verdict || 'PASS';
+      vBadge.innerText = data.verdict || 'UNKNOWN';
       if (data.verdict === 'FAIL') vBadge.className = 'badge badge-fail';
       else if (data.verdict === 'WARN') vBadge.className = 'badge badge-warn';
       else vBadge.className = 'badge badge-pass';
@@ -1234,7 +1191,7 @@ export class PaymentService {
             </div>
           `).join('');
         } else {
-          damagedList.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem; padding:1rem; background:var(--bg-elevated); border-radius:6px;">No broken callers detected. Workspace contracts satisfied.</div>';
+          damagedList.innerHTML = '<div style="color:var(--text-muted); font-size:0.85rem; padding:1rem; background:var(--bg-elevated); border-radius:6px;">No broken callers found within the analyzed scope.</div>';
         }
       } else {
         data.damaged_callers.forEach(c => {
@@ -1271,7 +1228,12 @@ export class PaymentService {
           deadList.appendChild(div);
         });
       }
-    } catch(e) { console.error('Simulation error:', e); }
+    } catch(e) {
+      document.getElementById('simLatencyBadge').innerText = 'Latency: unavailable';
+      document.getElementById('simVerdictBadge').innerText = 'ERROR';
+      document.getElementById('simVerdictBadge').className = 'badge badge-fail';
+      console.error('Simulation error:', e);
+    }
   }
 
   // BLAST RADIUS
@@ -1391,7 +1353,7 @@ export class PaymentService {
       tbody.innerHTML = '';
       let fails = 0;
       if (findings.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--accent-emerald);">All invariants satisfied (100% Pass)</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No findings returned for the analyzed scope.</td></tr>';
       } else {
         findings.forEach(f => {
           if (f.status === 'fail') fails++;

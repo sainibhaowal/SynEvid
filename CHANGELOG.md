@@ -5,7 +5,300 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- **Impact benchmark integrity correction:** withdrew legacy RQ1–RQ5 impact
+  accuracy and promotion claims after finding incomplete/unreviewed task
+  oracles, missing query scope, answer-key access by the Grep/LSP comparators,
+  and a text-search implementation mislabeled as LSP. The benchmark runner now
+  fails closed (exit 3) before scoring and writes no numeric report while these
+  conditions hold. Historical raw output is retained but quarantined. No
+  engine tuning or ground-truth edits were made. Evidence: `docs/evidence/108`.
+
+- **Phase 6 Windows verification follow-up:** fixed replay sequence collisions
+  between concurrent daemon instances by keeping each live sequence cursor
+  scoped to that daemon and initializing it from persisted events. The full
+  release workspace suite passed serially (1,066 passed; 3 timing checks are
+  run separately); isolated SSE p95 was 0.513 ms and 1,000-file simulation
+  p95 was 25.076 ms. Python schema validation passed all 18 schemas and its
+  instance suite passed 3/3; the earlier benchmark/script pytest run passed
+  8/8. The adjacent RQ1-RQ5 benchmark output was later withdrawn as not
+  evaluable after the oracle and comparator integrity audit (evidence 108); its
+  recall, precision, F1, cost, and gate figures are not accepted as quality
+  evidence. The updated integrity suite passes 10/10. Phase 6 G6 remains
+  **PARTIAL** because its frozen analytics corpus/ablation and independent
+  semantic Git-risk evaluation are absent, and this uncommitted worktree has
+  no exact-revision Actions evidence. Windows-only; Linux/macOS are not claimed.
+
+- **Phase 6 analytics evidence integration (Windows):** analytics no longer
+  trusts the legacy `is_dead_code` bit for its candidate list. Static
+  unreferenced results now include finding state, snapshot scope, coverage,
+  reason, residual unknowns, and a BLAKE3 digest of the analyzed edge set;
+  exported language is explicitly “candidate,” not “dead code.” Git file
+  heuristics are separated from semantic Git risk, and query failures produce
+  unavailable/error states instead of plausible zeroes. Added explicit
+  unavailable sections for runtime-unobserved, newly-dead-after-edit,
+  performance/resource, and error/recovery reports; added deterministic bundle
+  export and report scope/status cards with candidate-to-file/canvas focus.
+  Fixed a persistence defect where `INSERT OR REPLACE` on a snapshot deleted
+  snapshot-pinned report receipts through SQLite foreign-key cascades; snapshot
+  writes now update in place and the report-history regression covers re-index.
+  OTLP digests now use the same canonical JSON value storage validates, and
+  ingestion audit state updates idempotently. Windows verification on the
+  current worktree: `synevid-ui` serial suite 33 library + 33 binary tests and
+  2 native integration tests passed; report-history storage regression passed;
+  storage suite passed 22/22; telemetry suite passed 107 tests; affected-crate
+  Clippy passed with warnings denied; full web suite passed 21/21; TypeScript
+  and Rust formatting checks passed. A default-parallel `synevid-ui` run had
+  one load-sensitive SSE p95 failure and one Phase 4 replay assertion failure;
+  both pass serially, so default-parallel workspace stability remains open.
+  The rebuilt-source Electron E2E passed real OTLP ingest, report generation,
+  persisted receipt/history, and daemon restart/replay. G6 remains
+  **PARTIAL**: added SQLite migrations 008/009 for versioned static findings and
+  snapshot-pinned runtime topology windows; the old boolean is no longer in the
+  application model or query/write paths, while its database column remains for
+  non-destructive upgrades. Authenticated runtime ingestion rejects stale
+  snapshots and incomplete windows do not create findings. Git risk now compares
+  HEAD to its first parent through the native semantic differ. CLI, TUI, MCP, and
+  web request the shared daemon report. A follow-up now sends OTLP/JSON through
+  the real parser, sanitizer, and topology engine; source now persists stable
+  report receipts and lists history across snapshots; and web cards expose
+  emitted provenance and receipt retrieval. Added analytics receipt/history
+  checks to the real Electron browser test, schema positive/negative tests, and
+  a bounded execution plan. Added a required Linux browser-E2E job to the
+  pre-merge Actions gate. Earlier failures from a stale daemon binary led to a
+  fresh source build; the final local browser run used that rebuilt binary.
+  At the initial checkpoint Python was not on PATH; a later Windows Python
+  environment ran the validator and negative-instance tests successfully (see
+  the Phase 6 verification follow-up above). Draft 2020-12 Ajv checks accepted
+  all three positive fixtures. Corpus evaluation/ablation and exact-revision
+  cross-platform Actions remain unproven. Phase 6 does not require semantic
+  re-analysis of all Git history. Canvas renderer was not changed. Evidence:
+  `docs/evidence/107-phase6-evidence-backed-reports.md`.
+
+- **Phase 5 exact-commit cross-platform closure:** added durable sequence-based
+  event catch-up when SSE/WebSocket connects or reconnects after Actions run
+  `45040294535` exposed a macOS cursor replay timeout. Native matrix
+  [`45044033733`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044033733)
+  and post-merge bundle verification
+  [`45044046615`](https://github.com/sainibhaowal/SynEvid/actions/runs/45044046615)
+  passed on `21ba6bf99f4b157dfbbb1db2c35315c169de7a4b`. Windows/Linux/macOS
+  packaged smokes, workspace tests, SBOMs, checksums, keyless Sigstore, and
+  SLSA provenance verified; release publishing was intentionally skipped.
+  Artifacts remain unsigned for OS trust (first-launch prompts expected). The
+  2D/3D canvas renderer was not changed. Evidence:
+  `docs/evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md`.
+
+- **Phase 5 packaged watchdog/security follow-up (local Windows):** fixed the
+  desktop daemon treating its app-data directory as the active repository after
+  a crash/restart by introducing explicit `--managed-runtime` startup. Added a
+  Rust regression test and packaged checks for authenticated status/report
+  identity after recovery, forced daemon termination (`ERR-DAEMON-301`), CSP,
+  renderer isolation, hostile navigation/IPC denial, native tray Show/Quit,
+  service shutdown, and install/uninstall. Local Windows Electron tests passed
+  21/21, the managed-runtime Rust test passed, and NSIS plus portable package
+  smokes passed against a real temporary repository. This remains PARTIAL until
+  the exact pushed revision passes native Windows/Linux/macOS CI and the
+  aggregate daemon/npm SBOM, checksum, Sigstore, and SLSA workflow. No OS signing
+  is claimed. Evidence: `docs/evidence/105-phase5-packaged-security-watchdog-and-supply-chain.md`.
+
+- **Phase 5 native cross-platform G5 acceptance verified:** exact source SHA
+  `42c6f48dafab1663d658ca1164952cd458bd2c35` passed GitHub Actions run
+  [44998015104](https://github.com/sainibhaowal/SynEvid/actions/runs/44998015104).
+  Windows NSIS/portable, Linux DEB/AppImage, and macOS DMG/ZIP packaged smokes
+  passed authenticated repository analysis, receipt verification, and clean
+  exit. Required artifacts and Electron/cockpit/MCP CycloneDX SBOMs were
+  checked. Windows, Linux, and Apple Silicon macOS workspace/docs suites and
+  the three strict 5,000-commit performance gates passed. Artifacts are
+  unsigned. The separate post-merge daemon-SBOM/checksum/Sigstore/SLSA release
+  bundle was not run on this branch, so broader supply-chain evidence remains
+  **PARTIAL**. Windows MSI was built and verified but not installer-smoked. No
+  canvas renderer, camera, animation, or styling code changed. Evidence:
+  `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
+- **Phase 5 cross-platform smoke follow-up:** the last completed native matrix on
+  `8ac1052` (Actions run `44988175938`) passed the Windows packaged install,
+  real repository analysis, UI/daemon receipt, workspace, and platform checks.
+  Linux package creation and SBOM verification passed, but its `.deb` smoke chose
+  `/usr/share/doc/synevid` (a directory) as the executable. The macOS browser
+  smoke reached the live event flow, then Electron displayed its load-error page
+  with headless GPU/EGL failures. The Linux selector now requires a regular
+  executable file and has a behavioral regression test; the macOS test harness
+  disables GPU compositing/WebGL for its hidden CI window and records renderer
+  failure diagnostics. Local Windows verification: freshly built daemon and
+  production runtime succeeded, web tests 21/21, desktop tests 20/20. These
+  targeted fixes still require a new exact-revision Windows/Linux/macOS Actions
+  run; Phase 5 remains **PARTIAL**. The strict Windows loose-history benchmark
+  also failed on the temporary test run and must be re-established by the
+  committed native matrix; its target is unchanged. No production canvas,
+  camera, animation, or styling files were modified. Evidence:
+  `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
+- **macOS browser-smoke follow-up:** Actions run `44993378733` on
+  `0ba93f5ca0ace120f467e4082bd7b69e6efdc528` passed the strict 5,000-loose-
+  commit performance jobs on Windows, Linux, and macOS. The macOS packaged
+  smoke still failed because `phase1_daemon_browser.behavior.test.mjs` retained
+  SwiftShader/SwANGLE command-line switches; the native log showed Vulkan/EGL
+  initialization failure and a browser-expression timeout. Those macOS-only
+  test-launch switches are now removed, while the hidden test window keeps
+  hardware acceleration/WebGL disabled. The web test command now runs serially:
+  concurrent Next.js E2E servers were racing while rewriting the shared
+  `tsconfig.json`; the parallel run failed 3/21, while the serialized rerun
+  passed 21/21. A new exact-revision native run is required; G5 remains
+  **PARTIAL**. Production canvas behavior is untouched.
+
+- **macOS live-event smoke investigation:** run `44995105101` passed Linux
+  package/install smoke, Windows/Linux/macOS workspace tests, and all three
+  strict history gates, but macOS still failed after broadcasting event 100:
+  the hidden Electron page changed to its load-error view before displaying
+  `LIVE #100`. The SwiftShader/EGL errors are gone, so this is a distinct
+  renderer/page failure. The browser test now reports page loading/crash state,
+  Electron navigation/console diagnostics, and the captured Next.js server log
+  on failure. Local serialized web tests pass 21/21. The exact macOS cause and
+  native macOS package smoke are still unproven; G5 remains **PARTIAL**.
+
+- **macOS canvas smoke correction:** run `44996712119` exposed that the hidden
+  browser harness itself disabled macOS WebGL (`app.disableHardwareAcceleration`,
+  `--disable-gpu`, and `webgl: false`). The captured renderer error was
+  `THREE.WebGLRenderer: Error creating WebGL context`, followed by the page
+  error view. The macOS test now uses the native GPU/WebGL path; Windows/Linux
+  test flags are unchanged. This is test-only and does not modify the canvas
+  implementation. A new native macOS run must still prove the fix; G5 remains
+  **PARTIAL**.
+
+- **Cross-platform follow-up:** fixed a race in concurrent content-addressed
+  cache writes by assigning each writer an exclusive temporary file and cleaning
+  it on errors. The Windows integration test verifies published bytes and no
+  temporary-file leftovers. Browser test teardown waits for Next.js to exit
+  before cleaning isolated output, and the macOS test runner no longer forces
+  SwiftShader/offscreen rendering. Local Windows storage (4/4) and web browser
+  (21/21) tests pass. The latest Actions run had Linux/macOS browser and Windows
+  concurrency failures; fixes await same-revision native CI. Phase 5 remains
+  **PARTIAL**. Evidence: `docs/evidence/104-cross-platform-cache-concurrency-and-browser-smoke.md`.
+
+- **Phase 5 Windows rerun (2026-11-22):** rebuilt the current-source daemon and
+  packaged Windows NSIS, portable, and MSI artifacts. Artifact/SBOM validation
+  passed; NSIS install/uninstall and portable launch both completed the real
+  repository → analysis → MCP/UI receipt smoke. Electron tests 19/19, MCP tests
+  51/51 after clean lockfile install, and web tests 21/21 passed. The MCP lock
+  metadata for `concat-map` now matches its resolved `0.0.1` package, and the
+  Zod advisory is fixed; MCP/web/desktop production dependency audits report
+  zero vulnerabilities. Phase 5
+  Windows and macOS same-SHA native package smokes passed; Linux build, browser
+  workflow, and artifact/SBOM checks passed, but `.deb` installation initially
+  failed because the smoke used `dpkg -i` without resolving declared runtime
+  dependencies. The smoke now uses `apt-get install` and awaits a new native
+  Linux run. Rust daemon SBOM and aggregate checksums/provenance also remain
+  pending. Windows artifacts are unsigned; signing is not claimed. No canvas
+  renderer, camera, animation, or styling files were changed. Evidence:
+  `docs/evidence/103-phase5-runtime-hardening-and-g5-status.md`.
+
+- Hardened the Electron renderer boundary with exact loopback-origin IPC sender
+  checks, external navigation/webview denial, and child-process cleanup on quit.
+  Updated the unsupported Electron 33 dependency to Electron 45.4.1, upgraded
+  Next.js/eslint-config-next to 16.4.6, and raised the developer/build Node.js
+  floor to 22.12.0.
+  Runtime assembly now includes the public JSON schemas with the sidecar and
+  bundled MCP bridge, plus a deterministic contents manifest that the
+  packaged smoke verifies against actual bytes.
+  Expanded packaged smoke behavior to reject unauthenticated daemon access,
+  connect and index a temporary repository, and verify the analytics snapshot
+  and BLAKE3 digest. Desktop tests pass 19/19 and MCP tests pass 51/51. The
+  production Next build and focused nonce-CSP behavior test pass. The full web
+  suite is 20/21: the Phase 1 Electron browser workflow used a stale daemon
+  binary (Nov 6) against Rust source modified Nov 20; the current source allows
+  the reported preflight header. A fresh daemon build and browser rerun remain
+  unverified because the MSVC C runtime libraries are unavailable locally.
+  This expanded packaged
+  smoke has not yet run on native artifacts; Phase 5 G5 remains partial pending native
+  installed-artifact execution and verification. Native CI now installs/tests
+  NSIS plus portable on Windows, DMG plus ZIP on macOS, and DEB plus AppImage on
+  Linux before accepting release artifacts. CycloneDX SBOMs are generated for
+  Electron, cockpit, MCP, and Rust daemon components and included in the signed
+  checksum bundle.
+- Added a per-request nonce CSP for Next-rendered scripts and made Electron
+  preserve the server policy. Packaged report smoke now verifies the visible
+  UI receipt against the daemon response. Runtime assembly includes the Rust
+  CLI used by MCP, and generated MCP configuration uses a loopback endpoint plus
+  a user-data token file rather than placing the bearer secret in IDE config.
+
+- Verified the Phase 4 authenticated runtime authority across native Windows,
+  Ubuntu, and macOS CI: daemon identity, client leases, shared CLI/TUI/MCP/UI
+  request identity, explicit offline mode, replay-gap reporting, source-client
+  evidence metadata, and the shared runtime envelope schema. The successful
+  pre-merge gate is recorded in `docs/evidence/106-phase4-g4-ci-closure.md`;
+  no canvas renderer or visual behavior was changed.
+
+- Added executable Phase 0/1 requirement registry and CI truth/evidence validators.
+- Added the shared BLAKE3 evidence envelope to daemon JSON responses and MCP
+  envelopes, with explicit unknown/unavailable states and no PASS promotion.
+- Synchronized the TUI with daemon status and replay cursors when connected; offline
+  analysis is labeled instead of silently presented as shared state.
+- Added WAL/SHM sidecar preservation, restart cursor, and transaction rollback tests,
+  plus structured daemon operation logs that omit source contents and full paths.
+- Closed the literal Phase 2 language/graph/blast-radius gate: canonical deterministic
+  traversal, real overlay parsing, structured daemon-backed terminal impact queries,
+  TUI evidence parity, and non-PASS handling for name-level/inferred/unknown edges.
+  Evidence: `docs/evidence/102-phase2-language-graph-blast-radius-closure.md`.
+- Hardened Phase 3 native Git integrity: SHA-1 object verification, packed-size checks,
+  strict malformed-history errors, and explicit file-heuristic versus semantic Galaxy
+  evidence. The strict 5,000-loose-commit fixture measured 118.03 ms on Windows,
+  70.16 ms on macOS, and 29.80 ms on Ubuntu in the final native CI run.
+
+## [0.6.0] - 2026-11-03
+
+SynEvid v0.6.0 is the cumulative desktop milestone from the v0.1.0 core foundation through the Phase 1-5 delivery line. It brings deterministic repository analysis, native Git forensics, the live trajectory/MCP workflow, and a production Electron shell into one offline developer experience.
+
+### Highlights
+
+- **Offline, deterministic verification:** BLAKE3-addressed snapshots, canonical outputs, SQLite WAL persistence, corruption recovery, ordered event replay, and explicit `PASS`, `FAIL`, `PARTIAL`, and `UNKNOWN` coverage states.
+- **Real repository-to-canvas flow:** Connect a repository, scan it, inspect persisted symbols and semantic edges, open source ranges, simulate unsaved edits, and inspect the resulting impact without writing source files.
+- **Native Git forensics:** Read loose and packed Git objects, delta chains, branches, tags, merge parents, dirty worktrees, historical snapshots, semantic diffs, blame, bisect, staging, and guarded Git controls without invoking the external Git process.
+- **Forensic trajectory timeline:** Persist sessions, workflows, steps, jobs, receipts, edit simulations, verification results, rollback actions, and replayable live events in the selected repository's SQLite store.
+- **Live MCP and AI workflow:** MCP actions use the real daemon APIs, persist trajectory receipts, publish ordered activity events, and expose real working-memory/cache metrics without fabricated PASS or token-savings fallbacks.
+- **Native Electron desktop delivery:** Live source development plus Windows NSIS/portable/MSI, macOS DMG/ZIP, and Linux AppImage/DEB/RPM release targets, with a Rust sidecar, bundled Next.js cockpit, MCP bridge, watchdog, preload isolation, loopback authentication, and packaged smoke coverage.
+- **Analytics and export:** Deterministic structural-health, dead-code, Git-risk, and AI-session reports in JSON, Markdown, HTML, and SARIF, with canonical BLAKE3 report digests.
+
+### Phase milestones
+
+- **v0.1.0 to v0.2.0 - Core and daemon:** Added the pluggable analyzer registry, SQLite persistence and migrations, real incremental simulation, workspace detection, safe path traversal, deterministic snapshots, live event transport, recovery receipts, and the WASM plugin policy loader.
+- **v0.3.0 - Infinite Code Universe and simulator:** Connected scan, graph, editor, simulator, and canvas data paths; bounded large-graph projection; added deterministic layouts, semantic source-line edges, real editor overlays, worker-backed graph preparation, and honest unsupported-coverage handling.
+- **v0.4.0 - Native Git and time travel:** Added pure-Rust `.git` reading, packed-object and delta support, commit DAGs, virtual historical trees, semantic diffs, Git Galaxy controls, staging/commit/branch/checkout/revert/undo flows, blame, bisect, terminal workbench, and recovery receipts.
+- **v0.5.0 - Timeline, cache, and MCP:** Added persisted forensic sessions and trajectories, real edit-to-verify integration, MCP tool wiring, WebSocket/SSE replay, restart recovery, AI Active activity signals, six-turn cache acceptance coverage, deterministic trace bundles, and client configuration generation.
+- **v0.6.0 - Electron and release engineering:** Added the standalone desktop runtime, live `npm run dev` source workflow, cross-platform packaging definitions, daemon watchdog and security controls, analytics center, workspace presets, report export, artifact verification, native-runner CI, and packaged launch/health tests.
+
+### Fixes and hardening
+
+- Removed hard-coded repository defaults and fixed the selected-directory path being appended twice. User-selected paths are canonicalized once and remain the active repository internally.
+- Removed misleading `User Home`, `Root Filesystem`, and repository shortcuts from runtime selection and manual data. The picker now represents temporary navigation state, not a fixed repository.
+- Fixed Electron source startup to use the live Next.js and Rust source runtimes, clear inherited `ELECTRON_RUN_AS_NODE`, use the intended loopback port, and keep the branded splash until the cockpit is healthy.
+- Kept development-only React `unsafe-eval` scoped to the local source runtime; packaged production retains the restrictive CSP.
+- Replaced fabricated graph, simulator, MCP, cache, and TUI output with authoritative daemon data or explicit non-actionable error envelopes.
+- Added truthful invalid-root, storage-corruption, daemon-watchdog, path-containment, and unsupported-coverage diagnostics.
+- Preserved the existing 2D/3D canvas renderer, animation loop, camera/orbit behavior, WebGL buffers, and canvas styling while wiring real historical, trajectory, and AI activity data around it.
+
+### Verification and release contents
+
+- Rust workspace, Rust documentation, MCP, web, Electron, analytics, determinism, architecture, and packaged smoke checks are covered by focused local and CI gates.
+- Native release jobs verify Windows NSIS/portable/MSI, macOS DMG/ZIP, and Linux AppImage/DEB/RPM targets on their respective runners.
+- Free release provenance is supported through SHA-256 checksums, SBOM output, and Sigstore-compatible attestations. Paid OS signing and notarization are not required for building or testing artifacts.
+
+### Known limitations
+
+- A strict sub-150 ms history-loading claim is not made for every cold loose-object repository; packed warm-path measurements and native CI coverage are tracked separately.
+- OS signing/notarization credentials are intentionally not bundled. Windows, macOS, and Linux artifacts can be distributed unsigned with the normal platform trust warnings.
+- The existing `[Unreleased]` section contains post-v0.6.0 maintenance and release-gate follow-ups; the paste-ready GitHub body is maintained at [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md).
+
 ## [Unreleased] - Native Live Electron Runtime & Accurate Repository Selection (2026-11-01)
+
+### Phase 0/1 truth and daemon closure (2026-11-05)
+
+- Replaced embedded terminal blast-radius demo output with real indexed-graph impact analysis and explicit error/unknown envelopes.
+- Removed static AI metrics, terminal transcripts, demo repository buffers, and legacy dashboard latency/verdict placeholders from production presentation paths.
+- Changed Git tree decode failures to `UNKNOWN`, added authenticated CLI `attach`/`status`, and propagated loopback tokens through MCP.
+- Moved live-event SQLite persistence off the producer wake-up path with a bounded back-pressure queue while preserving monotonic sequence IDs and replay.
+- Added evidence receipt 101 and traceability rows for the Phase 0/1 truth and daemon contracts. No 2D/3D canvas renderer, animation, camera, WebGL, or styling implementation was changed.
+- Added executable requirement/evidence validators, real Electron daemon-restart replay coverage, and aggregate CI failure propagation for Electron and Phase 3 required jobs.
 
 ### Phase 1 literal PRD closure
 

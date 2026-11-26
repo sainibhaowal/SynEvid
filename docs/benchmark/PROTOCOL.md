@@ -1,5 +1,13 @@
 # SynEvid Benchmark Protocol & Empirical Evaluation Methodology
 
+> **Current status: WITHDRAWN / NOT EVALUABLE.** The historical RQ1–RQ5
+> comparison below was not methodologically valid: the current tasks do not
+> define query scope or independently reviewed exhaustive labels, baseline
+> implementations consume expected-answer fields, and the purported LSP tool
+> is only a text heuristic. Historical metrics and the old promotion-gate PASS
+> are superseded by [`docs/evidence/108-impact-benchmark-integrity-audit.md`](../evidence/108-impact-benchmark-integrity-audit.md).
+> The runner refuses comparative scoring until the protocol requirements are met.
+
 This document details the pre-registered benchmark protocol, comparative baseline design, evaluation corpus, and reproduction telemetry for **SynEvid (Code Autopsy)**.
 
 ---
@@ -12,15 +20,26 @@ This document details the pre-registered benchmark protocol, comparative baselin
 
 ## 2. Evaluation Corpus & Dataset Design
 
+**Correction:** the existing committed suite does not satisfy the historical,
+independently reviewed corpus described in this section. It contains generated
+prompt fixtures with no explicit query scope or exhaustive-oracle review record.
+Treat the old corpus description and downstream numerical tables as withdrawn
+until a new frozen evaluation satisfies the requirements in evidence 108.
+
 The evaluation suite exercises realistic, ground-truth refactoring tasks across representative TypeScript repositories:
 
 - **Target Estates:** $\ge 5$ mature TypeScript repositories with established test suites and CI pipelines.
-- **Evaluation Tasks:** $50$ historical refactoring tasks across core libraries, API handlers, data models, and utility modules.
+- **Legacy evaluation tasks:** 50 generated prompt fixtures. They are not the 50 historical refactoring tasks previously claimed and do not have independently reviewed exhaustive labels; this corpus is not evaluable for accuracy.
 - **Ground Truth Integrity Rule:** Benchmark ground truth is committed prior to engine runs and **must never be modified to artificially inflate accuracy scores**.
 
 ---
 
 ## 3. Comparative Baselines
+
+The names below describe the legacy intended baselines, not the verified
+implementations. In particular, the current “LSP” implementation is a
+source-text heuristic and both text baselines access expected-answer fields;
+they are not eligible for comparative scoring.
 
 | Baseline | Architecture & Tooling | Description |
 | :--- | :--- | :--- |
@@ -30,16 +49,20 @@ The evaluation suite exercises realistic, ground-truth refactoring tasks across 
 
 ---
 
-## 4. Pre-Registered Success Gates & Empirical Results
+## 4. Historical Pre-Registered Gate & Results — Withdrawn
+
+**Status: NOT EVALUABLE.** The numeric results and gate outcomes in this
+historical section are withdrawn. A pre-registered threshold cannot rescue an
+invalid oracle or answer-leaking comparator. See evidence 108.
 
 To prevent subjective evaluation bias, the promotion gate was pre-registered before running benchmarks:
 pass = (ΔRecall ≥ +10pp) ∨ (ΔCost ≥ 40% at equal accuracy) ∨ (New Failure Class > 0).
 
 | Gate Criterion | Pre-Registered Threshold | Committed Measurement | Gate Status |
 | :--- | :--- | :--- | :---: |
-| **Recall Lift** | ≥ +10.00pp over best baseline | **+28.33pp** (100.00% vs 71.67% mean recall) | **PASS** |
-| **Cost Reduction** | ≥ 40% token cut at equal accuracy | **−246.44%** (2338 vs 675 tokens) | **FAIL** |
-| **New Failure Class** | Discovery of structural failure classes | **0** (task vocabulary gap) | **FAIL** |
+| **Recall Lift** | ≥ +10.00pp over best baseline | NOT EVALUABLE | WITHDRAWN |
+| **Cost Reduction** | ≥ 40% token cut at equal accuracy | NOT EVALUABLE | WITHDRAWN |
+| **New Failure Class** | Discovery of structural failure classes | NOT EVALUABLE | WITHDRAWN |
 
 Promotion therefore rests on the recall leg alone — the pre-registered OR gate. The
 committed artifacts are [`benchmarks/results/reproduction_report.md`](../../benchmarks/results/reproduction_report.md)
@@ -49,7 +72,7 @@ Two further project invariants are tracked as standing gates (not promotion crit
 
 | Standing Gate | Threshold | Status |
 | :--- | :--- | :---: |
-| **Zero false-negative invariant** | 0 missed breaking regressions on the ground-truth corpus | **PASSED** (follows from 100% task recall) |
+| **Zero false-negative invariant** | 0 missed breaking regressions on a reviewed complete oracle | **NOT ESTABLISHED** |
 | **Deterministic repeatability** | 100/100 runs with identical BLAKE3 digests | **PASSED** across all platforms |
 
 ### 4.1 Honest limits — what is measured and what is not
@@ -71,6 +94,11 @@ Two further project invariants are tracked as standing gates (not promotion crit
 ---
 
 ## 5. How to Reproduce Benchmarks
+
+The historical command below is retained for reference only. On the current
+task set, the integrity audit intentionally exits with status `3` before
+scoring. Do not treat the archived report files as reproducible accuracy
+evidence.
 
 The entire benchmark suite can be executed independently using the bundled test harness:
 

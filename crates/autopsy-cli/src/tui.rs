@@ -9,12 +9,7 @@
 
 #![allow(clippy::collapsible_if, clippy::collapsible_match)]
 
-use crate::{
-    ANALYZER_VERSION, Cli, CliError, EXIT_PASS, build_snapshot_and_graph, load_or_default_config,
-};
-use autopsy_domain::{FindingStatus, SymbolId};
-use autopsy_impact::{ImpactDirection, ImpactEngine, ImpactProfile, ImpactQuery};
-use autopsy_invariants::{EvaluationContext, InvariantEvaluator, InvariantsConfig};
+use crate::{ANALYZER_VERSION, Cli, CliError, EXIT_PASS};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -29,13 +24,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
-use std::collections::BTreeSet;
+use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// RAII Terminal Cleanup Guard that guarantees raw mode and mouse capture are disabled on exit.
 struct TerminalCleanup;
@@ -67,6 +62,23 @@ pub struct TuiApp {
     pub search_active: bool,
     pub input_buffer: String,
     pub should_quit: bool,
+    pub daemon_connected: bool,
+    pub repository_id: String,
+    pub last_event_seq: i64,
+    pub freshness: String,
+    pub analytics_report_id: String,
+    pub analytics_report_status: String,
+    pub analytics_report_data: Option<serde_json::Value>,
+    pub analytics_tab_selected: usize,
+    pub analytics_findings_selected: usize,
+    pub impact_verdict: String,
+    pub impact_coverage: String,
+    pub impact_truncated: bool,
+    pub impact_digest: String,
+    pub impact_direction: String,
+    pub impact_profile: String,
+    pub impact_budget: usize,
+    last_daemon_sync: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -129,6 +141,23 @@ impl TuiApp {
             search_active: false,
             input_buffer: String::new(),
             should_quit: false,
+            daemon_connected: false,
+            repository_id: String::new(),
+            last_event_seq: 0,
+            freshness: "offline analysis not synchronized".to_string(),
+            analytics_report_id: String::new(),
+            analytics_report_status: "UNKNOWN".to_string(),
+            analytics_report_data: None,
+            analytics_tab_selected: 0,
+            analytics_findings_selected: 0,
+            impact_verdict: "UNKNOWN".to_string(),
+            impact_coverage: "unknown".to_string(),
+            impact_truncated: false,
+            impact_digest: String::new(),
+            impact_direction: "unknown".to_string(),
+            impact_profile: "unknown".to_string(),
+            impact_budget: 0,
+            last_daemon_sync: None,
         };
         app.load_fast();
         app
@@ -142,97 +171,131 @@ impl TuiApp {
         self.findings.clear();
         self.likely_affected.clear();
         self.possibly_affected.clear();
+        self.impact_verdict = "UNKNOWN".to_string();
+        self.impact_coverage = "unknown".to_string();
+        self.impact_truncated = false;
+        self.impact_digest.clear();
+        self.impact_direction = "unknown".to_string();
+        self.impact_profile = "unknown".to_string();
+        self.impact_budget = 0;
     }
 
-    pub fn refresh(&mut self) {
-        let config = load_or_default_config(&self.repo_root).unwrap_or_default();
-
-        match build_snapshot_and_graph(&self.repo_root, &config, None, None) {
-            Ok(artifacts) => {
-                self.snapshot_id = artifacts.snapshot.snapshot_id.to_string();
-                self.coverage_state = format!("{:?}", artifacts.coverage_state);
-                self.symbol_count = artifacts.graph.node_count();
-                self.edge_count = artifacts.graph.edge_count();
-
-                // Evaluate invariants from the repository configuration only.
-                // An absent configuration means no configured findings, not
-                // synthetic PASS results.
-                let inv_path = self.repo_root.join(".autopsy").join("invariants.yml");
-                let invariants_config = if inv_path.exists() {
-                    InvariantsConfig::load_from_file(&inv_path).unwrap_or_else(|_| {
-                        InvariantsConfig {
-                            version: "0.0.1".to_string(),
-                            invariants: vec![],
-                        }
-                    })
-                } else {
-                    InvariantsConfig {
-                        version: "0.0.1".to_string(),
-                        invariants: vec![],
+    /// Synchronize the TUI from the daemon-owned status and event cursor.
+    /// The TUI is fully daemon-native - no local analysis engine.
+    /// If daemon is unavailable, state shows UNAVAILABLE.
+    pub fn sync_from_daemon(&mut self) -> bool {
+        if let Some(last_sync) = self.last_daemon_sync
+            && last_sync.elapsed() < Duration::from_millis(250)
+        {
+            return self.daemon_connected;
+        }
+        self.last_daemon_sync = Some(Instant::now());
+        let Ok(status) = crate::daemon::fetch_status_for_client("tui") else {
+            self.daemon_connected = false;
+            self.freshness = "offline analysis not synchronized".to_string();
+            return false;
+        };
+        let previous_snapshot_id = self.snapshot_id.clone();
+        let active_repo_id = status
+            .get("active_repo_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let repo_root = status
+            .get("canonical_path")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| status.get("repo_root").and_then(serde_json::Value::as_str))
+            .unwrap_or_default();
+        if active_repo_id.is_empty() || repo_root.is_empty() {
+            self.daemon_connected = true;
+            self.repository_id.clear();
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
+            self.impact_verdict = "UNKNOWN".to_string();
+            self.impact_coverage = "unknown".to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.freshness = "daemon connected; no active repository".to_string();
+            return true;
+        }
+        self.daemon_connected = true;
+        self.repository_id = active_repo_id.to_string();
+        self.repo_root = PathBuf::from(repo_root);
+        self.snapshot_id = status
+            .get("snapshot_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unindexed")
+            .to_string();
+        self.coverage_state = status
+            .get("coverage_state")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.symbol_count = status
+            .get("symbol_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        self.edge_count = status
+            .get("edge_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let status_cursor = status
+            .get("last_event_seq")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(self.last_event_seq);
+        let mut replayed = false;
+        if let Ok(events) = crate::daemon::fetch_live_events_for_client(self.last_event_seq, "tui")
+        {
+            if let Some(items) = events.get("events").and_then(serde_json::Value::as_array) {
+                for event in items {
+                    if let Some(seq) = event.get("seq_id").and_then(serde_json::Value::as_i64) {
+                        self.last_event_seq = self.last_event_seq.max(seq);
+                        replayed = true;
                     }
-                };
-
-                let eval_ctx = EvaluationContext {
-                    snapshot_id: artifacts.snapshot.snapshot_id.clone(),
-                    analyzer_version: ANALYZER_VERSION,
-                    graph: &artifacts.graph,
-                    baseline_graph: None,
-                    diff: None,
-                    contracts_before: &std::collections::BTreeMap::new(),
-                    contracts_after: &std::collections::BTreeMap::new(),
-                    coverage_state: artifacts.coverage_state,
-                };
-
-                let evaluator = InvariantEvaluator::new();
-                let pairs = evaluator
-                    .evaluate(&invariants_config, &eval_ctx)
-                    .unwrap_or_default();
-
-                self.findings = pairs
-                    .into_iter()
-                    .map(|(f, _)| FindingItem {
-                        rule_id: f.rule_id,
-                        status: match f.status {
-                            FindingStatus::Pass => "PASS".to_string(),
-                            FindingStatus::Fail => "FAIL".to_string(),
-                            FindingStatus::Unknown => "UNKNOWN".to_string(),
-                        },
-                        severity: format!("{:?}", f.severity).to_uppercase(),
-                        message: f.message,
-                        location: if !f.entities.is_empty() {
-                            f.entities[0].clone()
-                        } else {
-                            "src/".to_string()
-                        },
-                        repair_action: "Review dependent imports and re-run `autopsy verify`"
-                            .to_string(),
-                    })
-                    .collect();
-
-                // Run blast radius on the user-selected seed, if any.
-                self.recompute_blast(&artifacts.graph);
-            }
-            Err(error) => {
-                self.snapshot_id = "unavailable".to_string();
-                self.coverage_state = "Unknown".to_string();
-                self.symbol_count = 0;
-                self.edge_count = 0;
-                self.findings = vec![FindingItem {
-                    rule_id: "analysis-unavailable".to_string(),
-                    status: "UNKNOWN".to_string(),
-                    severity: "ERROR".to_string(),
-                    message: format!("Repository analysis could not be completed: {error}"),
-                    location: self.repo_root.display().to_string(),
-                    repair_action:
-                        "Check the repository path and configuration, then press r to retry"
-                            .to_string(),
-                }];
-                self.likely_affected.clear();
-                self.possibly_affected.clear();
+                }
             }
         }
+        self.last_event_seq = self.last_event_seq.max(status_cursor);
+        self.freshness = if replayed {
+            "replay complete".to_string()
+        } else {
+            status
+                .get("freshness")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("daemon connected")
+                .to_string()
+        };
 
-        self.load_runs();
+        // Re-query impact after a replayed or newly indexed snapshot so a
+        // previously selected seed never remains visually tied to stale graph
+        // data.  The daemon response is applied verbatim; no local estimate is
+        // substituted when it is unavailable.
+        if !self.impact_seed.trim().is_empty()
+            && (replayed
+                || previous_snapshot_id != self.snapshot_id
+                || self.impact_digest.is_empty())
+        {
+            match crate::daemon::fetch_impact_for_client(&self.impact_seed, "tui") {
+                Ok(response) => {
+                    self.apply_daemon_impact(&response);
+                }
+                Err(error) => {
+                    self.impact_verdict = "UNAVAILABLE".to_string();
+                    self.impact_coverage = "unavailable".to_string();
+                    self.impact_truncated = false;
+                    self.impact_digest.clear();
+                    self.impact_direction = "unknown".to_string();
+                    self.impact_profile = "unknown".to_string();
+                    self.impact_budget = 0;
+                    self.likely_affected.clear();
+                    self.possibly_affected.clear();
+                    self.freshness = format!("daemon impact unavailable: {error}");
+                }
+            }
+        }
+        true
     }
 
     fn load_runs(&mut self) {
@@ -287,41 +350,142 @@ impl TuiApp {
         }
     }
 
-    fn recompute_blast(&mut self, graph: &autopsy_graph::DependencyGraph) {
+    fn apply_daemon_impact(&mut self, response: &serde_json::Value) -> bool {
+        let Some(impact) = response.get("impact") else {
+            self.impact_verdict = response
+                .get("verdict")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("UNKNOWN")
+                .to_ascii_uppercase();
+            self.impact_coverage = response
+                .get("coverage_state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
+            return response.get("error").is_none();
+        };
+
+        let meta = impact
+            .get("entity_meta")
+            .and_then(serde_json::Value::as_object);
+        let hops_for = |id: &str| {
+            meta.and_then(|items| items.get(id))
+                .and_then(|value| value.get("hops"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize
+        };
+        let reason_for = |id: &str| {
+            meta.and_then(|items| items.get(id))
+                .and_then(|value| value.get("weakest_link"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("coverage below resolved")
+                .to_string()
+        };
+
+        self.likely_affected = impact
+            .get("likely_affected")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|id| (id.to_string(), hops_for(id)))
+            .collect();
+        self.possibly_affected = impact
+            .get("possibly_affected")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|id| (id.to_string(), hops_for(id), reason_for(id)))
+            .collect();
+        self.impact_verdict = response
+            .get("verdict")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("UNKNOWN")
+            .to_ascii_uppercase();
+        self.impact_coverage = response
+            .get("coverage_state")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                impact
+                    .get("coverage_state")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_truncated = impact
+            .get("truncated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        self.impact_digest = impact
+            .get("impact_digest")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.impact_direction = impact
+            .get("query")
+            .and_then(|query| query.get("direction"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_profile = impact
+            .get("traversal_profile")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        self.impact_budget = impact
+            .get("query")
+            .and_then(|query| query.get("profile"))
+            .and_then(|profile| profile.get("budget"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        response.get("error").is_none()
+    }
+
+    fn recompute_blast(&mut self) {
         if self.impact_seed.trim().is_empty() {
             return;
         }
 
-        let query = ImpactQuery {
-            seed_symbols: vec![SymbolId::new(&self.impact_seed)],
-            direction: ImpactDirection::Forward,
-            profile: ImpactProfile {
-                name: "tui-impact".to_string(),
-                max_depth: 10,
-                budget: 1000,
-                edge_kinds: BTreeSet::new(),
-                traverse_file_nodes: true,
-            },
-        };
-
-        let engine = ImpactEngine::new();
-        if let Ok(report) = engine.compute_impact(graph, &query) {
-            self.likely_affected = report
-                .likely_affected
-                .into_iter()
-                .map(|id| (id.as_str().to_string(), 1))
-                .collect();
-            self.possibly_affected = report
-                .possibly_affected
-                .into_iter()
-                .map(|id| {
-                    (
-                        id.as_str().to_string(),
-                        2,
-                        "call_expression:imported-name".to_string(),
-                    )
-                })
-                .collect();
+        // The daemon is the ONLY source of truth. No local analysis engine.
+        // If daemon is unavailable, show UNAVAILABLE - never fall back to local analysis.
+        if self.daemon_connected {
+            match crate::daemon::fetch_impact_for_client(&self.impact_seed, "tui") {
+                Ok(response) => {
+                    self.apply_daemon_impact(&response);
+                }
+                Err(error) => {
+                    self.impact_verdict = "UNAVAILABLE".to_string();
+                    self.impact_coverage = "unavailable".to_string();
+                    self.impact_truncated = false;
+                    self.impact_digest.clear();
+                    self.impact_direction = "unknown".to_string();
+                    self.impact_profile = "unknown".to_string();
+                    self.impact_budget = 0;
+                    self.likely_affected.clear();
+                    self.possibly_affected.clear();
+                    self.freshness = format!("daemon impact unavailable: {error}");
+                }
+            }
+        } else {
+            // No daemon connection - show unavailable, never fall back to local analysis
+            self.impact_verdict = "UNAVAILABLE".to_string();
+            self.impact_coverage = "unavailable".to_string();
+            self.impact_truncated = false;
+            self.impact_digest.clear();
+            self.impact_direction = "unknown".to_string();
+            self.impact_profile = "unknown".to_string();
+            self.impact_budget = 0;
+            self.likely_affected.clear();
+            self.possibly_affected.clear();
+            self.freshness = "daemon unavailable; use --offline for local analysis".to_string();
         }
     }
 
@@ -332,7 +496,7 @@ impl TuiApp {
                     self.search_active = false;
                     self.impact_seed = self.input_buffer.clone();
                     self.input_buffer.clear();
-                    self.refresh();
+                    self.recompute_blast();
                 }
                 KeyCode::Esc => {
                     self.search_active = false;
@@ -358,7 +522,36 @@ impl TuiApp {
             KeyCode::Char('3') => self.selected_tab = 2,
             KeyCode::Char('4') => self.selected_tab = 3,
             KeyCode::Char('5') => self.selected_tab = 4,
-            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Char('r') => {
+                // Force daemon sync - no local refresh
+                let _ = self.sync_from_daemon();
+            }
+            KeyCode::Char('a') => {
+                match crate::daemon::fetch_analytics_report_for_client("tui", false, false) {
+                    Ok(response) => {
+                        let report = response.get("report").unwrap_or(&response);
+                        self.analytics_report_id = report
+                            .get("report_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("UNKNOWN")
+                            .to_string();
+                        self.analytics_report_status = report["static_unreferenced"]["status"]
+                            .as_str()
+                            .unwrap_or("UNKNOWN")
+                            .to_string();
+                        self.freshness = format!(
+                            "analytics {} ({})",
+                            &self.analytics_report_id[..12.min(self.analytics_report_id.len())],
+                            self.analytics_report_status
+                        );
+                    }
+                    Err(_) => {
+                        self.analytics_report_id.clear();
+                        self.analytics_report_status = "UNAVAILABLE".to_string();
+                        self.freshness = "daemon analytics report unavailable".to_string();
+                    }
+                }
+            }
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.input_buffer.clear();
@@ -375,6 +568,36 @@ impl TuiApp {
                 if self.selected_tab == 2 {
                     self.blast_column = 1;
                     self.blast_selected = 0;
+                }
+            }
+            KeyCode::Enter => {
+                // In Analytics tab, focus on the selected finding's file/symbol
+                if self.selected_tab == 5 {
+                    if let Some(report) = &self.analytics_report_data {
+                        let finding = match self.analytics_tab_selected {
+                            0 => report["static_unreferenced"]["verified_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            1 => report["static_unreferenced"]["unknown_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            2 => report["runtime_unobserved"]["unobserved_candidates"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            3 => report["git_evolution"]["semantic_git_risk"]["verified_findings"]
+                                .as_array()
+                                .and_then(|a| a.get(self.analytics_findings_selected)),
+                            _ => None,
+                        };
+                        if let Some(f) = finding {
+                            let file_path = f["file_path"].as_str().unwrap_or("");
+                            let line = f["line"].as_u64().unwrap_or(0);
+                            let symbol = f["qualified_name"].as_str().unwrap_or("");
+                            self.freshness = format!("FOCUS: {}:{}:{}", file_path, line, symbol);
+                            // In a real implementation, this would open the file in an editor
+                            // For now, we just show the focus target
+                        }
+                    }
                 }
             }
             _ => {}
@@ -435,6 +658,35 @@ impl TuiApp {
                     let clicked = (row - 7) as usize;
                     if clicked < self.runs.len() {
                         self.runs_selected = clicked;
+                    }
+                }
+                // Click on Analytics Tab (Tab 5) - Sub-tabs
+                else if self.selected_tab == 5 && (3..=5).contains(&row) {
+                    if col < 15 {
+                        self.analytics_tab_selected = 0;
+                    } else if col < 30 {
+                        self.analytics_tab_selected = 1;
+                    } else if col < 45 {
+                        self.analytics_tab_selected = 2;
+                    } else {
+                        self.analytics_tab_selected = 3;
+                    }
+                    self.analytics_findings_selected = 0;
+                }
+                // Click on Findings List in Analytics Tab
+                else if self.selected_tab == 5 && row >= 7 {
+                    let clicked = (row - 7) as usize;
+                    if let Some(report) = &self.analytics_report_data {
+                        let max_idx = match self.analytics_tab_selected {
+                            0 => report["static_unreferenced"]["verified_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            1 => report["static_unreferenced"]["unknown_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            2 => report["runtime_unobserved"]["unobserved_candidates"].as_array().map(|a| a.len()).unwrap_or(0),
+                            3 => report["git_evolution"]["semantic_git_risk"]["verified_findings"].as_array().map(|a| a.len()).unwrap_or(0),
+                            _ => 0,
+                        };
+                        if max_idx > 0 && clicked < max_idx {
+                            self.analytics_findings_selected = clicked;
+                        }
                     }
                 }
             }
@@ -524,8 +776,13 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
         .draw(|f| ui(f, &mut app))
         .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-    // Refresh active workspace analysis to update live symbols, edges, invariants
-    app.refresh();
+    // The daemon is the ONLY source of truth. No local analysis engine in TUI.
+    // If daemon is unavailable, show UNAVAILABLE - never fall back to local analysis.
+    if !app.sync_from_daemon() {
+        return Err(CliError::Analysis(
+            "daemon unavailable; TUI requires the authenticated daemon. Run 'autopsy-daemon' in a separate terminal.".to_string(),
+        ));
+    }
 
     // Re-draw with updated live workspace state
     terminal
@@ -537,7 +794,9 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
             .draw(|f| ui(f, &mut app))
             .map_err(|e| CliError::Analysis(e.to_string()))?;
 
-        // 50ms polling rate provides ultra-smooth responsiveness for mouse wheel and keyboard
+        // 50ms input polling remains responsive; daemon synchronization is
+        // cursor-based and cheap, so replay is visible without rebuilding a
+        // second repository graph in the TUI.
         if event::poll(Duration::from_millis(50)).map_err(|e| CliError::Analysis(e.to_string()))? {
             match event::read().map_err(|e| CliError::Analysis(e.to_string()))? {
                 Event::Key(key) => {
@@ -548,6 +807,11 @@ pub fn run_tui(cli: &Cli) -> Result<i32, CliError> {
                 Event::Mouse(mouse) => app.on_mouse(mouse),
                 _ => {}
             }
+        }
+
+        if !app.sync_from_daemon() {
+            // Daemon disconnected - state shows UNAVAILABLE, no local rebuild
+            // Press 'r' to force a daemon reconnection attempt
         }
 
         if app.should_quit {
@@ -639,6 +903,11 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
         } else {
             "○ [5] Shortcuts"
         }),
+        Line::from(if app.selected_tab == 5 {
+            "● [6] ANALYTICS"
+        } else {
+            "○ [6] Analytics"
+        }),
     ];
 
     let tabs = Tabs::new(tab_titles)
@@ -666,6 +935,8 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
         1 => render_verify(f, app, chunks[2]),
         2 => render_blast(f, app, chunks[2]),
         3 => render_trajectory(f, app, chunks[2]),
+        4 => render_help(f, chunks[2]),
+        5 => render_analytics(f, app, chunks[2]),
         _ => render_help(f, chunks[2]),
     }
 
@@ -701,6 +972,8 @@ fn ui(f: &mut Frame, app: &mut TuiApp) {
             Span::raw(" Search Seed  │ "),
             Span::styled(" [r]", Style::default().fg(Color::Green)),
             Span::raw(" Refresh  │ "),
+            Span::styled(" [a]", Style::default().fg(Color::Magenta)),
+            Span::raw(" Analytics report  â”‚ "),
             Span::styled(" [q/Esc]", Style::default().fg(Color::Red)),
             Span::raw(" Quit"),
         ])
@@ -757,6 +1030,21 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(Color::White),
             ),
         ]),
+        Line::from(vec![
+            Span::styled("Sync      : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                if app.daemon_connected {
+                    format!("daemon / {} / seq {}", app.freshness, app.last_event_seq)
+                } else {
+                    app.freshness.clone()
+                },
+                Style::default().fg(if app.daemon_connected {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+        ]),
     ];
     let info_card = Paragraph::new(info_text).block(
         Block::default()
@@ -782,7 +1070,7 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(vec![
             Span::styled("Coverage : ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "100% ",
+                "reported by daemon/indexer; percentage not inferred",
                 Style::default()
                     .fg(Color::Rgb(16, 185, 129))
                     .add_modifier(Modifier::BOLD),
@@ -794,7 +1082,14 @@ fn render_overview(f: &mut Frame, app: &TuiApp, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Gaps     : ", Style::default().fg(Color::DarkGray)),
-            Span::styled("0% Unknown / Dynamic", Style::default().fg(Color::White)),
+            Span::styled(
+                if app.coverage_state.eq_ignore_ascii_case("verified") {
+                    "none reported within analyzed scope"
+                } else {
+                    "unknown or dynamic behavior remains"
+                },
+                Style::default().fg(Color::White),
+            ),
         ]),
     ];
     let coverage_card = Paragraph::new(coverage_text).block(
@@ -1263,7 +1558,58 @@ fn render_blast(f: &mut Frame, app: &TuiApp, area: Rect) {
         vec![Line::from("No inferred symbol selected.")]
     };
 
-    let detail_widget = Paragraph::new(detail_lines).block(
+    let digest = if app.impact_digest.is_empty() {
+        "unavailable".to_string()
+    } else {
+        app.impact_digest[..12.min(app.impact_digest.len())].to_string()
+    };
+    let mut evidence_lines = vec![
+        Line::from(vec![
+            Span::styled("Result          : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} within analyzed scope", app.impact_verdict),
+                Style::default().fg(if app.impact_verdict == "PASS" {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Coverage        : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&app.impact_coverage, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if app.impact_truncated {
+                    "  |  truncated=true"
+                } else {
+                    "  |  truncated=false"
+                },
+                Style::default().fg(if app.impact_truncated {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Traversal       : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(
+                    "{} / {} / budget {}",
+                    app.impact_direction, app.impact_profile, app.impact_budget
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Impact digest   : ", Style::default().fg(Color::DarkGray)),
+            Span::styled(digest, Style::default().fg(Color::LightCyan)),
+        ]),
+        Line::from(""),
+    ];
+    evidence_lines.extend(detail_lines);
+
+    let detail_widget = Paragraph::new(evidence_lines).block(
         Block::default()
             .title(" Blast Radius Provenance & Confidence Inspector ")
             .borders(Borders::ALL)
@@ -1401,6 +1747,282 @@ fn render_trajectory(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(details, cols[1]);
 }
 
+fn render_analytics(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let report_data = app.analytics_report_data.as_ref();
+    
+    let (left_area, right_area) = {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (cols[0], cols[1])
+    };
+    
+    // Left panel: Findings list with sub-tabs
+    let sub_tabs = vec![
+        "Verified",
+        "Unknown",
+        "Runtime",
+        "Git Risk",
+    ];
+    let sub_tab_titles: Vec<Line> = sub_tabs.iter().enumerate().map(|(i, title)| {
+        Line::from(if app.analytics_tab_selected == i {
+            format!("● [{}] {}", i + 1, title)
+        } else {
+            format!("○ [{}] {}", i + 1, title)
+        })
+    }).collect();
+    
+    let sub_tabs_widget = Tabs::new(sub_tab_titles)
+        .block(Block::default().title(" Analytics Findings ").borders(Borders::ALL))
+        .select(app.analytics_tab_selected);
+    
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(left_area);
+    
+    f.render_widget(sub_tabs_widget, left_chunks[0]);
+    
+    // Render findings list based on selected sub-tab
+    let findings_list = match (app.analytics_tab_selected, report_data) {
+        (0, Some(report)) => render_static_verified_list(report),
+        (1, Some(report)) => render_static_unknown_list(report),
+        (2, Some(report)) => render_runtime_unobserved_list(report),
+        (3, Some(report)) => render_git_risk_list(report),
+        _ => vec![ListItem::new(Line::from(Span::styled(
+            "No analytics report loaded. Press 'a' to fetch.",
+            Style::default().fg(Color::DarkGray),
+        )))],
+    };
+    
+    let mut findings_state = ListState::default();
+    findings_state.select(Some(app.analytics_findings_selected));
+    let findings_widget = List::new(findings_list)
+        .block(Block::default()
+            .title(" Findings ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan)))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(findings_widget, left_chunks[1], &mut findings_state);
+    
+    // Right panel: Evidence drill-down detail
+    let detail_text = match (app.analytics_tab_selected, report_data, app.analytics_findings_selected) {
+        (0, Some(report), idx) => render_finding_detail(report, "static_unreferenced", "verified_candidates", idx),
+        (1, Some(report), idx) => render_finding_detail(report, "static_unreferenced", "unknown_candidates", idx),
+        (2, Some(report), idx) => render_finding_detail(report, "runtime_unobserved", "unobserved_candidates", idx),
+        (3, Some(report), idx) => render_finding_detail(report, "git_evolution", "semantic_git_risk", idx),
+        _ => vec![Line::from("Select a finding to view evidence details.")],
+    };
+    
+    // Check if report is unavailable
+    let is_unavailable = app.analytics_report_status == "UNAVAILABLE" || app.analytics_report_status == "ERROR";
+    let detail_title = if is_unavailable {
+        " Evidence Detail (UNAVAILABLE) "
+    } else {
+        " Evidence Detail "
+    };
+    let detail_border_color = if is_unavailable {
+        Color::Rgb(244, 63, 94)
+    } else {
+        Color::Rgb(71, 85, 105)
+    };
+    
+    let detail_widget = Paragraph::new(detail_text)
+        .block(Block::default()
+            .title(detail_title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(detail_border_color))
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(detail_widget, right_area);
+}
+
+fn render_static_verified_list(report: &Value) -> Vec<ListItem> {
+    if let Some(candidates) = report["static_unreferenced"]["verified_candidates"].as_array() {
+        candidates.iter().enumerate().map(|(i, c)| {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let state = c["finding_state"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            let color = match state {
+                "verified" => Color::Green,
+                "candidate" => Color::Yellow,
+                "fail" => Color::Red,
+                "warn" => Color::Rgb(245, 158, 11),
+                _ => Color::White,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" [{}]", state.to_uppercase()), Style::default().fg(color)),
+            ]))
+        }).collect()
+    } else {
+        vec![ListItem::new(Line::from(Span::styled("No verified candidates", Style::default().fg(Color::DarkGray))))]
+    }
+}
+
+fn render_static_unknown_list(report: &Value) -> Vec<ListItem> {
+    if let Some(candidates) = report["static_unreferenced"]["unknown_candidates"].as_array() {
+        candidates.iter().enumerate().map(|(i, c)| {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let state = c["finding_state"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(Color::Rgb(244, 63, 94)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" [{}]", state.to_uppercase()), Style::default().fg(Color::Rgb(244, 63, 94))),
+            ]))
+        }).collect()
+    } else {
+        vec![ListItem::new(Line::from(Span::styled("No unknown candidates", Style::default().fg(Color::DarkGray))))]
+    }
+}
+
+fn render_runtime_unobserved_list(report: &Value) -> Vec<ListItem> {
+    let status = report["runtime_unobserved"]["status"].as_str().unwrap_or("UNKNOWN");
+    let windows = report["runtime_unobserved"]["windows_analyzed"].as_u64().unwrap_or(0);
+    let mut items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("Windows Analyzed: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(windows.to_string(), Style::default().fg(Color::White)),
+        ])),
+    ];
+    if let Some(candidates) = report["runtime_unobserved"]["unobserved_candidates"].as_array() {
+        for (i, c) in candidates.iter().enumerate() {
+            let name = c["qualified_name"].as_str().unwrap_or("UNKNOWN");
+            let file = c["file_path"].as_str().unwrap_or("UNKNOWN");
+            let line = c["line"].as_u64().unwrap_or(0);
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(name, Style::default().fg(Color::Rgb(245, 158, 11)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({}:{})", file, line), Style::default().fg(Color::DarkGray)),
+            ])));
+        }
+    }
+    items
+}
+
+fn render_git_risk_list(report: &Value) -> Vec<ListItem> {
+    let status = report["git_evolution"]["semantic_git_risk"]["status"].as_str().unwrap_or("UNKNOWN");
+    let score = report["git_evolution"]["semantic_git_risk"]["risk_score"].as_f64().unwrap_or(0.0);
+    let mut items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("Semantic Git Risk: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("Risk Score: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:.2}", score), Style::default().fg(Color::White)),
+        ])),
+    ];
+    if let Some(findings) = report["git_evolution"]["semantic_git_risk"]["verified_findings"].as_array() {
+        for (i, f) in findings.iter().enumerate() {
+            let file = f["file_path"].as_str().unwrap_or("UNKNOWN");
+            let commit = f["commit_short"].as_str().unwrap_or("UNKNOWN");
+            let state = f["finding_state"].as_str().unwrap_or("UNKNOWN");
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("{:3}. ", i + 1), Style::default().fg(Color::DarkGray)),
+                Span::styled(commit, Style::default().fg(Color::Cyan)),
+                Span::styled(" ", Style::default()),
+                Span::styled(file, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" [{}]", state), Style::default().fg(Color::Yellow)),
+            ])));
+        }
+    }
+    items
+}
+
+fn render_finding_detail<'a>(report: &'a Value, section: &'a str, subsection: &'a str, idx: usize) -> Vec<Line<'a>> {
+    if let Some(candidates) = report[section][subsection].as_array() {
+        if let Some(candidate) = candidates.get(idx) {
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("Finding: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["qualified_name"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Stable ID: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["stable_id"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::styled("File: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["file_path"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Line: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["line"].as_u64().unwrap_or(0).to_string(), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("State: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["finding_state"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![Span::styled("EVIDENCE BASIS:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
+                Line::from(vec![
+                    Span::styled("Basis: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["evidence_basis"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Coverage: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["coverage_state"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Method: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["analysis_method"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Reason: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(candidate["evidence"]["reason"].as_str().unwrap_or("UNKNOWN"), Style::default().fg(Color::White)),
+                ]),
+                Line::from(""),
+            ];
+            
+            if let Some(residual) = candidate["evidence"]["residual_unknowns"].as_array() {
+                if !residual.is_empty() {
+                    lines.push(Line::from(vec![Span::styled("RESIDUAL UNKNOWNS:", Style::default().fg(Color::Rgb(244, 63, 94)).add_modifier(Modifier::BOLD))]));
+                    for r in residual {
+                        lines.push(Line::from(vec![
+                            Span::styled("  - ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(r.as_str().unwrap_or(""), Style::default().fg(Color::Rgb(244, 63, 94))),
+                        ]));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+            
+            if let Some(controls) = candidate["evidence"]["false_positive_controls"].as_array() {
+                if !controls.is_empty() {
+                    lines.push(Line::from(vec![Span::styled("FALSE-POSITIVE CONTROLS:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]));
+                    for c in controls {
+                        lines.push(Line::from(vec![
+                            Span::styled("  - ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(format!("{}: ", c["category"].as_str().unwrap_or("UNKNOWN")), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                            Span::styled(c["description"].as_str().unwrap_or(""), Style::default().fg(Color::White)),
+                        ]));
+                    }
+                }
+            }
+            
+            lines
+        } else {
+            vec![Line::from("Invalid finding index")]
+        }
+    } else {
+        vec![Line::from("No data available for this section")]
+    }
+}
+
 fn render_help(f: &mut Frame, area: Rect) {
     let shortcuts = vec![
         Line::from(vec![Span::styled(
@@ -1431,6 +2053,10 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  / (Slash)      : ", Style::default().fg(Color::Yellow)),
             Span::raw("Activate symbol search bar to re-evaluate blast radius"),
+        ]),
+        Line::from(vec![
+            Span::styled("  a               : ", Style::default().fg(Color::Yellow)),
+            Span::raw("Fetch daemon analytics report and shared report identity"),
         ]),
         Line::from(vec![
             Span::styled("  r              : ", Style::default().fg(Color::Yellow)),
@@ -1513,6 +2139,23 @@ mod tests {
             search_active: false,
             input_buffer: String::new(),
             should_quit: false,
+            daemon_connected: false,
+            repository_id: String::new(),
+            last_event_seq: 0,
+            freshness: "offline analysis not synchronized".to_string(),
+            analytics_report_id: String::new(),
+            analytics_report_status: "UNKNOWN".to_string(),
+            analytics_report_data: None,
+            analytics_tab_selected: 0,
+            analytics_findings_selected: 0,
+            impact_verdict: "UNKNOWN".to_string(),
+            impact_coverage: "unknown".to_string(),
+            impact_truncated: false,
+            impact_digest: String::new(),
+            impact_direction: "unknown".to_string(),
+            impact_profile: "unknown".to_string(),
+            impact_budget: 0,
+            last_daemon_sync: None,
         }
     }
 

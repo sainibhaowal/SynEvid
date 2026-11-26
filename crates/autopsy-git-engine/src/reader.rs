@@ -90,14 +90,13 @@ impl GitGalaxyReader {
             if raw_commits.len() >= max_commits {
                 break;
             }
-            if let Ok(c) = store.commit(oid) {
-                for parent in &c.parents {
-                    if visited.insert(*parent) {
-                        queue.push_back(*parent);
-                    }
+            let c = store.commit(oid)?;
+            for parent in &c.parents {
+                if visited.insert(*parent) {
+                    queue.push_back(*parent);
                 }
-                raw_commits.push((oid, c));
             }
+            raw_commits.push((oid, c));
         }
 
         // 5. Build topological DAG nodes with branch lanes and forensic impact.
@@ -107,13 +106,17 @@ impl GitGalaxyReader {
         let linear_history = raw_commits.windows(2).all(|pair| {
             pair[0].1.parents.len() <= 1 && pair[0].1.parents.first() == Some(&pair[1].0)
         });
-        let commit_cache: BTreeMap<ObjectId, autopsy_temporal::git::Commit> = raw_commits
-            .iter()
-            .map(|(oid, commit)| (*oid, commit.clone()))
-            .collect();
-        let ordered_commits = if linear_history {
-            raw_commits
+        let (ordered_commits, commit_cache) = if linear_history {
+            // A first-parent linear history is already emitted in the
+            // required newest-to-oldest order. Avoid cloning every commit into
+            // an ordered map; the adjacent entry is the only parent lookup
+            // needed by the forensic diff below.
+            (raw_commits, None)
         } else {
+            let commit_cache: BTreeMap<ObjectId, autopsy_temporal::git::Commit> = raw_commits
+                .iter()
+                .map(|(oid, commit)| (*oid, commit.clone()))
+                .collect();
             let mut child_counts: BTreeMap<ObjectId, usize> =
                 commit_cache.keys().map(|oid| (*oid, 0)).collect();
             for commit in commit_cache.values() {
@@ -142,10 +145,11 @@ impl GitGalaxyReader {
                     }
                 }
             }
-            topological_oids
+            let ordered = topological_oids
                 .into_iter()
                 .filter_map(|oid| commit_cache.get(&oid).cloned().map(|commit| (oid, commit)))
-                .collect()
+                .collect();
+            (ordered, Some(commit_cache))
         };
         let mut tree_cache = BTreeMap::new();
         let mut commits = Vec::with_capacity(ordered_commits.len());
@@ -164,12 +168,29 @@ impl GitGalaxyReader {
             };
 
             // Lightweight per-commit tree differ to extract modified symbols & blast radius
-            let parent = commit
-                .parents
-                .first()
-                .and_then(|parent_oid| commit_cache.get(parent_oid));
-            let (sym_mod, sym_add, sym_del, blast_score, verdict) =
-                Self::evaluate_commit_forensics(&store, commit, parent, &mut tree_cache);
+            let parent = if linear_history {
+                ordered_commits
+                    .get(idx + 1)
+                    .and_then(|(parent_oid, parent)| {
+                        (commit.parents.first() == Some(parent_oid)).then_some(parent)
+                    })
+            } else {
+                commit
+                    .parents
+                    .first()
+                    .and_then(|parent_oid| commit_cache.as_ref()?.get(parent_oid))
+            };
+            let (
+                sym_mod,
+                sym_add,
+                sym_del,
+                blast_score,
+                verdict,
+                heuristic_verdict,
+                semantic_verdict,
+                coverage_state,
+                evidence_kind,
+            ) = Self::evaluate_commit_forensics(&store, commit, parent, &mut tree_cache);
 
             commits.push(CommitGalaxyNode {
                 oid: oid_hex.clone(),
@@ -187,11 +208,19 @@ impl GitGalaxyReader {
                 symbols_added: sym_add,
                 symbols_deleted: sym_del,
                 blast_radius_score: blast_score,
+                heuristic_verdict,
+                semantic_verdict,
+                coverage_state,
+                evidence_kind,
                 verdict,
             });
         }
 
-        let repo_id = blake3::hash(self.repo_root.to_string_lossy().as_bytes())
+        let canonical_repo_root = self
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| self.repo_root.clone());
+        let repo_id = blake3::hash(canonical_repo_root.to_string_lossy().as_bytes())
             .to_hex()
             .to_string();
         let total_commits = commits.len();
@@ -216,7 +245,10 @@ impl GitGalaxyReader {
             return Ok((None, None));
         }
 
-        let contents = fs::read_to_string(&head_path).unwrap_or_default();
+        let contents = fs::read_to_string(&head_path).map_err(|error| GitError::Io {
+            path: head_path.clone(),
+            source: error,
+        })?;
         let contents = contents.trim();
 
         if let Some(branch_ref) = contents.strip_prefix("ref: refs/heads/") {
@@ -226,8 +258,9 @@ impl GitGalaxyReader {
         } else if let Ok(oid) = ObjectId::from_hex(contents) {
             Ok((None, Some(oid.to_hex())))
         } else {
-            let head_oid = store.resolve_ref("HEAD")?.map(|o| o.to_hex());
-            Ok((Some("main".to_string()), head_oid))
+            Err(GitError::Malformed(format!(
+                "HEAD contains an invalid symbolic reference or object id: {contents}"
+            )))
         }
     }
 
@@ -241,37 +274,43 @@ impl GitGalaxyReader {
 
         if heads_dir.is_dir() {
             Self::scan_ref_dir(&heads_dir, &heads_dir, &mut |name, path| {
-                if let Ok(contents) = fs::read_to_string(path) {
-                    let hex = contents.trim();
-                    let is_head = active_branch.as_deref() == Some(&name);
-                    branches.push(BranchRef {
-                        name,
-                        target_oid: hex.to_string(),
-                        is_head,
-                    });
-                }
-            });
+                let contents = fs::read_to_string(path).map_err(|error| GitError::Io {
+                    path: path.to_path_buf(),
+                    source: error,
+                })?;
+                let hex = contents.trim();
+                let target_oid = ObjectId::from_hex(hex)?.to_hex();
+                let is_head = active_branch.as_deref() == Some(&name);
+                branches.push(BranchRef {
+                    name,
+                    target_oid,
+                    is_head,
+                });
+                Ok(())
+            })?;
         }
 
         // Also check packed-refs for heads
         let packed = git_dir.join("packed-refs");
         if packed.exists() {
-            if let Ok(contents) = fs::read_to_string(&packed) {
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if line.starts_with('#') || line.starts_with('^') || line.is_empty() {
-                        continue;
-                    }
-                    if let Some((oid_hex, name)) = line.split_once(' ') {
-                        if let Some(branch_name) = name.strip_prefix("refs/heads/") {
-                            if !branches.iter().any(|b| b.name == branch_name) {
-                                let is_head = active_branch.as_deref() == Some(branch_name);
-                                branches.push(BranchRef {
-                                    name: branch_name.to_string(),
-                                    target_oid: oid_hex.to_string(),
-                                    is_head,
-                                });
-                            }
+            let contents = fs::read_to_string(&packed).map_err(|error| GitError::Io {
+                path: packed.clone(),
+                source: error,
+            })?;
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.starts_with('^') || line.is_empty() {
+                    continue;
+                }
+                if let Some((oid_hex, name)) = line.split_once(' ') {
+                    if let Some(branch_name) = name.strip_prefix("refs/heads/") {
+                        if !branches.iter().any(|b| b.name == branch_name) {
+                            let is_head = active_branch.as_deref() == Some(branch_name);
+                            branches.push(BranchRef {
+                                name: branch_name.to_string(),
+                                target_oid: ObjectId::from_hex(oid_hex.trim())?.to_hex(),
+                                is_head,
+                            });
                         }
                     }
                 }
@@ -288,32 +327,37 @@ impl GitGalaxyReader {
 
         if tags_dir.is_dir() {
             Self::scan_ref_dir(&tags_dir, &tags_dir, &mut |name, path| {
-                if let Ok(contents) = fs::read_to_string(path) {
-                    tags.push(TagRef {
-                        name,
-                        target_oid: contents.trim().to_string(),
-                    });
-                }
-            });
+                let contents = fs::read_to_string(path).map_err(|error| GitError::Io {
+                    path: path.to_path_buf(),
+                    source: error,
+                })?;
+                tags.push(TagRef {
+                    name,
+                    target_oid: ObjectId::from_hex(contents.trim())?.to_hex(),
+                });
+                Ok(())
+            })?;
         }
 
         // Check packed-refs for tags
         let packed = git_dir.join("packed-refs");
         if packed.exists() {
-            if let Ok(contents) = fs::read_to_string(&packed) {
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if line.starts_with('#') || line.starts_with('^') || line.is_empty() {
-                        continue;
-                    }
-                    if let Some((oid_hex, name)) = line.split_once(' ') {
-                        if let Some(tag_name) = name.strip_prefix("refs/tags/") {
-                            if !tags.iter().any(|t| t.name == tag_name) {
-                                tags.push(TagRef {
-                                    name: tag_name.to_string(),
-                                    target_oid: oid_hex.to_string(),
-                                });
-                            }
+            let contents = fs::read_to_string(&packed).map_err(|error| GitError::Io {
+                path: packed.clone(),
+                source: error,
+            })?;
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.starts_with('^') || line.is_empty() {
+                    continue;
+                }
+                if let Some((oid_hex, name)) = line.split_once(' ') {
+                    if let Some(tag_name) = name.strip_prefix("refs/tags/") {
+                        if !tags.iter().any(|t| t.name == tag_name) {
+                            tags.push(TagRef {
+                                name: tag_name.to_string(),
+                                target_oid: ObjectId::from_hex(oid_hex.trim())?.to_hex(),
+                            });
                         }
                     }
                 }
@@ -324,20 +368,38 @@ impl GitGalaxyReader {
         Ok(tags)
     }
 
-    fn scan_ref_dir(base: &Path, current: &Path, cb: &mut dyn FnMut(String, &Path)) {
-        if let Ok(entries) = fs::read_dir(current) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    Self::scan_ref_dir(base, &path, cb);
-                } else if path.is_file() {
-                    if let Ok(rel) = path.strip_prefix(base) {
-                        let name = rel.to_string_lossy().replace('\\', "/");
-                        cb(name, &path);
-                    }
-                }
+    fn scan_ref_dir(
+        base: &Path,
+        current: &Path,
+        cb: &mut dyn FnMut(String, &Path) -> Result<(), GitError>,
+    ) -> Result<(), GitError> {
+        let mut entries = fs::read_dir(current)
+            .map_err(|error| GitError::Io {
+                path: current.to_path_buf(),
+                source: error,
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| GitError::Io {
+                path: current.to_path_buf(),
+                source: error,
+            })?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                Self::scan_ref_dir(base, &path, cb)?;
+            } else if path.is_file() {
+                let name = path
+                    .strip_prefix(base)
+                    .map_err(|_| {
+                        GitError::Malformed("reference path escaped refs directory".into())
+                    })?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                cb(name, &path)?;
             }
         }
+        Ok(())
     }
 
     fn evaluate_commit_forensics(
@@ -345,20 +407,83 @@ impl GitGalaxyReader {
         commit: &autopsy_temporal::git::Commit,
         parent: Option<&autopsy_temporal::git::Commit>,
         tree_cache: &mut BTreeMap<ObjectId, BTreeMap<String, (u32, ObjectId)>>,
-    ) -> (usize, usize, usize, usize, String) {
+    ) -> (
+        usize,
+        usize,
+        usize,
+        usize,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) {
         if let Some(parent) = parent
             && parent.tree == commit.tree
         {
-            return (0, 0, 0, 0, "PASS".to_string());
+            return match Self::ensure_tree(store, commit.tree, tree_cache) {
+                Ok(_) => (
+                    0,
+                    0,
+                    0,
+                    0,
+                    "UNKNOWN".to_string(),
+                    "PASS".to_string(),
+                    "UNKNOWN".to_string(),
+                    "unknown".to_string(),
+                    "file_heuristic".to_string(),
+                ),
+                Err(_) => (
+                    0,
+                    0,
+                    0,
+                    0,
+                    "UNKNOWN".to_string(),
+                    "UNKNOWN".to_string(),
+                    "UNKNOWN".to_string(),
+                    "unknown".to_string(),
+                    "file_heuristic".to_string(),
+                ),
+            };
         }
         let tree_curr = match Self::cached_tree(store, commit.tree, tree_cache) {
             Ok(t) => t,
-            Err(_) => return (0, 0, 0, 0, "PASS".to_string()),
+            // A tree decoding failure means the commit was not analyzed. It is
+            // never evidence that the commit is safe.
+            Err(_) => {
+                return (
+                    0,
+                    0,
+                    0,
+                    0,
+                    "UNKNOWN".to_string(),
+                    "UNKNOWN".to_string(),
+                    "UNKNOWN".to_string(),
+                    "unknown".to_string(),
+                    "file_heuristic".to_string(),
+                );
+            }
         };
 
-        let tree_prev = parent
-            .and_then(|parent| Self::cached_tree(store, parent.tree, tree_cache).ok())
-            .unwrap_or_default();
+        let tree_prev = match parent {
+            Some(parent) => match Self::cached_tree(store, parent.tree, tree_cache) {
+                Ok(tree) => tree,
+                Err(_) => {
+                    return (
+                        0,
+                        0,
+                        0,
+                        0,
+                        "UNKNOWN".to_string(),
+                        "UNKNOWN".to_string(),
+                        "UNKNOWN".to_string(),
+                        "unknown".to_string(),
+                        "file_heuristic".to_string(),
+                    );
+                }
+            },
+            None => BTreeMap::new(),
+        };
 
         let mut added = 0;
         let mut modified = 0;
@@ -382,13 +507,23 @@ impl GitGalaxyReader {
         }
 
         let blast_score = modified * 2 + added + deleted * 3;
-        let verdict = if deleted > 2 || modified > 10 {
+        let heuristic_verdict = if deleted > 2 || modified > 10 {
             "WARN"
         } else {
             "PASS"
         };
 
-        (modified, added, deleted, blast_score, verdict.to_string())
+        (
+            modified,
+            added,
+            deleted,
+            blast_score,
+            "UNKNOWN".to_string(),
+            heuristic_verdict.to_string(),
+            "UNKNOWN".to_string(),
+            "unknown".to_string(),
+            "file_heuristic".to_string(),
+        )
     }
 
     fn cached_tree(
@@ -402,6 +537,19 @@ impl GitGalaxyReader {
         let tree = flatten_tree(store, tree_oid)?;
         tree_cache.insert(tree_oid, tree.clone());
         Ok(tree)
+    }
+
+    fn ensure_tree(
+        store: &GitObjectStore,
+        tree_oid: ObjectId,
+        tree_cache: &mut BTreeMap<ObjectId, BTreeMap<String, (u32, ObjectId)>>,
+    ) -> Result<(), GitError> {
+        if tree_cache.contains_key(&tree_oid) {
+            return Ok(());
+        }
+        let tree = flatten_tree(store, tree_oid)?;
+        tree_cache.insert(tree_oid, tree);
+        Ok(())
     }
 }
 

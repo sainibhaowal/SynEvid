@@ -34,7 +34,7 @@ function sendJson(response, value, status = 200) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Allow-Headers': 'content-type, authorization, x-synevid-client-id, x-synevid-client-type, x-synevid-lease-id',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(body),
@@ -81,7 +81,7 @@ async function startFixtureApi(port) {
     if (request.method === 'OPTIONS') {
       response.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'content-type',
+        'Access-Control-Allow-Headers': 'content-type, authorization, x-synevid-client-id, x-synevid-client-type, x-synevid-lease-id',
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
       });
       response.end();
@@ -109,7 +109,11 @@ async function startFixtureApi(port) {
             tags: [],
             symbols_modified: 1,
             blast_radius_score: 1,
-            verdict: 'PASS',
+            heuristic_verdict: 'PASS',
+            semantic_verdict: 'UNKNOWN',
+            coverage_state: 'unknown',
+            evidence_kind: 'file_heuristic',
+            verdict: 'UNKNOWN',
           },
           {
             oid: OID_A,
@@ -125,7 +129,11 @@ async function startFixtureApi(port) {
             tags: ['v1.0.0'],
             symbols_modified: 0,
             blast_radius_score: 0,
-            verdict: 'PASS',
+            heuristic_verdict: 'PASS',
+            semantic_verdict: 'UNKNOWN',
+            coverage_state: 'unknown',
+            evidence_kind: 'file_heuristic',
+            verdict: 'UNKNOWN',
           },
         ],
         branches: [{ name: 'main', target_oid: OID_B, is_active: true }],
@@ -232,7 +240,10 @@ function runElectron(nextOrigin, fixturePort) {
       SYNEVID_BROWSER_FIXTURE_PORT: String(fixturePort),
     };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const child = spawn(electronExecutable, [ELECTRON_RUNNER], {
+    const electronArgs = process.platform === 'linux' && process.env.CI
+      ? ['--no-sandbox', ELECTRON_RUNNER]
+      : [ELECTRON_RUNNER];
+    const child = spawn(electronExecutable, electronArgs, {
       cwd: REPO_ROOT,
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -251,6 +262,25 @@ function runElectron(nextOrigin, fixturePort) {
         reject(new Error(`Electron browser runner exited ${code}: ${stderr || stdout}`));
       }
     });
+  });
+}
+
+function stopProcess(child) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      resolve();
+    };
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null) child.kill('SIGKILL');
+    }, 10_000);
+    child.once('close', finish);
+    child.once('error', finish);
+    child.kill('SIGTERM');
   });
 }
 
@@ -282,8 +312,13 @@ test('Phase 3 browser behavior: slider and range comparison call real API routes
     assert.ok(result.calls.some((call) => call.path === `/api/v1/git/time-travel/${OID_A}?dim=3d`));
     assert.ok(result.calls.some((call) => call.path === `/api/v1/git/diff/${OID_A}/${OID_B}`));
   } finally {
-    fixture.server.close();
-    next.kill();
-    fs.rmSync(path.join(WEB_DIR, `.next-browser-${nextPort}`), { recursive: true, force: true });
+    await new Promise((resolve) => fixture.server.close(resolve));
+    await stopProcess(next);
+    fs.rmSync(path.join(WEB_DIR, `.next-browser-${nextPort}`), {
+      recursive: true,
+      force: true,
+      maxRetries: 12,
+      retryDelay: 250,
+    });
   }
 });

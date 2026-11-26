@@ -1,13 +1,16 @@
 {
-  "title": "Synevid Phase 6 Benchmark Reproduction Report",
-  "pre_registered_gate": {
-    "passed": true,
+  "evaluation_status": "WITHDRAWN_NOT_EVALUABLE",
+  "withdrawal_reason": "Task oracles are not independently adjudicated as exhaustive; query scope is missing; baseline implementations read answer-key fields; Baseline B is not an LSP client; broad engine closure is scored against incomplete labels.",
+  "title": "SynEvid Legacy Impact Benchmark Raw Output (Withdrawn)",
+  "legacy_untrusted_gate_telemetry": {
+    "validity": "WITHDRAWN_NOT_EVALUABLE",
+    "passed": null,
     "recall_lift_pp": 31.73,
     "cost_cut_percent": -318.28,
     "new_failure_classes_found": -8,
-    "gate_1_recall_lift_passed": true,
-    "gate_2_cost_cut_passed": false,
-    "gate_3_new_failure_class_passed": false,
+    "gate_1_recall_lift_passed": null,
+    "gate_2_cost_cut_passed": null,
+    "gate_3_new_failure_class_passed": null,
     "rationale": "Recall lift of +31.73pp exceeds +10pp threshold"
   },
   "aggregate_metrics": {

@@ -2989,8 +2989,8 @@ export default function CodeUniverse3D({
       </div>
 
       {/* 2. Top-Left Scope & Active Cluster Pill */}
-      <div className="absolute top-4 left-4 xl:left-6 flex flex-col gap-1.5 z-20 pointer-events-auto">
-        <div className="flex items-center space-x-2.5 bg-[var(--card)]/95 backdrop-blur-md px-3.5 py-2 rounded-xl border border-[var(--border-subtle)] shadow-xl">
+      <div className="absolute top-4 left-4 xl:left-6 z-20 pointer-events-auto flex max-w-[250px] flex-row flex-wrap items-center gap-3">
+        <div className="flex shrink-0 items-center space-x-2.5 px-0 py-1">
           <div className="relative flex items-center justify-center shrink-0">
             <div className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-ping opacity-75" />
             <div className="w-2 h-2 rounded-full bg-cyan-500 absolute" />
@@ -3012,7 +3012,7 @@ export default function CodeUniverse3D({
           title={hasPresentedFps
             ? 'Frames reported by Electron webContents presentation events, averaged over the latest one-second sample'
             : 'Successful canvas render calls per second, averaged over the latest one-second sample'}
-          className={`w-fit rounded-md border bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold shadow-sm backdrop-blur ${
+          className={`w-fit shrink-0 rounded-md px-1 py-1 font-mono text-[10px] font-semibold ${
             displayedFps === null ? 'border-[var(--border-subtle)] text-[var(--text-secondary)]' :
               displayedFps >= 60 ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' :
                 displayedFps >= 45 ? 'border-amber-500/40 text-amber-600 dark:text-amber-400' :
@@ -3026,7 +3026,7 @@ export default function CodeUniverse3D({
             data-testid="theme-presentation-latency"
             aria-label={`Theme swap presented in ${presentationLatencyMs.toFixed(1)} milliseconds`}
             title="Measured from the theme toggle mark to the next Electron presentation event"
-            className="w-fit rounded-md border border-[var(--border-subtle)] bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)] shadow-sm backdrop-blur"
+            className="w-fit shrink-0 px-1 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)]"
           >
             Theme → present {presentationLatencyMs.toFixed(1)} ms
           </div>
@@ -3036,7 +3036,7 @@ export default function CodeUniverse3D({
             data-testid="theme-mutation-latency"
             aria-label={`Theme DOM mutation completed in ${themeMutationMs.toFixed(3)} milliseconds`}
             title="Measured synchronously around the root theme class, color-scheme, and token mutation"
-            className="w-fit rounded-md border border-[var(--border-subtle)] bg-[var(--card)]/95 px-2 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)] shadow-sm backdrop-blur"
+            className="w-fit shrink-0 px-1 py-1 font-mono text-[10px] font-semibold text-[var(--text-secondary)]"
           >
             Theme mutation {themeMutationMs.toFixed(3)} ms
           </div>
@@ -3052,7 +3052,7 @@ export default function CodeUniverse3D({
         )}
 
         {selectedFolderFilter && (
-          <div className="flex items-center space-x-2 bg-[var(--card)]/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-sky-500/40 dark:border-cyan-500/40 shadow-xl font-mono text-xs animate-fadeIn">
+          <div className="flex items-center space-x-2 px-1 py-1 font-mono text-xs animate-fadeIn">
             <span
               className="w-2.5 h-2.5 rounded-full shrink-0"
               style={{
@@ -3078,9 +3078,9 @@ export default function CodeUniverse3D({
       </div>
 
       {/* 3. Top-Center Floating HUD Controls Bar */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center space-x-2 bg-[var(--card)]/95 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-[var(--border-subtle)] shadow-xl z-20">
+      <div className="absolute top-4 left-[270px] right-4 z-20 flex items-center justify-start gap-2 overflow-x-auto px-0 py-0 scrollbar-none">
         {/* Animated Motion Slide Toggle: 2D vs 3D */}
-        <div className="relative flex items-center bg-[var(--card-elevated)] p-1 rounded-xl border border-[var(--border-subtle)] text-xs font-mono w-[228px] h-[36px] shadow-inner">
+        <div className="relative flex h-[36px] w-[228px] shrink-0 items-center text-xs font-mono">
           <div
             className="absolute top-1 bottom-1 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-500 dark:from-cyan-500 dark:to-blue-600 shadow-md shadow-sky-500/25 dark:shadow-cyan-500/30 transition-all duration-300 ease-[cubic-bezier(0.2,1,0.3,1)]"
             style={{
@@ -3125,7 +3125,7 @@ export default function CodeUniverse3D({
         </div>
 
         {/* Animated Motion Slide Toggle: Orbit vs Move Space */}
-        <div className="relative flex items-center bg-[var(--card-elevated)] p-1 rounded-xl border border-[var(--border-subtle)] text-xs font-mono w-[228px] h-[36px] shadow-inner">
+        <div className="relative flex h-[36px] w-[228px] shrink-0 items-center text-xs font-mono">
           <div
             className="absolute top-1 bottom-1 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-500 dark:from-cyan-500 dark:to-blue-600 shadow-md shadow-sky-500/25 dark:shadow-cyan-500/30 transition-all duration-300 ease-[cubic-bezier(0.2,1,0.3,1)]"
             style={{
@@ -3160,7 +3160,7 @@ export default function CodeUniverse3D({
         </div>
 
         {/* World Cycler */}
-        <div className="flex items-center space-x-0.5 bg-[var(--card-elevated)] p-1 rounded-xl border border-[var(--border-subtle)] text-xs font-mono">
+        <div className="flex h-[36px] shrink-0 items-center space-x-0.5 text-xs font-mono">
           <button
             onClick={handleTravelPrev}
             className="p-1 rounded-lg hover:bg-sky-50 dark:hover:bg-cyan-500/15 text-slate-700 dark:text-[var(--text-secondary)] hover:text-sky-600 dark:hover:text-cyan-400 transition-colors cursor-pointer"
@@ -3180,7 +3180,7 @@ export default function CodeUniverse3D({
 
         {/* Quick Search */}
         <div className="relative hidden lg:flex items-center">
-          <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-[var(--card-elevated)] border border-[var(--border-subtle)] focus-within:border-sky-500 dark:focus-within:border-cyan-500/60 text-xs font-mono transition-all">
+          <div className="flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-mono transition-all focus-within:bg-[var(--card-elevated)]">
             <Search className="w-3.5 h-3.5 text-slate-500 dark:text-[var(--text-muted)] shrink-0" />
             <input
               type="text"
@@ -3227,7 +3227,7 @@ export default function CodeUniverse3D({
         {/* Recenter */}
         <button
           onClick={handleRecenter}
-          className="p-2 rounded-xl bg-[var(--card-elevated)] hover:bg-sky-50 dark:hover:bg-cyan-500/10 text-slate-700 dark:text-[var(--text-secondary)] hover:text-sky-600 dark:hover:text-cyan-400 border border-[var(--border-subtle)] transition-colors cursor-pointer"
+          className="shrink-0 rounded-lg bg-transparent p-2 text-slate-700 transition-colors hover:bg-sky-50 hover:text-sky-600 dark:text-[var(--text-secondary)] dark:hover:bg-cyan-500/10 dark:hover:text-cyan-400 cursor-pointer"
           title="Recenter camera to center"
         >
           <Maximize2 className="w-4 h-4" />
@@ -3237,7 +3237,7 @@ export default function CodeUniverse3D({
         <button
           disabled={!dataPulsesAvailable}
           onClick={() => dataPulsesAvailable && setIsPhysicsPaused(!isPhysicsPaused)}
-          className={`p-2 rounded-xl bg-[var(--card-elevated)] text-slate-700 dark:text-[var(--text-secondary)] border border-[var(--border-subtle)] transition-colors ${dataPulsesAvailable
+          className={`shrink-0 rounded-lg bg-transparent p-2 text-slate-700 transition-colors dark:text-[var(--text-secondary)] ${dataPulsesAvailable
             ? 'hover:bg-sky-50 dark:hover:bg-cyan-500/10 hover:text-sky-600 dark:hover:text-cyan-400 cursor-pointer'
             : 'cursor-not-allowed opacity-50'}`}
           title={dataPulsesAvailable
@@ -3257,7 +3257,7 @@ export default function CodeUniverse3D({
         {/* Legends Toggle */}
         <button
           onClick={() => setShowLegends(!showLegends)}
-          className={`p-2 rounded-xl border border-[var(--border-subtle)] transition-colors cursor-pointer ${
+          className={`shrink-0 rounded-lg transition-colors cursor-pointer ${
             showLegends
               ? 'bg-gradient-to-r from-sky-500 to-cyan-500 dark:from-cyan-500 dark:to-blue-600 text-white font-bold shadow-md shadow-sky-500/25'
               : 'bg-[var(--card-elevated)] text-slate-700 dark:text-[var(--text-secondary)] hover:text-sky-600 dark:hover:text-cyan-400 hover:bg-sky-50 dark:hover:bg-cyan-500/10'

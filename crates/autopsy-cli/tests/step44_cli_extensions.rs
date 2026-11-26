@@ -100,7 +100,7 @@ fn gate_the_history_engines_work_against_a_real_repository() {
         "the extractor's granularity is disclosed, not implied: {}",
         journal.text
     );
-    let value: serde_json::Value = serde_json::from_str(&journal.json).expect("valid JSON");
+    let value = journal.envelope.payload.clone();
     assert!(
         value["stats"]["total"].as_u64().unwrap_or(0) > 0,
         "the repository under test has history to replay: {}",
@@ -108,8 +108,7 @@ fn gate_the_history_engines_work_against_a_real_repository() {
     );
     assert!(
         !value["journal"].is_null(),
-        "the engine's own canonical projection is embedded verbatim: {}",
-        &journal.json[..journal.json.len().min(400)]
+        "the engine's own canonical projection is embedded verbatim"
     );
     assert!(
         value["notes"]
@@ -122,7 +121,7 @@ fn gate_the_history_engines_work_against_a_real_repository() {
 
     let mined = extensions::cochange(&root, 183 * 86_400, 500, 30, 2, false).expect("mines");
     assert_ne!(mined.exit_code, ANALYSIS_ERROR, "{}", mined.text);
-    let report: serde_json::Value = serde_json::from_str(&mined.json).expect("valid JSON");
+    let report = mined.envelope.payload.clone();
     assert!(
         report["window"]["commits_considered"].as_u64().unwrap_or(0) > 0,
         "the repository under test has history: {}",
@@ -145,7 +144,7 @@ fn gate_a_history_report_is_byte_identical_across_one_hundred_runs() {
     let first = extensions::cochange(&root, 183 * 86_400, 200, 30, 2, false).expect("mines");
     for run in 0..100 {
         let again = extensions::cochange(&root, 183 * 86_400, 200, 30, 2, false).expect("mines");
-        assert_eq!(again.json, first.json, "run {run} differs");
+        assert_eq!(again.envelope.payload, first.envelope.payload, "run {run} differs");
         assert_eq!(again.exit_code, first.exit_code, "run {run} differs");
     }
 }
@@ -156,7 +155,7 @@ fn gate_every_mined_edge_is_tagged_as_temporal_co_occurrence() {
         return;
     };
     let mined = extensions::cochange(&root, 183 * 86_400, 200, 30, 1, false).expect("mines");
-    let report: serde_json::Value = serde_json::from_str(&mined.json).expect("valid JSON");
+    let report = mined.envelope.payload.clone();
     let edges = report["edges"].as_array().expect("an array");
     for edge in edges {
         assert_eq!(edge["claim"], "temporal_co_occurrence_only");
@@ -196,7 +195,7 @@ fn gate_the_journal_coverage_comes_from_the_facts_that_did_not_resolve() {
     let cli = cli_for(&root).expect("parses");
     let lenient = extensions::temporal(&cli, None, 10_000, false).expect("builds");
     let strict = extensions::temporal(&cli, None, 10_000, true).expect("builds");
-    let report: serde_json::Value = serde_json::from_str(&lenient.json).expect("valid JSON");
+    let report = lenient.envelope.payload.clone();
     let unresolved = report["stats"]["partial"].as_u64().unwrap_or(0)
         + report["stats"]["unknown"].as_u64().unwrap_or(0);
     let expected_coverage = if report["stats"]["unknown"].as_u64().unwrap_or(0) > 0 {
@@ -210,7 +209,7 @@ fn gate_the_journal_coverage_comes_from_the_facts_that_did_not_resolve() {
     let expected_exit = if unresolved > 0 { UNSUPPORTED } else { PASS };
     assert_eq!(strict.exit_code, expected_exit, "{}", strict.text);
     assert_eq!(
-        lenient.json, strict.json,
+        lenient.envelope.payload, strict.envelope.payload,
         "strictness changes the exit code, not the report"
     );
 }
@@ -342,7 +341,7 @@ fn gate_a_compatible_change_exits_zero_and_says_only_that_it_found_nothing_break
     assert_eq!(outcome.exit_code, PASS, "{}", outcome.text);
     assert!(outcome.text.contains("Compatible"), "{}", outcome.text);
     // The digest is in the output, so two runs of the same pair are comparable by eye.
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
     assert_eq!(report["protocol"], "openapi");
     assert_eq!(
         report["verdict"], "compatible",
@@ -410,7 +409,7 @@ fn gate_an_unknown_verdict_is_an_answer_without_strict_and_a_refusal_with_it() {
     )
     .expect("diffs");
 
-    let report: serde_json::Value = serde_json::from_str(&lenient.json).expect("valid JSON");
+    let report = lenient.envelope.payload.clone();
     assert_eq!(
         report["verdict"], "unknown",
         "the fixture must reach the unknown branch: {}",
@@ -419,7 +418,7 @@ fn gate_an_unknown_verdict_is_an_answer_without_strict_and_a_refusal_with_it() {
     assert_eq!(lenient.exit_code, PASS, "{}", lenient.text);
     assert_eq!(strict.exit_code, UNSUPPORTED, "{}", strict.text);
     assert_eq!(
-        lenient.json, strict.json,
+        lenient.envelope.payload, strict.envelope.payload,
         "strictness changes the code, not the report"
     );
 }
@@ -525,7 +524,7 @@ operations:
         false,
     )
     .expect("verifies");
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
     assert!(
         report["checked"]
             .as_array()
@@ -615,11 +614,11 @@ fn gate_an_ingested_export_redacts_the_email_and_reports_a_digest() {
     )
     .expect("ingests");
     assert_ne!(outcome.exit_code, ANALYSIS_ERROR, "{}", outcome.text);
+    let report = outcome.envelope.payload.clone();
     assert!(
-        !outcome.json.contains("a@example.com"),
+        !report.to_string().contains("a@example.com"),
         "a redacted value reached the report"
     );
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
     assert_eq!(report["span_count"], 1);
     assert!(
         report["redaction_totals"]
@@ -629,7 +628,7 @@ fn gate_an_ingested_export_redacts_the_email_and_reports_a_digest() {
         outcome.text
     );
     assert!(
-        !outcome.json.contains("5a5a5a"),
+        !report.to_string().contains("5a5a5a"),
         "the salt must not be echoed, and must not be recoverable from the report"
     );
     assert!(
@@ -652,7 +651,7 @@ fn gate_an_empty_export_is_unknown_and_exits_four() {
         },
     )
     .expect("ingests");
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
     assert_eq!(report["coverage"], "unknown");
     assert_eq!(outcome.exit_code, UNSUPPORTED, "{}", outcome.text);
 }
@@ -675,7 +674,7 @@ fn gate_a_topology_report_correlates_an_observed_route_against_a_declared_one() 
         },
     )
     .expect("correlates");
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
     assert_eq!(report["observation"]["windows_observed"], 1);
     assert_eq!(
         report["correlations"].as_array().map(Vec::len),
@@ -739,7 +738,7 @@ fn gate_an_empty_tree_is_unknown_and_exits_four() {
     let root = scratch("catalog-empty");
     let cli = cli_for(&root).expect("parses");
     let outcome = extensions::catalog(&cli, None, None, false).expect("scans");
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
     assert_eq!(report["coverage"], "unknown");
     assert_eq!(outcome.exit_code, UNSUPPORTED, "{}", outcome.text);
 }
@@ -751,7 +750,7 @@ fn gate_a_catalog_scan_of_this_workspace_finds_the_manifests_and_the_ownership_g
     };
     let cli = cli_for(&root).expect("parses");
     let outcome = extensions::catalog(&cli, None, None, false).expect("scans");
-    let report: serde_json::Value = serde_json::from_str(&outcome.json).expect("valid JSON");
+    let report = outcome.envelope.payload.clone();
 
     assert!(
         report["files_scanned"].as_u64().unwrap_or(0) > 20,
@@ -795,7 +794,7 @@ fn gate_a_catalog_scan_is_byte_identical_across_runs() {
     let first = extensions::catalog(&cli, None, None, false).expect("scans");
     for run in 0..10 {
         let again = extensions::catalog(&cli, None, None, false).expect("scans");
-        assert_eq!(again.json, first.json, "run {run} differs");
+        assert_eq!(again.envelope.payload, first.envelope.payload, "run {run} differs");
     }
 }
 
@@ -867,7 +866,7 @@ fn gate_coverage_state_never_becomes_a_pass_through_the_cli() {
     let strict = extensions::catalog(&cli, None, None, true).expect("scans");
     assert_eq!(lenient.exit_code, UNSUPPORTED);
     assert_eq!(strict.exit_code, UNSUPPORTED);
-    let report: serde_json::Value = serde_json::from_str(&strict.json).expect("valid JSON");
+    let report = strict.envelope.payload.clone();
     assert_eq!(report["coverage"], "unknown");
     assert_eq!(
         serde_json::to_value(CoverageState::Unknown).expect("serializes"),
@@ -887,8 +886,7 @@ fn gate_the_temporal_schema_declares_exactly_what_the_envelope_carries() {
     };
     let cli = cli_for(&root).expect("parses");
     let outcome = extensions::temporal(&cli, None, 100_000, false).expect("builds");
-    let document: serde_json::Value =
-        serde_json::from_str(&outcome.json).expect("the envelope is canonical JSON");
+    let document = outcome.envelope.payload.clone();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/temporal.schema.json");
     let schema: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).expect("schema")).expect("valid JSON");

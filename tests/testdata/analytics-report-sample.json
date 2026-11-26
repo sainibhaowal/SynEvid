@@ -1,0 +1,193 @@
+{
+  "schema_version": "synevid.analytics.v1",
+  "scope": {
+    "repository_id": "repo-abc123",
+    "snapshot_id": "snap-def456",
+    "graph_nodes": 1250,
+    "graph_edges": 3400,
+    "git_history_limit": 5000
+  },
+  "repository": {
+    "repo_id": "repo-abc123",
+    "display_name": "Sample Repository",
+    "root_path": "/home/user/sample-repo"
+  },
+  "snapshot": {
+    "snapshot_id": "snap-def456",
+    "active_branch": "main",
+    "head_commit_oid": "a1b2c3d4e5f6"
+  },
+  "structural_health": {
+    "status": "AVAILABLE",
+    "evidence_basis": "persisted_graph_rows_for_snapshot",
+    "total_files": 45,
+    "total_symbols": 1250,
+    "total_edges": 3400,
+    "coverage_counts": {
+      "verified": 980,
+      "partial": 150,
+      "unknown": 120
+    },
+    "verified_coverage_percent": 78.4,
+    "top_blast_radius_symbols": [
+      {
+        "stable_id": "pkg::Core::process",
+        "qualified_name": "pkg::Core::process",
+        "edge_count": 85
+      }
+    ],
+    "cyclic_dependency_nodes": 3
+  },
+  "static_unreferenced": {
+    "status": "AVAILABLE",
+    "finding_language": "candidate_not_proof_of_global_dead_code",
+    "evidence_basis": "persisted_static_graph",
+    "candidate_count": 12,
+    "candidates": [
+      {
+        "stable_id": "pkg::Utils::unusedHelper",
+        "qualified_name": "pkg::Utils::unusedHelper",
+        "file_path": "src/utils.ts",
+        "line": 42,
+        "finding_state": "candidate",
+        "evidence_basis": "no_inbound_non_containment_edge_in_persisted_static_graph",
+        "inbound_edge_count": 0,
+        "graph_edge_digest": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "coverage_state": "verified",
+        "reason": "No inbound edge was found in the analyzed static graph; dynamic or external use is not disproven.",
+        "residual_unknowns": ["reflection", "generated_or_external_consumers", "framework_or_plugin_registration"],
+        "snapshot_id": "snap-def456"
+      }
+    ],
+    "persisted_evidence_records": [
+      {
+        "finding_id": "finding-001",
+        "snapshot_id": "snap-def456",
+        "stable_id": "pkg::Utils::unusedHelper",
+        "evidence_version": 1,
+        "finding_state": "candidate",
+        "evidence_basis": "no_inbound_non_containment_edge_in_persisted_static_graph",
+        "coverage_state": "verified",
+        "reason": "No inbound edge was found in the analyzed static graph; dynamic or external use is not disproven.",
+        "evidence_digest": "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ],
+    "unknown_count": 3,
+    "unknown": [
+      {
+        "stable_id": "pkg::Dynamic::handler",
+        "qualified_name": "pkg::Dynamic::handler",
+        "file_path": "src/dynamic.ts",
+        "line": 15,
+        "finding_state": "unknown",
+        "evidence_basis": "no_inbound_non_containment_edge_in_persisted_static_graph",
+        "inbound_edge_count": 0,
+        "graph_edge_digest": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "coverage_state": "unknown",
+        "reason": "No inbound edge was found, but graph coverage is insufficient to classify this declaration.",
+        "residual_unknowns": ["reflection", "generated_or_external_consumers", "framework_or_plugin_registration"],
+        "snapshot_id": "snap-def456"
+      }
+    ],
+    "excluded_count": 8
+  },
+  "dead_code_inventory": {
+    "status": "AVAILABLE",
+    "deprecated": true,
+    "finding_language": "static unreferenced candidate, not proof of global dead code",
+    "total": 12,
+    "items": []
+  },
+  "newly_dead_after_edit": {
+    "status": "UNAVAILABLE",
+    "reason": "No candidate before/after edit graph is attached to this repository report."
+  },
+  "runtime_unobserved": {
+    "status": "PARTIAL",
+    "evidence_basis": "persisted_topology_reports_pinned_to_repository_snapshot",
+    "windows": [],
+    "complete_window_count": 0,
+    "findings": [],
+    "reason": "Persisted telemetry exists, but no report establishes complete sufficient observation coverage."
+  },
+  "git_evolution": {
+    "status": "AVAILABLE",
+    "verdict": "UNKNOWN",
+    "coverage_state": "verified",
+    "analyzed_commits": 120,
+    "history_limit": 5000,
+    "file_heuristic_findings": [
+      {
+        "oid": "c1d2e3f4",
+        "summary": "feat: add authentication module",
+        "file_change_score": 15,
+        "heuristic_verdict": "WARN",
+        "evidence_kind": "file_heuristic"
+      }
+    ],
+    "semantic_git_risk": {
+      "status": "AVAILABLE",
+      "verdict": "UNKNOWN",
+      "coverage_state": "verified",
+      "evidence_basis": "native_git_tree_reconstruction_and_shared_semantic_diff",
+      "head_commit_oid": "a1b2c3d4e5f6",
+      "base_commit_oid": "f6e5d4c3b2a1",
+      "result_digest": "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "changed_file_count": 8,
+      "direct_symbols": ["pkg::Auth::login", "pkg::Auth::logout"],
+      "impacted_boundary": ["pkg::Api::authMiddleware"],
+      "symbol_deltas": [],
+      "edge_deltas": [],
+      "contract_deltas": [],
+      "contract_findings": []
+    }
+  },
+  "git_velocity": {
+    "status": "PARTIAL",
+    "evidence_basis": "native_git_commit_metadata_with_bounded_history",
+    "analyzed_commit_count": 120,
+    "first_commit_timestamp": 1690000000,
+    "latest_commit_timestamp": 1700000000,
+    "top_author_commit_count": 45,
+    "top_author_concentration_percent": 37.5,
+    "history_limit": 5000
+  },
+  "ai_session_audit": {
+    "status": "AVAILABLE",
+    "sessions": 3,
+    "queries": 42,
+    "cache_hits": 28,
+    "cache_hit_percent": 66.67,
+    "tokens_spent": 15000,
+    "tokens_saved": 8500,
+    "ledgers": [
+      {
+        "session_id": "session-001",
+        "total_queries": 15,
+        "cache_hits": 10,
+        "tokens_spent": 5000,
+        "tokens_saved": 3000,
+        "cost_saved_microcents": 1200
+      }
+    ]
+  },
+  "coverage_and_unknowns": {
+    "status": "AVAILABLE",
+    "coverage_counts": {
+      "verified": 980,
+      "partial": 150,
+      "unknown": 120
+    },
+    "residual_unknowns": ["reflection", "dynamic_loading", "generated_code", "external_runtime_behavior"]
+  },
+  "performance_and_resources": {
+    "status": "UNAVAILABLE",
+    "reason": "This report path has no persisted performance/resource sample query; no values are synthesized."
+  },
+  "errors_and_recovery": {
+    "status": "UNAVAILABLE",
+    "reason": "This report path has no scoped error/recovery ledger query; no zero-error claim is inferred."
+  },
+  "result_digest": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "report_id": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}

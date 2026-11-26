@@ -138,7 +138,7 @@ export default function LiveEditSimulator({
         <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
           <div className="px-3 py-1.5 rounded-xl border bg-[var(--card-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5" />
-            <span>Engine: {response ? `${response.computation_latency_ms}ms` : 'not measured'}</span>
+            <span>Engine: {response?.computation_latency_ms == null ? 'not measured' : `${response.computation_latency_ms}ms`}</span>
           </div>
           <div className="px-3 py-1.5 rounded-xl border bg-[var(--card-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)]">
             Coverage: <strong className="uppercase">{coverage}</strong>

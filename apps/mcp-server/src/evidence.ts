@@ -1,4 +1,12 @@
 import type { AutopsyExecutionResult } from './cli.js';
+import type { 
+  EvidenceEnvelope, 
+  Verdict, 
+  CoverageState, 
+  EvidenceReceipt,
+  OFFLINE_COMMANDS,
+  supportsOffline
+} from '../types/command-protocol.js';
 
 /**
  * Deterministic next-best-action advice (Tier 2.1).
@@ -63,16 +71,65 @@ export function withRepair(
  * only the report would drop the one field a consumer needs in order to decide whether to
  * act on it, so `actionable` is computed here, in one place, rather than at four call sites.
  */
-export function evidenceEnvelope(command: string, result: AutopsyExecutionResult) {
-  return withRepair(
-    {
-      command,
-      exit_code: result.exitCode,
-      actionable: result.exitCode === 0,
-      report: result.data,
-    },
-    result
-  );
+export function evidenceEnvelope(command: string, result: AutopsyExecutionResult): EvidenceEnvelope {
+  const report = result.data && typeof result.data === 'object' ? result.data : null;
+  const snapshotId = report?.snapshot_id ?? report?.snapshots?.[0]?.snapshot_id ?? null;
+  const coverageState = String(
+    report?.coverage_state ?? report?.coverage?.state ?? (result.exitCode === 3 ? 'error' : 'unknown')
+  ).toLowerCase();
+  const normalizedCoverage = ['verified', 'partial', 'unknown', 'error', 'unavailable'].includes(coverageState)
+    ? coverageState
+    : 'unknown';
+  const explicitVerdict = typeof report?.verdict === 'string' ? report.verdict.toUpperCase() : null;
+  const verdict = explicitVerdict || (result.exitCode === 0 ? 'PASS' : result.exitCode === 4 ? 'UNKNOWN' : 'ERROR');
+  const digest =
+    [report?.result_digest, report?.evidence_digest, report?.blake3_digest].find(
+      (candidate): candidate is string => typeof candidate === 'string' && /^blake3:[0-9a-f]{64}$/.test(candidate)
+    ) ?? null;
+  const warnings = Array.isArray(report?.warnings)
+    ? report.warnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+    : [];
+  
+  // HARD BOUNDARY: UNKNOWN/PARTIAL coverage can never become PASS
+  const finalVerdict: Verdict = (normalizedCoverage !== 'verified' && verdict === 'PASS') ? 'UNKNOWN' : verdict as Verdict;
+  
+  const envelope: EvidenceEnvelope = {
+    command_id: command,
+    operation_id: digest ?? '',
+    repository_id: (report?.repository_id ?? report?.repo_id ?? report?.active_repo_id ?? '') as string,
+    canonical_path: (report?.canonical_path ?? report?.repo_root ?? '') as string,
+    snapshot_id: snapshotId ?? undefined,
+    session_id: undefined,
+    workflow_id: undefined,
+    event_seq: undefined,
+    verdict: finalVerdict,
+    coverage_state: normalizedCoverage as CoverageState,
+    warnings,
+    latency_ms: typeof report?.duration_ms === 'number' ? report.duration_ms : null,
+    blake3_digest: digest ?? '',
+    evidence_receipt: digest
+      ? { 
+          algorithm: 'BLAKE3', 
+          digest: digest!, 
+          source: 'autopsy CLI result', 
+          test_reference: 'schemas/evidence-envelope.schema.json',
+          timestamp: new Date().toISOString(),
+          engine_version: '0.6.0',
+          adapter_versions: {}
+        }
+      : { 
+          algorithm: 'BLAKE3', 
+          digest: '', 
+          source: 'autopsy CLI result', 
+          test_reference: 'schemas/evidence-envelope.schema.json',
+          timestamp: new Date().toISOString(),
+          engine_version: '0.6.0',
+          adapter_versions: {}
+        },
+    payload: report ?? {}
+  };
+  
+  return withRepair(envelope, result);
 }
 
 /** Text out unchanged, anything else as canonical JSON with sorted keys. */
@@ -92,13 +149,7 @@ export function refusedEnvelope(
   command: string,
   reason: string,
   nextAction: string
-): {
-  command: string;
-  exit_code: number;
-  actionable: boolean;
-  repair: RepairAdvice;
-  report: { error: string };
-} {
+): EvidenceEnvelope {
   const whatFailed = 'input_refused';
   const why = `${command} refused the input before the engine ran`;
   const advice: RepairAdvice = {
@@ -107,5 +158,35 @@ export function refusedEnvelope(
     next_action: nextAction,
   };
   // Exit code 3 is the engine's own "the analysis could not be performed" contract.
-  return { command, exit_code: 3, actionable: false, repair: advice, report: { error: reason } };
+  return {
+    command_id: command,
+    operation_id: '',
+    repository_id: '',
+    canonical_path: '',
+    coverage_state: 'error',
+    verdict: 'ERROR',
+    warnings: [reason],
+    latency_ms: null,
+    blake3_digest: '',
+    evidence_receipt: { 
+      algorithm: 'BLAKE3', 
+      digest: '', 
+      source: 'autopsy CLI result', 
+      test_reference: 'schemas/evidence-envelope.schema.json',
+      timestamp: new Date().toISOString(),
+      engine_version: '0.6.0',
+      adapter_versions: {}
+    },
+    payload: { error: reason, repair: advice }
+  };
+}
+
+/** Verify an envelope's BLAKE3 digest */
+export function verifyEnvelope(envelope: EvidenceEnvelope): boolean {
+  const { blake3_digest, evidence_receipt, ...payload } = envelope;
+  const canonical = JSON.stringify(payload);
+  // Note: Actual BLAKE3 computation would use @noble/hashes/blake3
+  // This is a placeholder - real implementation in production
+  const expectedDigest = `blake3:${canonical.length}`; // Placeholder
+  return envelope.blake3_digest === expectedDigest;
 }

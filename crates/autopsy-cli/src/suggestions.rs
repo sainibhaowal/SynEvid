@@ -129,6 +129,12 @@ pub fn record_suggestion(
     let mut store = load_store(cli)?;
     let id = suggestion_id(cli, store.suggestions.len() as u64);
     let command = match &cli.command {
+        crate::Commands::Attach { .. } => "attach",
+        crate::Commands::Status => "status",
+        crate::Commands::AnalyticsReport { .. } => "analytics-report",
+        crate::Commands::ActiveRepo => "active-repo",
+        crate::Commands::Events { .. } => "events",
+        crate::Commands::Disconnect => "disconnect",
         crate::Commands::Baseline { .. } => "baseline",
         crate::Commands::Impact { .. } => "impact",
         crate::Commands::Diff { .. } => "diff",
@@ -215,6 +221,7 @@ mod tests {
             root.display().to_string(),
             "--format".to_string(),
             "json".to_string(),
+            "--offline".to_string(),
         ];
         args.extend(extra.iter().map(|s| s.to_string()));
         args

@@ -1,5 +1,13 @@
 # Benchmarks
 
+> **Evaluation status: WITHDRAWN / NOT EVALUABLE.** The committed numerical
+> impact results are historical raw outputs, not valid precision/recall or
+> promotion evidence. Task oracles are not independently adjudicated as
+> exhaustive, query semantics are absent, and the alleged LSP comparator reads
+> answer-key fields without running a language server. `run_benchmarks.py` now
+> fails closed and emits no scores until these defects are repaired. See
+> [integrity audit](../docs/evidence/108-impact-benchmark-integrity-audit.md).
+
 Ground-truth evaluation of impact recall/precision, agent tool calls, cost/context and time.
 Keep task truth immutable under ordinary engine PRs. The canonical protocol — pre-registered
 gate, baselines, falsification rules, and honest limits — is
@@ -19,7 +27,7 @@ gate, baselines, falsification rules, and honest limits — is
 | `run_benchmarks.py` | The harness CLI: runs all tasks across Baselines A, B, and C and evaluates the pre-registered gate. |
 | `generate_tasks.py` | Task-generation helper (only used when the corpus changes; ordinary PRs never touch task truth). |
 
-## 2. Running the suite
+## 2. Running the suite (integrity audit only; accuracy scoring is blocked)
 
 The harness is offline and deterministic — no network calls, no timestamps in
 metric-bearing output.
@@ -28,8 +36,8 @@ metric-bearing output.
 # 1. Build the CLI under test
 cargo build -p autopsy-cli
 
-# 2. Run all 50 tasks across the three baselines (defaults to target/debug/autopsy;
-#    AUTOPSY_BIN or --autopsy-bin overrides the binary)
+# 2. The runner currently exits 3 before analysis because this corpus is not evaluable.
+#    Do not interpret its historical output as accuracy evidence.
 python3 benchmarks/run_benchmarks.py
 
 # 3. Harness smoke tests
@@ -43,7 +51,10 @@ ruff format --check benchmarks/
 Python dependencies are declared in [`pyproject.toml`](pyproject.toml) (`pydantic`, `pandas`,
 `pytest`; Python `>=3.12`).
 
-## 3. The pre-registered gate
+## 3. The legacy pre-registered gate (withdrawn)
+
+Its earlier decision is withdrawn because the underlying oracle and comparator
+integrity does not pass. The retained gate code cannot make invalid scores valid.
 
 The gate and its thresholds were fixed **before** the measurements were taken; the harness
 evaluates them mechanically in `engine/gate_evaluator.py`. The protocol — including the
@@ -55,11 +66,12 @@ editorial: if a threshold fails, the report says so.
 
 | Report | What it records |
 |---|---|
-| [`results/reproduction_report.json`](results/reproduction_report.json) / [`.md`](results/reproduction_report.md) | The reproducible three-baseline measurement behind the headline claim: recall `71.67% / 71.67% / 100%` for A / B / C (**+28.33 pp** for Autopsy), precision `90% / 90% / 6.11%`, tool calls `2.50 / 1.50 / 3.00`, tokens `800 / 675 / 2338`. |
+| [`results/reproduction_report.json`](results/reproduction_report.json) / [`.md`](results/reproduction_report.md) | Retained historical output, explicitly quarantined as `WITHDRAWN_NOT_EVALUABLE`; do not cite its scores. |
 | [`results/4.2_pillar_report.json`](results/4.2_pillar_report.json) / [`.md`](results/4.2_pillar_report.md) | Pillar-level results. RQ6–RQ10 are recorded as **not measured** because their promotion-gate corpora are unavailable — never fabricated or extrapolated. |
 
-Any number quoted in README/docs must trace to one of these files. The older `+31.73 pp`
-figure survives only in frozen evidence receipts (06, 13); it is historical, not current.
+No current impact-quality score is publishable. Historical artifacts remain in
+the repository for auditability, with the withdrawal status recorded in their
+front matter and the integrity evidence dossier.
 
 ## 5. Ground-truth integrity rule
 

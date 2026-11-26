@@ -165,9 +165,15 @@ pub fn snapshot_for_repository(
 }
 
 fn canonical_root_string(root: &Path) -> Result<String, String> {
-    root.canonicalize()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .map_err(|error| error.to_string())
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| error.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(canonical
+        .strip_prefix("//?/")
+        .unwrap_or(&canonical)
+        .to_string())
 }
 
 fn persist_snapshot_contents(
@@ -245,7 +251,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
     let overall_coverage = coverage_name(artifacts.coverage_state);
     let mut nodes = BTreeMap::new();
     let mut symbols = BTreeMap::<String, &Symbol>::new();
-
     for (path, file) in &artifacts.snapshot.files {
         let stable_id = file_node_id(path);
         let coverage = if is_analyzed_language(&file.language) {
@@ -257,7 +262,7 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
             stable_id.clone(),
             GraphNodeRow {
                 snapshot_id: snapshot_id.clone(),
-                stable_id,
+                stable_id: stable_id.clone(),
                 node_kind: "file".to_string(),
                 qualified_name: path.clone(),
                 file_path: path.clone(),
@@ -266,7 +271,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
                 signature_hash: file.content_hash.clone(),
                 visibility: "unknown".to_string(),
                 is_exported: false,
-                is_dead_code: false,
                 coverage_state: coverage,
             },
         );
@@ -286,7 +290,7 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
             stable_id.clone(),
             GraphNodeRow {
                 snapshot_id: snapshot_id.clone(),
-                stable_id,
+                stable_id: stable_id.clone(),
                 node_kind: symbol.kind.clone(),
                 qualified_name: symbol.qualified_name.clone(),
                 file_path,
@@ -297,7 +301,6 @@ fn graph_rows(artifacts: &AnalysisArtifacts) -> (Vec<GraphNodeRow>, Vec<GraphEdg
                 signature_hash,
                 visibility: format!("{:?}", symbol.visibility).to_lowercase(),
                 is_exported: symbol.visibility == autopsy_domain::Visibility::Public,
-                is_dead_code: false,
                 coverage_state: overall_coverage.clone(),
             },
         );
@@ -454,7 +457,6 @@ fn unknown_node(snapshot_id: &str, stable_id: &str, path: &str, coverage: &str) 
         signature_hash: String::new(),
         visibility: "unknown".to_string(),
         is_exported: false,
-        is_dead_code: false,
         coverage_state: if coverage == "verified" {
             "unknown".to_string()
         } else {
@@ -554,4 +556,33 @@ fn valid_git_oid(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_root_string;
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn indexed_repository_path_uses_one_canonical_cross_platform_form() {
+        let root = std::env::temp_dir().join(format!(
+            "synevid-indexer-canonical-root-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let actual = canonical_root_string(&root).unwrap();
+        let canonical = PathBuf::from(&root)
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let expected = canonical.strip_prefix("//?/").unwrap_or(&canonical);
+        assert_eq!(actual, expected);
+        assert!(!actual.starts_with("//?/"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

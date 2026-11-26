@@ -1,0 +1,293 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = path.resolve(TEST_DIR, '..');
+const REPO_ROOT = path.resolve(WEB_DIR, '../..');
+const ELECTRON_PACKAGE = path.join(REPO_ROOT, 'apps', 'desktop-electron', 'node_modules', 'electron');
+const ELECTRON_RUNNER = path.join(TEST_DIR, 'phase1_daemon_browser_runner.cjs');
+const NEXT_BIN = path.join(WEB_DIR, 'node_modules', 'next', 'dist', 'bin', 'next');
+const require = createRequire(import.meta.url);
+const TEST_TELEMETRY_SALT = '51'.repeat(32);
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() => resolve(address.port));
+    });
+  });
+}
+
+function waitForHttp(url, timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const attempt = () => {
+      const request = http.get(url, (response) => {
+        response.resume();
+        if (response.statusCode && response.statusCode < 500) {
+          resolve();
+          return;
+        }
+        retry();
+      });
+      request.on('error', retry);
+    };
+    const retry = () => {
+      if (Date.now() >= deadline) {
+        reject(new Error(`Timed out waiting for ${url}`));
+        return;
+      }
+      setTimeout(attempt, 150);
+    };
+    attempt();
+  });
+}
+
+function normalizePath(value) {
+  const normalized = fs.realpathSync(value).replaceAll('\\', '/');
+  return normalized.startsWith('//?/') ? normalized.slice(4) : normalized;
+}
+
+function daemonBinary() {
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  return path.join(REPO_ROOT, 'target', 'debug', `synevid-ui${suffix}`);
+}
+
+async function startDaemon(rootPath, port) {
+  const child = spawn(daemonBinary(), [
+    '--host', '127.0.0.1',
+    '--port', String(port),
+    '--repo-root', rootPath,
+  ], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, SYNEVID_TELEMETRY_SALT: TEST_TELEMETRY_SALT },
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  await waitForHttp(`http://127.0.0.1:${port}/api/v1/health`);
+  return child;
+}
+
+async function ingestRealOtlpAndVerifyReceipt(port) {
+  const statusResponse = await fetch(`http://127.0.0.1:${port}/api/v1/status`);
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.ok(status.snapshot_id, 'active repository must have a real indexed snapshot');
+  const request = {
+    snapshot_id: status.snapshot_id,
+    otlp_export: {
+      resourceSpans: [{
+        resource: { attributes: [{ key: 'service.name', value: { stringValue: 'phase6-browser-e2e' } }] },
+        scopeSpans: [{ spans: [{
+          traceId: '01234567890123456789012345678901',
+          spanId: '0123456789abcdef',
+          name: 'browserProof',
+          kind: 1,
+          startTimeUnixNano: '1',
+          endTimeUnixNano: '2',
+          attributes: [
+            { key: 'code.function', value: { stringValue: 'browserProof' } },
+            { key: 'code.filepath', value: { stringValue: 'src/main.ts' } },
+          ],
+          droppedAttributesCount: 0,
+          droppedEventsCount: 0,
+          droppedLinksCount: 0,
+        }] }],
+      }],
+    },
+  };
+  const ingestResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/otlp-ingest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  assert.equal(ingestResponse.status, 200);
+  const ingestion = await ingestResponse.json();
+  assert.equal(ingestion.status, 'STORED', `OTLP intake must persist parsed evidence: ${JSON.stringify(ingestion)}`);
+  assert.equal(ingestion.snapshot_id, status.snapshot_id);
+  assert.equal(ingestion.spans_ingested, 1, 'span count must come from parsed OTLP data');
+  assert.ok(ingestion.evidence_digest.startsWith('blake3:'));
+  assert.equal(ingestion.complete_observation, false, 'one export must not claim complete observation');
+
+  const generatedResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report?format=json`);
+  assert.equal(generatedResponse.status, 200);
+  const generated = await generatedResponse.json();
+  const reportId = generated.report?.report_id;
+  assert.ok(reportId, 'report generation must return an evidence identity');
+  const listResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report-history?limit=20`);
+  assert.equal(listResponse.status, 200);
+  const listing = await listResponse.json();
+  assert.ok(listing.reports.some((entry) => entry.report_id === reportId));
+  const receiptResponse = await fetch(`http://127.0.0.1:${port}/api/v1/analytics/report-history/${encodeURIComponent(reportId)}`);
+  assert.equal(receiptResponse.status, 200);
+  const receipt = await receiptResponse.json();
+  assert.equal(receipt.evidence_digest, generated.digest);
+  assert.equal(receipt.snapshot_id, status.snapshot_id);
+  return { reportId, ingestionId: ingestion.ingestion_id };
+}
+
+function stopProcess(child) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let forceTimer;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      resolve();
+    };
+    child.once('exit', finish);
+    child.once('error', finish);
+    try {
+      child.kill();
+    } catch {
+      finish();
+      return;
+    }
+    forceTimer = setTimeout(() => {
+      if (child.exitCode === null) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // The process may have exited between the check and the kill.
+        }
+      }
+      setTimeout(finish, 500);
+    }, 10_000);
+  });
+}
+
+function runElectron(nextOrigin, daemonPort, rootPath, expectedSeq, publishEvent) {
+  const electronExecutable = require(ELECTRON_PACKAGE);
+  return new Promise((resolve, reject) => {
+    const environment = {
+      ...process.env,
+      SYNEVID_BROWSER_NEXT_ORIGIN: nextOrigin,
+      SYNEVID_BROWSER_DAEMON_PORT: String(daemonPort),
+      SYNEVID_BROWSER_ROOT_PATH: rootPath,
+      SYNEVID_BROWSER_EXPECTED_SEQ: String(expectedSeq),
+      SYNEVID_BROWSER_PUBLISH_EVENT: publishEvent ? '1' : '0',
+    };
+    delete environment.ELECTRON_RUN_AS_NODE;
+    const electronArgs = process.platform === 'darwin' ? [] : ['--disable-gpu'];
+    if (process.platform === 'linux' && process.env.CI) electronArgs.push('--no-sandbox');
+    electronArgs.push(ELECTRON_RUNNER);
+    const child = spawn(electronExecutable, electronArgs, {
+      cwd: REPO_ROOT,
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      const line = stdout.split(/\r?\n/).find((entry) => entry.startsWith('SYNEVID_PHASE1_BROWSER_RESULT='));
+      if (line) {
+        resolve(JSON.parse(line.slice('SYNEVID_PHASE1_BROWSER_RESULT='.length)));
+      } else {
+        reject(new Error(`Electron phase1 browser runner exited ${code}: ${stderr || stdout}`));
+      }
+    });
+  });
+}
+
+async function waitForPersistedEvent(port, seq) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/live/poll?since_seq=0`);
+    const payload = await response.json();
+    if (payload.events?.some((event) => event.seq_id === seq)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`event ${seq} was not visible in the daemon replay endpoint`);
+}
+
+test('Phase 1 and Phase 6 real Electron browser workflow preserves repository, analytics receipt, and replay across daemon restart', { timeout: 240_000 }, async () => {
+  assert.ok(fs.existsSync(daemonBinary()), 'build synevid-ui before running the real browser workflow');
+  assert.ok(require(ELECTRON_PACKAGE), 'source Electron runtime must be installed');
+  assert.ok(fs.existsSync(NEXT_BIN), 'Next source runtime must be installed');
+
+  // The production UI intentionally hides repositories whose display name is
+  // SynEvid itself; keep this test repository clearly user-owned.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'phase1-browser-real-'));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'main.ts'), 'export function browserProof(value: number) { return value + 1; }\n');
+  const canonicalRoot = normalizePath(root);
+  const daemonPort = await reservePort();
+  const nextPort = await reservePort();
+  let nextOutput = '';
+  const next = spawn(process.execPath, [NEXT_BIN, 'dev', '-p', String(nextPort), '-H', '127.0.0.1'], {
+    cwd: WEB_DIR,
+    env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', SYNEVID_NEXT_DIST_DIR: `.next-phase1-${nextPort}` },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  next.stdout.on('data', (chunk) => { nextOutput += chunk.toString(); });
+  next.stderr.on('data', (chunk) => { nextOutput += chunk.toString(); });
+  let daemon;
+  let restarted;
+  try {
+    daemon = await startDaemon(root, daemonPort);
+    const analyticsProof = await ingestRealOtlpAndVerifyReceipt(daemonPort);
+    await waitForHttp(`http://127.0.0.1:${nextPort}/`);
+    let first;
+    try {
+      first = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, 0, true);
+    } catch (error) {
+      throw new Error(`${error.message}; Next.js output=${JSON.stringify(nextOutput.slice(-12_000))}`);
+    }
+    assert.equal(first.canonicalPathVisible, true);
+    assert.equal(first.replayedSequenceVisible, true);
+    assert.equal(first.repositoryFilesVisible, true);
+    assert.equal(first.graphUnavailable, false);
+    assert.equal(first.analyticsReportVisible, true);
+    assert.equal(first.persistedAnalyticsReceiptVisible, true);
+    assert.equal(first.analyticsHistoryVisible, true);
+    assert.ok(analyticsProof.ingestionId);
+    assert.ok(first.publishedSeq > 0);
+    await waitForPersistedEvent(daemonPort, first.publishedSeq);
+
+    await stopProcess(daemon);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    restarted = await startDaemon(root, daemonPort);
+    let second;
+    try {
+      second = await runElectron(`http://127.0.0.1:${nextPort}/`, daemonPort, canonicalRoot, first.publishedSeq, false);
+    } catch (error) {
+      throw new Error(`${error.message}; Next.js output=${JSON.stringify(nextOutput.slice(-12_000))}`);
+    }
+    assert.equal(second.canonicalPathVisible, true);
+    assert.equal(second.replayedSequenceVisible, true);
+    assert.equal(second.repositoryFilesVisible, true);
+    assert.equal(second.graphUnavailable, false);
+    assert.equal(second.analyticsReportVisible, true);
+    assert.equal(second.persistedAnalyticsReceiptVisible, true);
+    assert.equal(second.analyticsHistoryVisible, true);
+  } finally {
+    await stopProcess(daemon);
+    await stopProcess(restarted);
+    await stopProcess(next);
+    fs.rmSync(path.join(WEB_DIR, `.next-phase1-${nextPort}`), {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 250,
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

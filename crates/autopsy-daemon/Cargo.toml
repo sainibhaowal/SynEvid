@@ -1,0 +1,61 @@
+[package]
+name = "autopsy-daemon"
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.90"
+description = "SynEvid Authenticated Local Daemon — Consolidated single binary for all clients"
+license = "MIT OR Apache-2.0"
+categories = ["command-line-utilities", "development-tools"]
+repository = "https://github.com/sainibhaowal/SynEvid"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+dirs = "5.0"
+tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "time", "signal", "fs", "net", "process", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+blake3 = { workspace = true }
+tiny_http = { workspace = true }
+notify = { workspace = true }
+ignore = { workspace = true }
+sha1 = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+axum = { version = "0.7", features = ["ws", "json", "ws", "macros"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+# serde_with removed - using plain u64 for durations
+parking_lot = "0.12"
+figment = { version = "0.10", features = ["toml", "env"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+thiserror = "1.0"
+autopsy-cli = { path = "../autopsy-cli" }
+autopsy-domain = { path = "../autopsy-domain" }
+autopsy-diff = { path = "../autopsy-diff" }
+autopsy-graph = { path = "../autopsy-graph" }
+autopsy-impact = { path = "../autopsy-impact" }
+autopsy-report = { path = "../autopsy-report" }
+autopsy-invariants = { path = "../autopsy-invariants" }
+autopsy-repo = { path = "../autopsy-repo" }
+autopsy-storage = { path = "../autopsy-storage" }
+autopsy-workspace-registry = { path = "../autopsy-workspace-registry" }
+autopsy-symbols = { path = "../autopsy-symbols" }
+autopsy-plugin-api = { path = "../autopsy-plugin-api" }
+autopsy-wasm-plugin = { path = "../autopsy-wasm-plugin" }
+autopsy-graph-layout = { path = "../autopsy-graph-layout" }
+autopsy-git-engine = { path = "../autopsy-git-engine" }
+autopsy-telemetry = { path = "../autopsy-telemetry" }
+autopsy-catalog = { path = "../autopsy-catalog" }
+autopsy-envelope = { path = "../autopsy-envelope" }
+autopsy-protocol = { path = "../autopsy-protocol" }
+autopsy-test-impact = { path = "../autopsy-test-impact" }
+
+[dev-dependencies]
+tempfile = "3.10"
+serial_test = "3.0"
+
+[[bin]]
+name = "autopsy-daemon"
+path = "src/main.rs"

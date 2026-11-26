@@ -1,5 +1,7 @@
 # Phase 5 Electron Packaging, Analytics, and Runtime Closure
 
+> Historical checkpoint. Its Windows packaged smoke was health-only; current G5 status is recorded in [103-phase5-runtime-hardening-and-g5-status.md](103-phase5-runtime-hardening-and-g5-status.md) and remains partial.
+
 Date: 2026-11-01  
 Release line: `v0.6.0`
 

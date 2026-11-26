@@ -11,6 +11,8 @@ export interface AutopsyExecutionResult {
   data: any;
   rawStdout: string;
   rawStderr: string;
+  /** Measured child-process wall time; absent only for injected test fixtures. */
+  latencyMs?: number;
 }
 
 /** The default kill switch, unchanged from the original 30 s contract. */
@@ -147,6 +149,7 @@ export async function runAutopsy(
     snapshotId?: string;
   } = {}
 ): Promise<AutopsyExecutionResult> {
+  const started = performance.now();
   const binary = resolveAutopsyBinary();
   const repoRoot = options.repoRoot || '.';
   const timeout = resolveTimeoutMs(options.timeoutMs);
@@ -184,6 +187,7 @@ export async function runAutopsy(
       data,
       rawStdout: stdout,
       rawStderr: stderr,
+      latencyMs: performance.now() - started,
     };
   } catch (error: any) {
     const exitCode = typeof error.code === 'number' ? error.code : 1;
@@ -210,6 +214,7 @@ export async function runAutopsy(
       data,
       rawStdout: stdout,
       rawStderr: stderr,
+      latencyMs: performance.now() - started,
     };
   }
 }

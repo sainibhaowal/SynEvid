@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synevid.dev/schemas/runtime-observation-window.schema.json",
+  "title": "SynEvid runtime topology observation ingestion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["snapshot_id", "report"],
+  "properties": {
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "report": {
+      "type": "object",
+      "required": ["digest", "coverage", "observation", "dead_code", "insufficient_evidence"],
+      "properties": {
+        "digest": { "type": "string", "minLength": 1 },
+        "coverage": { "enum": ["verified", "partial", "unsupported", "unknown"] },
+        "observation": {
+          "type": "object",
+          "required": ["windows_observed", "required_windows", "complete_observation"],
+          "properties": {
+            "windows_observed": { "type": "integer", "minimum": 0 },
+            "required_windows": { "type": "integer", "minimum": 1 },
+            "complete_observation": { "type": "boolean" }
+          }
+        },
+        "dead_code": { "type": "array" },
+        "insufficient_evidence": { "type": "array" }
+      }
+    }
+  }
+}

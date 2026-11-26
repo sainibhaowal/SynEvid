@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synevid.dev/schemas/analytics-report.schema.json",
+  "title": "SynEvid Evidence-Scoped Analytics Report",
+  "type": "object",
+  "required": [
+    "schema_version", "report_id", "result_digest", "scope", "repository", "snapshot",
+    "structural_health", "static_unreferenced", "newly_dead_after_edit", "runtime_unobserved",
+    "git_evolution", "git_velocity", "ai_session_audit", "coverage_and_unknowns",
+    "performance_and_resources", "errors_and_recovery"
+  ],
+  "properties": {
+    "schema_version": { "const": "synevid.analytics.v1" },
+    "report_id": { "$ref": "#/$defs/digest" },
+    "result_digest": { "$ref": "#/$defs/digest" },
+    "scope": {
+      "type": "object",
+      "required": ["repository_id", "snapshot_id", "graph_nodes", "graph_edges", "git_history_limit"],
+      "properties": {
+        "repository_id": { "type": "string", "minLength": 1 },
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "graph_nodes": { "type": "integer", "minimum": 0 },
+        "graph_edges": { "type": "integer", "minimum": 0 },
+        "git_history_limit": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "repository": { "type": "object" },
+    "snapshot": { "type": "object" },
+    "structural_health": { "$ref": "#/$defs/section" },
+    "static_unreferenced": {
+      "allOf": [
+        { "$ref": "#/$defs/section" },
+        {
+          "type": "object",
+          "required": ["finding_language", "evidence_basis", "candidate_count", "candidates", "unknown_count", "unknown", "excluded_count"],
+          "properties": {
+            "finding_language": { "const": "candidate_not_proof_of_global_dead_code" },
+            "evidence_basis": { "type": "string", "minLength": 1 },
+            "candidate_count": { "type": "integer", "minimum": 0 },
+            "unknown_count": { "type": "integer", "minimum": 0 },
+            "excluded_count": { "type": "integer", "minimum": 0 },
+            "candidates": { "type": "array", "items": { "$ref": "#/$defs/staticFinding" } },
+            "unknown": { "type": "array", "items": { "$ref": "#/$defs/staticFinding" } }
+          }
+        }
+      ]
+    },
+    "dead_code_inventory": { "type": "object" },
+    "newly_dead_after_edit": { "$ref": "#/$defs/section" },
+    "runtime_unobserved": { "$ref": "#/$defs/section" },
+    "git_evolution": { "$ref": "#/$defs/section" },
+    "git_velocity": { "$ref": "#/$defs/section" },
+    "ai_session_audit": { "$ref": "#/$defs/section" },
+    "coverage_and_unknowns": { "$ref": "#/$defs/section" },
+    "performance_and_resources": { "$ref": "#/$defs/section" },
+    "errors_and_recovery": { "$ref": "#/$defs/section" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^blake3:[0-9a-f]{64}$" },
+    "section": {
+      "type": "object",
+      "required": ["status"],
+      "properties": { "status": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "staticFinding": {
+      "type": "object",
+      "required": ["stable_id", "qualified_name", "file_path", "line", "finding_state", "evidence_basis", "coverage_state", "reason", "residual_unknowns", "snapshot_id", "inbound_edge_count", "graph_edge_digest"],
+      "properties": {
+        "stable_id": { "type": "string", "minLength": 1 },
+        "qualified_name": { "type": "string", "minLength": 1 },
+        "file_path": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 0 },
+        "finding_state": { "enum": ["candidate", "unknown"] },
+        "evidence_basis": { "type": "string", "minLength": 1 },
+        "coverage_state": { "enum": ["verified", "partial", "unknown", "unsupported"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "residual_unknowns": { "type": "array", "items": { "type": "string" } },
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "inbound_edge_count": { "const": 0 },
+        "graph_edge_digest": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

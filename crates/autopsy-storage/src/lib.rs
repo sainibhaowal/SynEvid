@@ -8,7 +8,9 @@ use autopsy_evidence::EvidenceReceipt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -16,8 +18,9 @@ pub mod rows;
 pub use rows::{
     AiSessionLedgerRecord, AiWorkingCacheEntry, CoChangeEdgeRow, ContractRow, EgoNetwork,
     ForensicSessionRecord, ForensicWorkflowRecord, GraphEdgeRow, GraphNodeRow, GraphUniverseRows,
-    LiveEventRecord, RepoRecord, TemporalFactRow, TestMappingRow, TrajectoryEventRecord,
-    validate_coverage,
+    LiveEventRecord, OtlpIngestionLogRecord, RepoRecord, ReportHistoryRecord,
+    RuntimeObservationWindowRecord, StaticFindingRecord, TemporalFactRow, TestMappingRow,
+    TrajectoryEventRecord, validate_coverage,
 };
 
 #[derive(Debug, Error)]
@@ -63,6 +66,8 @@ fn is_database_corruption(error: &rusqlite::Error) -> bool {
 
 /// Stable API error code emitted when SQLite recovery preserves a damaged file.
 pub const ERR_STORAGE_CORRUPTION_RECOVERED: &str = "ERR-STORAGE-102";
+
+static CACHE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Non-fatal recovery information made available to API layers after a corrupt
 /// database was backed up and rebuilt.  Recovery is successful, but callers
@@ -123,6 +128,18 @@ impl StorageEngine {
     ) -> Result<Self, StorageError> {
         let path = db_path.as_ref();
         if path.exists() {
+            // SQLite may remove or rewrite sidecars while probing a damaged
+            // database. Capture them before opening so recovery can preserve
+            // the complete persistent WAL state, not just the main file.
+            let sidecar_copies: Vec<(String, Vec<u8>)> = ["-wal", "-shm"]
+                .iter()
+                .filter_map(|suffix| {
+                    let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+                    fs::read(&sidecar)
+                        .ok()
+                        .map(|bytes| ((*suffix).to_string(), bytes))
+                })
+                .collect();
             match Self::open(path, options.clone()) {
                 Ok(engine) => {
                     let check = {
@@ -140,6 +157,12 @@ impl StorageEngine {
                 Err(error) => return Err(error),
             }
             let backup_path = preserve_corrupt_database(path)?;
+            for (suffix, bytes) in sidecar_copies {
+                let sidecar_backup = PathBuf::from(format!("{}{}", backup_path.display(), suffix));
+                if !sidecar_backup.exists() {
+                    fs::write(sidecar_backup, bytes)?;
+                }
+            }
             let mut engine = Self::open(path, options)?;
             engine.recovery_notice = Some(StorageRecoveryNotice {
                 error_code: ERR_STORAGE_CORRUPTION_RECOVERED.to_string(),
@@ -562,6 +585,89 @@ impl StorageEngine {
             )?;
         }
 
+        // Migration 008: evidence-backed static findings. The legacy graph_nodes
+        // boolean is retained only for downgrade/read compatibility; application
+        // reads and writes no longer consult it. Historical values cannot be
+        // promoted because they lack evidence provenance, so they are not copied.
+        if current_version < 8 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS static_findings (
+                    finding_id TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    stable_id TEXT NOT NULL,
+                    evidence_version INTEGER NOT NULL CHECK (evidence_version > 0),
+                    finding_state TEXT NOT NULL CHECK (finding_state IN ('candidate', 'unknown', 'excluded')),
+                    evidence_basis TEXT NOT NULL,
+                    coverage_state TEXT NOT NULL CHECK (coverage_state IN ('verified', 'partial', 'unsupported', 'unknown')),
+                    reason TEXT NOT NULL,
+                    evidence_digest TEXT NOT NULL,
+                    UNIQUE(snapshot_id, stable_id, evidence_version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_static_findings_snapshot
+                    ON static_findings(snapshot_id, finding_state, stable_id);
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (8, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
+        if current_version < 9 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS runtime_observation_windows (
+                    window_id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    required_windows INTEGER NOT NULL CHECK (required_windows > 0),
+                    observed_windows INTEGER NOT NULL CHECK (observed_windows >= 0),
+                    complete_observation INTEGER NOT NULL CHECK (complete_observation IN (0, 1)),
+                    coverage_state TEXT NOT NULL CHECK (coverage_state IN ('verified', 'partial', 'unsupported', 'unknown')),
+                    evidence_digest TEXT NOT NULL,
+                    report_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_windows_scope
+                    ON runtime_observation_windows(repository_id, snapshot_id, window_id);
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (9, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
+        // Migration 10: Report history storage for durable analytics report artifacts
+        if current_version < 10 {
+            conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS report_history (
+                    report_id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    format TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    evidence_digest TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    schema_version TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_report_history_scope
+                    ON report_history(repository_id, snapshot_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS otlp_ingestion_log (
+                    ingestion_id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+                    window_id TEXT NOT NULL,
+                    received_at INTEGER NOT NULL,
+                    otlp_digest TEXT NOT NULL,
+                    spans_ingested INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_otlp_ingestion_scope
+                    ON otlp_ingestion_log(repository_id, snapshot_id, received_at DESC);
+                INSERT INTO schema_migrations (version, applied_at)
+                VALUES (10, datetime('now'));
+                COMMIT;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -589,8 +695,13 @@ impl StorageEngine {
         let json = serde_json::to_string(snapshot)?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO snapshots (snapshot_id, revision, config_hash, file_set_digest, snapshot_json)
-             VALUES (?1, ?2, ?3, ?4, ?5);",
+            "INSERT INTO snapshots (snapshot_id, revision, config_hash, file_set_digest, snapshot_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(snapshot_id) DO UPDATE SET
+                 revision = excluded.revision,
+                 config_hash = excluded.config_hash,
+                 file_set_digest = excluded.file_set_digest,
+                 snapshot_json = excluded.snapshot_json;",
             params![
                 snapshot.snapshot_id.as_str(),
                 snapshot.revision,
@@ -660,7 +771,7 @@ impl StorageEngine {
                 run.run_id,
                 run.command,
                 run.analyzer_version,
-                run.duration_ms,
+                i64::try_from(run.duration_ms).unwrap_or(i64::MAX),
                 run.result_digest,
             ],
         )?;
@@ -721,7 +832,7 @@ impl StorageEngine {
                         run_id: row.get(0)?,
                         command: row.get(1)?,
                         analyzer_version: row.get(2)?,
-                        duration_ms: row.get(3)?,
+                        duration_ms: row.get::<_, i64>(3)?.try_into().unwrap_or(0),
                         result_digest: row.get(4)?,
                     })
                 },
@@ -806,16 +917,38 @@ impl StorageEngine {
 
             let target_path = dir.join(rest);
             if !target_path.exists() {
-                // Atomic write via PID-isolated temporary file
-                let tmp_path = dir.join(format!(".tmp-{}-{}", std::process::id(), rest));
-                fs::write(&tmp_path, content)?;
+                // PID-only temporary names race when threads publish the same
+                // content concurrently. Create a unique file atomically instead.
+                let (tmp_path, mut tmp_file) = loop {
+                    let sequence = CACHE_TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                    let candidate =
+                        dir.join(format!(".tmp-{}-{sequence}-{}", std::process::id(), rest));
+                    match fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&candidate)
+                    {
+                        Ok(file) => break (candidate, file),
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                if let Err(error) = tmp_file.write_all(content) {
+                    drop(tmp_file);
+                    let _ = fs::remove_file(&tmp_path);
+                    return Err(error.into());
+                }
+                drop(tmp_file);
                 match fs::rename(&tmp_path, &target_path) {
                     Ok(()) => {}
                     Err(_) if target_path.exists() => {
                         // Concurrent writer finished first; safely clean up temporary file
                         let _ = fs::remove_file(&tmp_path);
                     }
-                    Err(e) => return Err(e.into()),
+                    Err(error) => {
+                        let _ = fs::remove_file(&tmp_path);
+                        return Err(error.into());
+                    }
                 }
             }
         }
@@ -1062,8 +1195,8 @@ mod tests {
     #[test]
     fn test_migration_002_creates_pillar_tables() {
         let engine = StorageEngine::in_memory().unwrap();
-        // Migrations 002–007 add core persistence, cockpit, forensics, daemon state, and ego-query indexes.
-        assert_eq!(engine.schema_version().unwrap(), 7);
+        // Migrations through 010 include core, daemon, and Phase 6 evidence storage.
+        assert_eq!(engine.schema_version().unwrap(), 10);
 
         let tables = table_names(&engine);
         for expected in [
@@ -1073,6 +1206,8 @@ mod tests {
             "co_change_matrix",
             "repositories",
             "graph_nodes",
+            "static_findings",
+            "runtime_observation_windows",
             "graph_edges",
             "forensic_sessions",
             "trajectory_events",
@@ -1119,7 +1254,7 @@ mod tests {
             conn.execute_batch(
                 "DROP INDEX idx_graph_edges_incoming_ego;
                  DROP INDEX idx_graph_edges_outgoing_ego;
-                 DELETE FROM schema_migrations WHERE version = 7;",
+                 DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);",
             )
             .unwrap();
         }
@@ -1127,7 +1262,7 @@ mod tests {
 
         engine.run_migrations().unwrap();
 
-        assert_eq!(engine.schema_version().unwrap(), 7);
+        assert_eq!(engine.schema_version().unwrap(), 10);
         let indexes = index_names(&engine);
         assert!(indexes.contains(&"idx_graph_edges_incoming_ego".to_string()));
         assert!(indexes.contains(&"idx_graph_edges_outgoing_ego".to_string()));
@@ -1163,7 +1298,7 @@ mod tests {
         )
         .unwrap();
         // The upgrade runs through migrations 002–007 in place.
-        assert_eq!(engine.schema_version().unwrap(), 7);
+        assert_eq!(engine.schema_version().unwrap(), 10);
 
         let tables = table_names(&engine);
         assert!(tables.contains(&"temporal_facts".to_string()));
@@ -1193,11 +1328,11 @@ mod tests {
 
         for _ in 0..3 {
             let engine = StorageEngine::open(&db_path, opts()).unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 7);
+            assert_eq!(engine.schema_version().unwrap(), 10);
             // Re-running migrations explicitly must be a no-op.
             let mut engine = engine;
             engine.run_migrations().unwrap();
-            assert_eq!(engine.schema_version().unwrap(), 7);
+            assert_eq!(engine.schema_version().unwrap(), 10);
         }
 
         // Exactly one row per migration version: no duplicate application.
@@ -1205,7 +1340,10 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 7, "expected versions 1 through 7 exactly once each");
+        assert_eq!(
+            count, 10,
+            "expected versions 1 through 10 exactly once each"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -1270,7 +1408,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 7);
+        assert_eq!(engine.schema_version().unwrap(), 10);
 
         // The v2 fact survived, and its coverage is the documented ALTER default. A row
         // that read back as `verified` would be a lie; `unknown` says "no coverage stated".
@@ -1309,10 +1447,159 @@ mod tests {
 
         // Re-running migrations on the upgraded database is a no-op.
         engine.run_migrations().unwrap();
-        assert_eq!(engine.schema_version().unwrap(), 7);
+        assert_eq!(engine.schema_version().unwrap(), 10);
 
         drop(engine);
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_static_finding_evidence_roundtrip_and_validation() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let snapshot = RepoSnapshot {
+            snapshot_id: SnapshotId::new("snapshot-static-findings"),
+            revision: "test".into(),
+            config_hash: "config".into(),
+            file_set_digest: "files".into(),
+            files: BTreeMap::new(),
+            skipped_oversize_files: Vec::new(),
+            traversal_limit_reached: false,
+        };
+        engine.save_snapshot(&snapshot).unwrap();
+        let row = StaticFindingRecord {
+            finding_id: "finding-1".into(),
+            snapshot_id: snapshot.snapshot_id.to_string(),
+            stable_id: "symbol-1".into(),
+            evidence_version: 1,
+            finding_state: "candidate".into(),
+            evidence_basis: "persisted_graph_no_inbound_edges".into(),
+            coverage_state: "verified".into(),
+            reason: "No inbound edge in this graph".into(),
+            evidence_digest: "blake3:test".into(),
+        };
+        engine
+            .replace_static_findings(&row.snapshot_id, 1, std::slice::from_ref(&row))
+            .unwrap();
+        assert_eq!(
+            engine
+                .static_findings_for_snapshot(&row.snapshot_id, 1)
+                .unwrap(),
+            vec![row.clone()]
+        );
+        engine
+            .replace_static_findings(&row.snapshot_id, 1, std::slice::from_ref(&row))
+            .unwrap();
+        assert_eq!(
+            engine
+                .static_findings_for_snapshot(&row.snapshot_id, 1)
+                .unwrap(),
+            vec![row.clone()]
+        );
+
+        let mut invalid = row.clone();
+        invalid.finding_state = "pass".into();
+        let invalid_snapshot = invalid.snapshot_id.clone();
+        assert!(
+            engine
+                .replace_static_findings(&invalid_snapshot, 1, &[invalid])
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .static_findings_for_snapshot(&row.snapshot_id, 1)
+                .unwrap(),
+            vec![row]
+        );
+    }
+
+    #[test]
+    fn test_runtime_observation_requires_digest_and_matching_window_metadata() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let snapshot = RepoSnapshot {
+            snapshot_id: SnapshotId::new("snapshot-runtime-window"),
+            revision: "test".into(),
+            config_hash: "config".into(),
+            file_set_digest: "files".into(),
+            files: BTreeMap::new(),
+            skipped_oversize_files: Vec::new(),
+            traversal_limit_reached: false,
+        };
+        engine.save_snapshot(&snapshot).unwrap();
+        let payload = serde_json::json!({"observation": {
+            "windows_observed": 2, "required_windows": 3, "complete_observation": false
+        }});
+        let report_json = serde_json::to_string(&payload).unwrap();
+        let evidence_digest = format!(
+            "blake3:{}",
+            blake3::hash(&serde_json::to_vec(&payload).unwrap()).to_hex()
+        );
+        let row = RuntimeObservationWindowRecord {
+            window_id: "window-digest".into(),
+            repository_id: "repo".into(),
+            snapshot_id: snapshot.snapshot_id.to_string(),
+            required_windows: 3,
+            observed_windows: 2,
+            complete_observation: false,
+            coverage_state: "partial".into(),
+            evidence_digest,
+            report_json,
+        };
+        engine.save_runtime_observation_window(&row).unwrap();
+        assert_eq!(
+            engine
+                .runtime_observation_windows("repo", &row.snapshot_id)
+                .unwrap(),
+            vec![row.clone()]
+        );
+        let mut invalid = row.clone();
+        invalid.observed_windows = 3;
+        assert!(engine.save_runtime_observation_window(&invalid).is_err());
+        assert_eq!(
+            engine
+                .runtime_observation_windows("repo", &row.snapshot_id)
+                .unwrap(),
+            vec![row]
+        );
+    }
+
+    #[test]
+    fn test_report_history_lists_durable_records_across_repository_snapshots() {
+        let engine = StorageEngine::in_memory().unwrap();
+        for snapshot_id in ["snapshot-report-old", "snapshot-report-new"] {
+            let snapshot = RepoSnapshot {
+                snapshot_id: SnapshotId::new(snapshot_id),
+                revision: "test".into(),
+                config_hash: "config".into(),
+                file_set_digest: "files".into(),
+                files: BTreeMap::new(),
+                skipped_oversize_files: Vec::new(),
+                traversal_limit_reached: false,
+            };
+            engine.save_snapshot(&snapshot).unwrap();
+            let report = ReportHistoryRecord {
+                report_id: format!("report-{snapshot_id}"),
+                repository_id: "repo-report-history".into(),
+                snapshot_id: snapshot_id.into(),
+                format: "json".into(),
+                report_json: "{}".into(),
+                evidence_digest: "blake3:fixture".into(),
+                created_at: 10,
+                schema_version: "synevid.analytics.v1".into(),
+            };
+            engine.save_report_history(&report).unwrap();
+            // Re-indexing an identical snapshot must update its row in place;
+            // SQLite REPLACE deletes/reinserts and cascades durable evidence.
+            engine.save_snapshot(&snapshot).unwrap();
+            assert_eq!(
+                engine.get_report_history(&report.report_id).unwrap(),
+                Some(report)
+            );
+        }
+        let history = engine
+            .report_history_for_repository("repo-report-history", 10)
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].report_id <= history[1].report_id);
     }
 
     #[test]
@@ -1492,7 +1779,6 @@ mod tests {
                 signature_hash: "sig_abc".to_string(),
                 visibility: "public".to_string(),
                 is_exported: true,
-                is_dead_code: false,
                 coverage_state: "verified".to_string(),
             },
             GraphNodeRow {
@@ -1506,7 +1792,6 @@ mod tests {
                 signature_hash: "sig_xyz".to_string(),
                 visibility: "public".to_string(),
                 is_exported: true,
-                is_dead_code: false,
                 coverage_state: "verified".to_string(),
             },
         ];
@@ -1789,5 +2074,74 @@ mod tests {
         assert_eq!(ledger.tokens_spent, 500);
         assert_eq!(ledger.tokens_saved, 56000);
         assert!(ledger.cost_saved_microcents > 0);
+    }
+
+    #[test]
+    fn test_phase1_event_cursor_survives_restart_with_wal() {
+        let root =
+            std::env::temp_dir().join(format!("synevid-event-restart-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("storage.db");
+        {
+            let engine = StorageEngine::open(&db, StorageOptions::default()).unwrap();
+            engine
+                .record_live_event_with_seq(41, "file.changed", r#"{"path":"src/lib.ts"}"#)
+                .unwrap();
+            engine
+                .record_live_event_with_seq(42, "git.head_changed", r#"{"head":"abc"}"#)
+                .unwrap();
+            assert_eq!(engine.latest_live_event_seq().unwrap(), 42);
+        }
+        {
+            let reopened = StorageEngine::open(&db, StorageOptions::default()).unwrap();
+            assert_eq!(reopened.latest_live_event_seq().unwrap(), 42);
+            let replay = reopened.live_events_since(41, 10).unwrap();
+            assert_eq!(replay.len(), 1);
+            assert_eq!(replay[0].seq_id, 42);
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_phase1_corruption_preserves_database_and_wal_sidecars() {
+        let root = std::env::temp_dir().join(format!(
+            "synevid-corruption-sidecars-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("storage.db");
+        fs::write(&db, b"not a sqlite database").unwrap();
+        fs::write(root.join("storage.db-wal"), b"wal-bytes").unwrap();
+        fs::write(root.join("storage.db-shm"), b"shm-bytes").unwrap();
+
+        let recovered = StorageEngine::open_or_recover(&db, StorageOptions::default()).unwrap();
+        let notice = recovered.recovery_notice().unwrap();
+        assert_eq!(notice.error_code, ERR_STORAGE_CORRUPTION_RECOVERED);
+        assert!(PathBuf::from(&notice.backup_path).exists());
+        assert!(PathBuf::from(format!("{}-wal", notice.backup_path)).exists());
+        assert!(PathBuf::from(format!("{}-shm", notice.backup_path)).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_phase1_transaction_rollback_is_atomic() {
+        let engine = StorageEngine::in_memory().unwrap();
+        let conn = engine.conn.lock().unwrap();
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO daemon_state (state_key, state_value) VALUES ('pending', 'must-not-survive');
+             ROLLBACK;",
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM daemon_state WHERE state_key = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

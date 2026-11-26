@@ -1,5 +1,9 @@
 # Evidence 08 — Forensic Closure Verification (2026-10-09)
 
+> **Benchmark correction (2026-11-23):** the impact scores and recall-gate
+> conclusion in this historical record are withdrawn as accuracy evidence. The
+> task-oracle and comparator defects are documented in [evidence 108](108-impact-benchmark-integrity-audit.md).
+
 End-to-end remediation of five defects that kept the engine from being a
 real forensic lab, verified live on real data (no simulated baselines).
 

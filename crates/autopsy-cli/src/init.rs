@@ -433,6 +433,7 @@ mod tests {
             root.display().to_string(),
             "--format".to_string(),
             "json".to_string(),
+            "--offline".to_string(),
         ];
         v.extend(extra.iter().map(|s| (*s).to_string()));
         v
